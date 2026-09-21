@@ -53,14 +53,15 @@ def main() -> None:
 
     wait = first.pending_wait
     request = first.pending_request
-    assert wait is not None and request is not None
+    summary = first.approval_summary
+    assert wait is not None and request is not None and summary is not None
 
     stack.approvals.grant(
         run_id=run.run_id,
         request=request,
         state_snapshot=wait.state_snapshot,
         approver="finance-oncall",
-        summary=first.approval_summary or "",
+        summary=summary,
     )
     resume(
         stack.waits,

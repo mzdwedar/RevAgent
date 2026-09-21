@@ -94,13 +94,18 @@ def run_case(case: Case) -> Outcome:
     try:
         result = handle(stack, event, scopes=scopes, run=run)
         span_names |= result.tracer.names()
-        if case.approve and result.pending_wait and result.pending_request:
+        if (
+            case.approve
+            and result.pending_wait
+            and result.pending_request
+            and result.approval_summary
+        ):
             stack.approvals.grant(
                 run_id=run.run_id,
                 request=result.pending_request,
                 state_snapshot=result.pending_wait.state_snapshot,
                 approver="eval-approver",
-                summary=result.approval_summary or "",
+                summary=result.approval_summary,
             )
             resume(
                 stack.waits,

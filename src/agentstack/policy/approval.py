@@ -54,7 +54,19 @@ class ApprovalStore:
         approver: str,
         summary: str,
     ) -> ApprovalRecord:
-        """What a human said yes to. `summary` is what they were shown."""
+        """What a human said yes to. `summary` is what they were shown.
+
+        Both fields are required and both are load-bearing. An empty summary records
+        that someone agreed to a blank screen; an unnamed approver leaves an audit
+        trail that cannot answer who decided.
+        """
+        if not summary.strip():
+            raise ValueError(
+                "an approval needs the summary the approver was actually shown; "
+                "an empty one records agreement to nothing"
+            )
+        if not approver.strip():
+            raise ValueError("an approval needs a named approver")
         record = ApprovalRecord(
             id=str(uuid.uuid4()),
             run_id=run_id,

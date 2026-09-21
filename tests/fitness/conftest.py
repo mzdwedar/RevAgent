@@ -58,12 +58,13 @@ def approve_and_resume(stack: Stack, result, run: Run, approver: str = "finance-
     wait = result.pending_wait
     request = result.pending_request
     assert wait is not None and request is not None, "expected the run to be awaiting approval"
+    assert result.approval_summary, "an awaiting run must carry what the approver will see"
     stack.approvals.grant(
         run_id=run.run_id,
         request=request,
         state_snapshot=wait.state_snapshot,
         approver=approver,
-        summary=result.approval_summary or "",
+        summary=result.approval_summary,
     )
     resume(
         stack.waits,

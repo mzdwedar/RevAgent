@@ -126,3 +126,23 @@ def test_containment_still_applies_after_approval(
             tracer=tracer,
         )
     assert "tenant" in str(excinfo.value).lower()
+
+
+def test_an_approval_with_nothing_shown_to_the_approver_is_refused(stack: Stack) -> None:
+    """An empty summary records that a human agreed to a blank screen."""
+    with pytest.raises(ValueError, match="summary"):
+        stack.approvals.grant(
+            run_id="run-1",
+            request=_refund(ARGS),
+            state_snapshot="s",
+            approver="someone",
+            summary="",
+        )
+    with pytest.raises(ValueError, match="approver"):
+        stack.approvals.grant(
+            run_id="run-1",
+            request=_refund(ARGS),
+            state_snapshot="s",
+            approver="",
+            summary="refund 19.99",
+        )
