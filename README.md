@@ -50,7 +50,7 @@ failure, so the loop fails closed whether or not anyone remembers to run them.
 | `docs/spec-template.md` | six core areas plus the three Agent Stack sections |
 | `docs/adr/` | one ADR per boundary decision |
 | `src/agentstack/` | nine layers, dependency direction enforced by `.importlinter` |
-| `tests/fitness/` | 14 tests, one per collapsed-boundary failure mode |
+| `tests/fitness/` | 22 tests, one per collapsed-boundary failure mode |
 | `evals/` | release gates that judge the path, not just the answer |
 | `scripts/` | the three check stages and the bar guard |
 | `.claude/` | hooks, the `agent-stack-auditor` subagent, and `/spec` `/plan` `/stack-audit` |
