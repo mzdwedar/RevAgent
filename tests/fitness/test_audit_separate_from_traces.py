@@ -58,7 +58,8 @@ def test_a_read_only_call_is_traced_but_not_audited(stack: Stack, run: Run) -> N
     )
     result = handle(stack, lookup, scopes=SCOPES, run=run)
     assert result.status == "complete"
-    assert "execution.commit" in result.tracer.names()
+    assert "execution.read" in result.tracer.names()
+    assert "execution.commit" not in result.tracer.names(), "a read is not a commit"
     assert stack.audit.for_run(run.run_id) == [], (
         "accountability records are for side effects, not for every read"
     )

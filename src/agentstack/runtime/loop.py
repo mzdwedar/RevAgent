@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from agentstack.context.assemble import ContextBundle, assemble
 from agentstack.context.items import ContextItem, Scope, Trust
@@ -51,6 +52,7 @@ class TurnResult:
     bundle: ContextBundle
     tracer: Tracer
     receipts: list[str] = field(default_factory=list)
+    observations: list[dict[str, Any]] = field(default_factory=list)
     refusals: list[str] = field(default_factory=list)
     pending_wait: Wait | None = None
     pending_request: ActionRequest | None = None
@@ -113,6 +115,7 @@ def run_turn(
 
     state_snapshot = bundle.fingerprint()
     receipts: list[str] = []
+    observations: list[dict[str, Any]] = []
 
     refusals: list[str] = []
 
@@ -130,6 +133,19 @@ def run_turn(
         with tracer.span("tool.call", tool=spec.name, resource=request.resource):
             pass
         try:
+            if not spec.side_effecting:
+                # A read needs no step boundary: there is no effect to record, and
+                # nothing to avoid repeating.
+                read = deps.gateway.read(
+                    request=request,
+                    spec=spec,
+                    envelope=envelope,
+                    run_id=run.run_id,
+                    state_snapshot=state_snapshot,
+                    tracer=tracer,
+                )
+                observations.append(read.data)
+                continue
             with deps.steps.step(run.run_id, f"execute:{spec.name}") as slot:
                 if slot[0] is None:
                     result = deps.gateway.execute(
@@ -167,7 +183,7 @@ def run_turn(
                 ).render(),
             )
 
-    if refusals and not receipts:
+    if refusals and not receipts and not observations:
         with tracer.span("response", status="rejected", refusals=len(refusals)):
             pass
         return TurnResult(
@@ -191,5 +207,6 @@ def run_turn(
         bundle=bundle,
         tracer=tracer,
         receipts=receipts,
+        observations=observations,
         refusals=refusals,
     )

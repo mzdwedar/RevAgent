@@ -5,21 +5,24 @@ touch a real client, and `Gateway.execute` is the only function in it that commi
 anything. Everything upstream prepares; this is where the world changes.
 """
 
-from agentstack.execution.gateway import ExecutionResult, Gateway
+from agentstack.execution.gateway import ExecutionResult, Gateway, ReadResult
 from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import (
     RecordingClient,
     Sandbox,
     SandboxViolation,
     SurfaceClient,
+    SurfaceTimeout,
 )
 
 __all__ = [
     "ExecutionResult",
     "Gateway",
     "IdempotencyLedger",
+    "ReadResult",
     "RecordingClient",
     "Sandbox",
     "SandboxViolation",
     "SurfaceClient",
+    "SurfaceTimeout",
 ]

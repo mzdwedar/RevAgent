@@ -27,6 +27,7 @@ Stack-specific (from `STACK.md`):
 - No context item without scope, provenance, freshness, reason and trust
 - No tool argument reaching a prepare function unvalidated against its input_schema
 - No irreversible tool without a reversal note the approver is shown
+- No read entered in the idempotency ledger, and no read committed as an effect
 - No declared containment dimension that `Sandbox.check()` does not read
 
 ## Enforced with numbers
@@ -60,7 +61,7 @@ Why these numbers:
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 17 | must not fall |
+| Fitness test count | 18 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

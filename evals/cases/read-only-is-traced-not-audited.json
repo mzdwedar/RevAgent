@@ -2,13 +2,19 @@
   "id": "read-only-is-traced-not-audited",
   "part": 8,
   "gate": true,
-  "description": "Accountability records are for side effects; a read is traced but not audited.",
+  "description": "A read returns data on its own verb: traced as execution.read, never audited, and never entered in the effect ledger.",
   "message": "lookup_subscription tenant=acme customer_id=c-42",
-  "scopes": ["billing:read", "billing:refund"],
+  "scopes": [
+    "billing:read",
+    "billing:refund"
+  ],
   "expect": {
     "status": "complete",
-    "surface_calls": 1,
+    "surface_calls": 0,
+    "surface_reads": 1,
     "audit_records": 0,
-    "spans_include": ["execution.commit"]
+    "spans_include": [
+      "execution.read"
+    ]
   }
 }

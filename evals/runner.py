@@ -157,6 +157,8 @@ def run_case(case: Case) -> Outcome:
 
     if "surface_calls" in expect and len(stack.client.calls) != expect["surface_calls"]:
         failures.append(f"{len(stack.client.calls)} surface calls != {expect['surface_calls']}")
+    if "surface_reads" in expect and len(stack.client.reads) != expect["surface_reads"]:
+        failures.append(f"{len(stack.client.reads)} surface reads != {expect['surface_reads']}")
     if "audit_records" in expect and len(stack.audit.records) != expect["audit_records"]:
         failures.append(f"{len(stack.audit.records)} audit records != {expect['audit_records']}")
     if "audit_outcomes" in expect:
