@@ -73,7 +73,7 @@ def test_a_refused_approval_is_audited(stack: Stack, event: InboundEvent, run: R
     assert refusals[0].approval_id is None
 
 
-def test_a_containment_violation_is_audited(stack: Stack, event: InboundEvent, run: Run) -> None:
+def test_a_containment_violation_is_audited(stack: Stack, run: Run) -> None:
     """A human approved it and containment stopped it anyway - the most interesting
     event the system can produce, and it used to leave nothing behind."""
     from agentstack.execution.surfaces import SandboxViolation

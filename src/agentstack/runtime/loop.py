@@ -25,7 +25,8 @@ from agentstack.runtime.run import Run
 from agentstack.runtime.steps import StepLedger
 from agentstack.runtime.waits import Wait, WaitStore
 from agentstack.tools.action import ActionRequest
-from agentstack.tools.registry import Registry
+from agentstack.tools.registry import Registry, ToolNotExposed
+from agentstack.tools.validation import InvalidToolArguments
 
 
 @dataclass(slots=True)
@@ -49,6 +50,7 @@ class TurnResult:
     bundle: ContextBundle
     tracer: Tracer
     receipts: list[str] = field(default_factory=list)
+    refusals: list[str] = field(default_factory=list)
     pending_wait: Wait | None = None
     pending_request: ActionRequest | None = None
     approval_summary: str | None = None
@@ -111,8 +113,18 @@ def run_turn(
     state_snapshot = bundle.fingerprint()
     receipts: list[str] = []
 
+    refusals: list[str] = []
+
     for proposal in response.proposals:
-        request = deps.registry.prepare(proposal.tool, proposal.arguments, exposed=exposed)
+        try:
+            request = deps.registry.prepare(proposal.tool, proposal.arguments, exposed=exposed)
+        except (InvalidToolArguments, ToolNotExposed) as exc:
+            # A malformed or unentitled proposal is a refusal, not a crash. It leaves
+            # evidence and an answer; it never reaches a surface.
+            with tracer.span("tool.reject", tool=proposal.tool, reason=str(exc)):
+                pass
+            refusals.append(str(exc))
+            continue
         spec = deps.registry.spec(proposal.tool)
         with tracer.span("tool.call", tool=spec.name, resource=request.resource):
             pass
@@ -150,10 +162,22 @@ def run_turn(
                 ),
             )
 
+    if refusals and not receipts:
+        with tracer.span("response", status="rejected", refusals=len(refusals)):
+            pass
+        return TurnResult(
+            run_id=run.run_id,
+            status="rejected",
+            text="; ".join(refusals),
+            bundle=bundle,
+            tracer=tracer,
+            refusals=refusals,
+        )
+
     # Extraction and consolidation are maintenance. They do not block the turn.
     deps.maintenance.enqueue("extract_candidate_memories", run.run_id)
 
-    with tracer.span("response", status="complete", receipts=len(receipts)):
+    with tracer.span("response", status="complete", receipts=len(receipts), refusals=len(refusals)):
         pass
     return TurnResult(
         run_id=run.run_id,
@@ -162,4 +186,5 @@ def run_turn(
         bundle=bundle,
         tracer=tracer,
         receipts=receipts,
+        refusals=refusals,
     )

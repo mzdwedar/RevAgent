@@ -1,0 +1,70 @@
+"""Part 6: a schema validates shape - so it has to actually be used to validate shape.
+
+`input_schema` was declared on every tool, checked at construction for a "type" key,
+and then never consulted again. Every prepare() function was doing ad-hoc coercion on
+untrusted model output, so a missing field was a KeyError and a garbage number was a
+ValueError, both escaping the turn uncaught: no response span, no audit record, no
+reply. That is fail-open on the one input the system is told to distrust.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from agentstack.interfaces.inbound import InboundEvent
+from agentstack.interfaces.wiring import Stack, handle
+from agentstack.runtime.run import Run
+from agentstack.tools.catalog import build_registry
+from agentstack.tools.validation import InvalidToolArguments, validate_arguments
+
+from .conftest import SCOPES, TENANT, USER
+
+REGISTRY = build_registry()
+EXPOSED = REGISTRY.expose_for(tenant=TENANT)
+GOOD = {"tenant": "acme", "customer_id": "c-42", "charge_id": "ch-7", "amount_cents": 1999}
+
+
+def test_a_missing_required_field_is_a_typed_refusal() -> None:
+    with pytest.raises(InvalidToolArguments, match="charge_id"):
+        REGISTRY.prepare("issue_refund", {"tenant": "acme", "customer_id": "c"}, exposed=EXPOSED)
+
+
+def test_a_wrongly_typed_field_is_a_typed_refusal() -> None:
+    with pytest.raises(InvalidToolArguments, match="amount_cents"):
+        REGISTRY.prepare("issue_refund", {**GOOD, "amount_cents": "quite a lot"}, exposed=EXPOSED)
+
+
+def test_an_unexpected_field_is_a_typed_refusal() -> None:
+    """Extra arguments are how a proposal smuggles something past a narrow tool."""
+    with pytest.raises(InvalidToolArguments, match="override_limits"):
+        REGISTRY.prepare("issue_refund", {**GOOD, "override_limits": True}, exposed=EXPOSED)
+
+
+def test_well_formed_arguments_still_pass() -> None:
+    request = REGISTRY.prepare("issue_refund", GOOD, exposed=EXPOSED)
+    assert request.payload == {"amount_cents": 1999}
+
+
+def test_the_validator_reads_the_declared_schema_not_a_hand_written_copy() -> None:
+    spec = REGISTRY.spec("issue_refund")
+    validate_arguments(spec, GOOD)
+    with pytest.raises(InvalidToolArguments):
+        validate_arguments(spec, {})
+
+
+def test_a_malformed_proposal_fails_closed_and_traceably(stack: Stack, run: Run) -> None:
+    """The turn ends with evidence and a reply, not a stack trace."""
+    garbled = InboundEvent(
+        channel="test",
+        tenant=TENANT,
+        user_id=USER,
+        session_id=run.session_id,
+        text="issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=lots",
+    )
+    result = handle(stack, garbled, scopes=SCOPES, run=run)
+
+    assert result.status == "rejected"
+    assert "response" in result.tracer.names(), "a refused turn still emits a response span"
+    assert "tool.reject" in result.tracer.names()
+    assert stack.client.calls == []
+    assert stack.transcripts.for_session(run.session_id), "the user still gets a reply"

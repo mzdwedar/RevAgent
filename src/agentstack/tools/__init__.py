@@ -18,6 +18,7 @@ from agentstack.tools.spec import (
     Surface,
     ToolSpec,
 )
+from agentstack.tools.validation import InvalidToolArguments, validate_arguments
 
 __all__ = [
     "REQUIRED_TOOL_FIELDS",
@@ -25,8 +26,10 @@ __all__ = [
     "ActsAs",
     "Approval",
     "Idempotency",
+    "InvalidToolArguments",
     "Registry",
     "Surface",
     "ToolNotExposed",
     "ToolSpec",
+    "validate_arguments",
 ]

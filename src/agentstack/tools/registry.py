@@ -13,6 +13,7 @@ from typing import Any
 
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.spec import ToolSpec
+from agentstack.tools.validation import validate_arguments
 
 Prepare = Callable[[Mapping[str, Any]], ActionRequest]
 
@@ -53,4 +54,7 @@ class Registry:
             raise ToolNotExposed(
                 f"{name} was not exposed to this run; a proposal is not an entitlement"
             )
-        return self._prepare[name](arguments)
+        # Validate before preparing: the prepare function is the first place that
+        # would otherwise coerce untrusted model output by hand.
+        validated = validate_arguments(self._specs[name], arguments)
+        return self._prepare[name](validated)

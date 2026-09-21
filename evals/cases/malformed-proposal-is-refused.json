@@ -1,0 +1,14 @@
+{
+  "id": "malformed-proposal-is-refused",
+  "part": 6,
+  "gate": true,
+  "description": "A proposal that does not match the declared schema is refused, traceably, without reaching a surface.",
+  "message": "issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=lots",
+  "scopes": ["billing:read", "billing:refund"],
+  "expect": {
+    "status": "rejected",
+    "surface_calls": 0,
+    "audit_records": 0,
+    "spans_include": ["tool.reject", "response"]
+  }
+}

@@ -63,8 +63,10 @@ REFUND = ToolSpec(
 
 
 def _lookup(arguments: Mapping[str, Any]) -> ActionRequest:
-    tenant = str(arguments["tenant"])
-    customer = str(arguments["customer_id"])
+    # Arguments arrive validated against input_schema (tools/validation.py), so these
+    # are the declared types, not hopeful coercions of model output.
+    tenant = arguments["tenant"]
+    customer = arguments["customer_id"]
     return ActionRequest(
         tool=LOOKUP.name,
         surface=LOOKUP.surface,
@@ -75,10 +77,10 @@ def _lookup(arguments: Mapping[str, Any]) -> ActionRequest:
 
 
 def _refund(arguments: Mapping[str, Any]) -> ActionRequest:
-    tenant = str(arguments["tenant"])
-    customer = str(arguments["customer_id"])
-    charge = str(arguments["charge_id"])
-    amount = int(arguments["amount_cents"])
+    tenant = arguments["tenant"]
+    customer = arguments["customer_id"]
+    charge = arguments["charge_id"]
+    amount = arguments["amount_cents"]
     return ActionRequest(
         tool=REFUND.name,
         surface=REFUND.surface,
