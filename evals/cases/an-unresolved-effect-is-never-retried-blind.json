@@ -1,0 +1,16 @@
+{
+  "id": "an-unresolved-effect-is-never-retried-blind",
+  "part": 4,
+  "gate": true,
+  "description": "A refund that applied but never answered leaves a claimed key, so the retry refuses and reconciles instead of refunding twice.",
+  "message": "issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=1999",
+  "scopes": ["billing:read", "billing:refund"],
+  "approve": true,
+  "repeat": 2,
+  "fail_after_effect": true,
+  "expect_error": "UnresolvedEffect",
+  "expect": {
+    "surface_calls": 1,
+    "audit_outcomes": ["refused", "unresolved"]
+  }
+}

@@ -79,11 +79,32 @@ class ApprovalStore:
         self._records.append(record)
         return record
 
-    def find(self, *, run_id: str, action_fingerprint: str) -> ApprovalRecord | None:
-        for record in self._records:
-            if record.run_id == run_id and record.action_fingerprint == action_fingerprint:
-                return record
-        return None
+    def find(
+        self,
+        *,
+        run_id: str,
+        action_fingerprint: str,
+        state_snapshot: str | None = None,
+    ) -> ApprovalRecord | None:
+        """The approval that authorizes this action, most recent first.
+
+        When a state snapshot is given, an approval granted against *that* state wins.
+        Without this, a run that was approved twice for the same action would read as
+        stale on the approval that actually matches - reporting staleness that is not
+        there, which is the fastest way to teach people to ignore it.
+        """
+        candidates = [
+            record
+            for record in self._records
+            if record.run_id == run_id and record.action_fingerprint == action_fingerprint
+        ]
+        if not candidates:
+            return None
+        if state_snapshot is not None:
+            exact = [r for r in candidates if r.state_snapshot == state_snapshot]
+            if exact:
+                return exact[-1]
+        return candidates[-1]
 
 
 def require_approval(
@@ -100,7 +121,11 @@ def require_approval(
     """
     if spec.approval is Approval.NONE:
         return None
-    record = store.find(run_id=run_id, action_fingerprint=request.fingerprint())
+    record = store.find(
+        run_id=run_id,
+        action_fingerprint=request.fingerprint(),
+        state_snapshot=state_snapshot,
+    )
     if record is None:
         raise ApprovalRequired(
             f"{spec.name} on {request.resource} needs approval bound to this exact action"

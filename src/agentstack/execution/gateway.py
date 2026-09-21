@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from agentstack.execution.idempotency import IdempotencyLedger
+from agentstack.execution.idempotency import ClaimState, IdempotencyLedger
 from agentstack.execution.surfaces import (
     Sandbox,
     SandboxViolation,
@@ -43,6 +43,14 @@ from agentstack.policy.decisions import PolicyDenied, decide
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.spec import Surface, ToolSpec
+
+
+class UnresolvedEffect(RuntimeError):
+    """The effect may or may not have applied, and only the surface knows which.
+
+    Raised instead of retrying. A retry here is the difference between one refund
+    and two.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,16 +130,47 @@ class Gateway:
         )
         approval_id = approval.id if approval else None
 
-        recorded = self.ledger.recorded(request.idempotency_key)
-        if recorded is not None:
+        # Phase one: stake the key *before* anything can apply.
+        claim = self.ledger.claim(request.idempotency_key)
+        if claim.state is ClaimState.COMMITTED:
             with tracer.span("execution.commit", tool=spec.name, deduplicated=True):
                 pass
             self._audit(request, spec, envelope, run_id, "allow", approval_id, "deduplicated")
-            return ExecutionResult(receipt=recorded, deduplicated=True, approval_id=approval_id)
+            return ExecutionResult(
+                receipt=str(claim.receipt), deduplicated=True, approval_id=approval_id
+            )
+        if claim.state is ClaimState.IN_FLIGHT:
+            with tracer.span(
+                "execution.commit",
+                tool=spec.name,
+                outcome="unresolved",
+                claimed_at=str(claim.claimed_at),
+            ):
+                pass
+            self._audit(
+                request, spec, envelope, run_id, "effect.unresolved", approval_id, "unresolved"
+            )
+            raise UnresolvedEffect(
+                f"{request.idempotency_key} was claimed and never settled: the effect "
+                "may already have applied. Reconcile against the surface before "
+                "retrying - an unfinalized claim is an unknown outcome, not a free slot."
+            )
 
         client = self.surfaces[request.surface]
-        receipt = client.commit(request.resource, request.payload)
-        self.ledger.record(request.idempotency_key, receipt)
+        try:
+            receipt = client.commit(request.resource, request.payload)
+        except Exception as exc:
+            # The claim deliberately stays. From here, "the surface refused" and "the
+            # answer was lost" look identical, and only one of them is safe to retry.
+            self._audit(
+                request, spec, envelope, run_id, "effect.unresolved", approval_id, "unresolved"
+            )
+            raise UnresolvedEffect(
+                f"{request.idempotency_key}: the surface did not confirm ({exc}). "
+                "Reconcile against the surface; do not retry blind."
+            ) from exc
+        # Phase two: the surface answered, so the key can settle.
+        self.ledger.finalize(request.idempotency_key, receipt)
 
         with tracer.span(
             "execution.commit",

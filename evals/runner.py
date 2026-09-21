@@ -37,6 +37,9 @@ class Case:
     approve: bool = False
     repeat: int = 1
     corpus: list[str] = field(default_factory=list)
+    # Make the surface apply the effect and then lose the answer, from the first
+    # turn after approval. The failure the idempotency design exists for.
+    fail_after_effect: bool = False
     expect_error: str | None = None
     description: str = ""
 
@@ -116,6 +119,7 @@ def run_case(case: Case) -> Outcome:
                     payload={},
                 ),
             )
+            stack.client.fail_after_effect = case.fail_after_effect
             for _ in range(case.repeat):
                 result = handle(stack, event, scopes=scopes, run=run)
                 span_names |= result.tracer.names()
