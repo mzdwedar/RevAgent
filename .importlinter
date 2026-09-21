@@ -1,0 +1,67 @@
+# Layer contracts for The Agent Stack (Part 1). `lint-imports` is the verdict
+# named in CONSTRAINTS.md. Loosening a contract here is a bar change, not a fix:
+# scripts/stack_guard.py flags any edit to this file that removes a contract.
+
+[importlinter]
+root_package = agentstack
+include_external_packages = True
+
+[importlinter:contract:1]
+name = Stack layers only depend downward
+type = layers
+layers =
+    agentstack.interfaces
+    agentstack.control_plane
+    agentstack.runtime
+    agentstack.execution
+    agentstack.policy
+    agentstack.tools
+    agentstack.context
+    agentstack.model
+    agentstack.observability
+
+[importlinter:contract:2]
+name = Capability exposure is not execution authority (Part 6)
+type = forbidden
+source_modules =
+    agentstack.tools
+    agentstack.context
+    agentstack.model
+forbidden_modules =
+    agentstack.execution
+
+[importlinter:contract:3]
+name = Only the execution gateway touches a real surface client (Part 7)
+type = forbidden
+source_modules =
+    agentstack.interfaces
+    agentstack.control_plane
+    agentstack.runtime
+    agentstack.policy
+    agentstack.tools
+    agentstack.context
+    agentstack.model
+    agentstack.observability
+forbidden_modules =
+    httpx
+    requests
+    urllib
+    subprocess
+    socket
+    sqlite3
+    smtplib
+
+[importlinter:contract:4]
+name = Nothing imports the inbound channel layer (Part 1)
+type = forbidden
+source_modules =
+    agentstack.control_plane
+    agentstack.runtime
+    agentstack.execution
+    agentstack.policy
+    agentstack.tools
+    agentstack.context
+    agentstack.model
+    agentstack.observability
+forbidden_modules =
+    agentstack.interfaces

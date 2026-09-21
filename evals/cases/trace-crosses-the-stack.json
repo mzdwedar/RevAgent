@@ -1,0 +1,24 @@
+{
+  "id": "trace-crosses-the-stack",
+  "part": 8,
+  "gate": true,
+  "description": "A committed run emits every required span, not just the model call.",
+  "message": "issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=1999",
+  "scopes": ["billing:read", "billing:refund"],
+  "approve": true,
+  "expect": {
+    "status": "complete",
+    "spans_include": [
+      "run.start",
+      "context.assemble",
+      "tool.expose",
+      "model.call",
+      "tool.call",
+      "policy.decide",
+      "approval.request",
+      "execution.commit",
+      "response"
+    ],
+    "surface_calls": 1
+  }
+}

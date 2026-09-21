@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  bar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # stack_guard and changed-line coverage need the base
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --frozen
+
+      - name: Lint, format, types, layer contracts
+        run: bash scripts/check_fast.sh
+
+      - name: Tests and architecture fitness
+        run: uv run pytest --cov=agentstack --cov-report=lcov -q
+
+      - name: Changed-line coverage
+        if: github.event_name == 'pull_request'
+        run: uv run python scripts/changed_line_coverage.py --base origin/${{ github.base_ref }} --min 80
+
+      - name: Release gates (Part 8)
+        run: uv run python -m evals run --gates
+
+      - name: Did the bar get weakened?
+        if: github.event_name == 'pull_request'
+        run: uv run python scripts/stack_guard.py --base origin/${{ github.base_ref }}
+
+      - name: Secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dependencies
+        uses: google/osv-scanner-action/osv-scanner-action@v2
+        with:
+          scan-args: |-
+            --recursive
+            ./

@@ -1,0 +1,32 @@
+"""Layer 6 - tools, MCP, capability surfaces.
+
+A tool definition is a capability surface, not a permission. It says what may be
+*requested*, under which identity, against which scope, on which execution surface,
+and what it would take to approve. Whether it happens is decided one layer up.
+
+Nothing in this package performs I/O. A tool prepares an `ActionRequest`; only
+`agentstack.execution.gateway` commits one (Part 6 -> Part 7).
+"""
+
+from agentstack.tools.action import ActionRequest
+from agentstack.tools.registry import Registry, ToolNotExposed
+from agentstack.tools.spec import (
+    REQUIRED_TOOL_FIELDS,
+    ActsAs,
+    Approval,
+    Idempotency,
+    Surface,
+    ToolSpec,
+)
+
+__all__ = [
+    "REQUIRED_TOOL_FIELDS",
+    "ActionRequest",
+    "ActsAs",
+    "Approval",
+    "Idempotency",
+    "Registry",
+    "Surface",
+    "ToolNotExposed",
+    "ToolSpec",
+]

@@ -1,0 +1,22 @@
+{
+  "id": "policy-document-is-retrieved",
+  "part": 5,
+  "gate": true,
+  "description": "Refund questions pull the refund policy into context, labelled and scoped.",
+  "message": "customer wants a refund: issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=1999",
+  "scopes": [
+    "billing:read",
+    "billing:refund"
+  ],
+  "corpus": [
+    "Refund policy: any refund above 10.00 needs a second approver."
+  ],
+  "expect": {
+    "status": "awaiting_approval",
+    "context_mentions": [
+      "refund policy"
+    ],
+    "untrusted_items_min": 2,
+    "surface_calls": 0
+  }
+}

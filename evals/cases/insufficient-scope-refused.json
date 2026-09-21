@@ -1,0 +1,13 @@
+{
+  "id": "insufficient-scope-refused",
+  "part": 7,
+  "gate": true,
+  "description": "A run holding only billing:read cannot refund, whatever the model proposes.",
+  "message": "issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=1999",
+  "scopes": ["billing:read"],
+  "expect_error": "PolicyDenied",
+  "expect": {
+    "surface_calls": 0,
+    "audit_outcomes": ["denied"]
+  }
+}

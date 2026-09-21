@@ -1,0 +1,167 @@
+"""The composition root.
+
+Every layer is assembled here and nowhere else, which is why the layers below can stay
+ignorant of each other's concrete implementations. Swapping the in-memory stores for
+the backend chosen in ADR-0002 is a change to this file and to nothing else.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from agentstack.context.items import Scope, Trust
+from agentstack.context.memory import MaintenanceQueue, MemoryStore
+from agentstack.context.retrieval import Candidate, StaticRetriever
+from agentstack.control_plane.resolve import SessionResolver
+from agentstack.control_plane.session import SessionView
+from agentstack.control_plane.stores import TranscriptStore, WorkingStateStore
+from agentstack.execution.gateway import Gateway
+from agentstack.execution.idempotency import IdempotencyLedger
+from agentstack.execution.surfaces import RecordingClient, Sandbox
+from agentstack.interfaces.inbound import InboundEvent
+from agentstack.model.engine import EchoEngine
+from agentstack.observability.audit import AuditSink
+from agentstack.observability.spans import VersionStamp
+from agentstack.policy.approval import ApprovalStore
+from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
+from agentstack.runtime.run import Run, new_run
+from agentstack.runtime.steps import StepLedger
+from agentstack.runtime.waits import WaitStore
+from agentstack.tools.catalog import build_registry
+from agentstack.tools.spec import ActsAs, Surface
+
+VERSIONS = VersionStamp(
+    prompt="support-v1",
+    model="echo-0",
+    tool_schema="catalog-v1",
+    policy="policy-v1",
+    retrieval="static-v1",
+)
+
+
+@dataclass(slots=True)
+class Stack:
+    resolver: SessionResolver
+    transcripts: TranscriptStore
+    working_state: WorkingStateStore
+    memory: MemoryStore
+    maintenance: MaintenanceQueue
+    approvals: ApprovalStore
+    ledger: IdempotencyLedger
+    audit: AuditSink
+    steps: StepLedger
+    waits: WaitStore
+    client: RecordingClient
+    deps: TurnDeps
+
+
+def build_stack(*, tenant: str = "acme") -> Stack:
+    transcripts = TranscriptStore()
+    working_state = WorkingStateStore()
+    resolver = SessionResolver(transcripts=transcripts, working_state=working_state)
+    memory = MemoryStore()
+    maintenance = MaintenanceQueue()
+    approvals = ApprovalStore()
+    ledger = IdempotencyLedger()
+    audit = AuditSink()
+    steps = StepLedger()
+    waits = WaitStore()
+    client = RecordingClient()
+
+    gateway = Gateway(
+        surfaces={Surface.API: client},
+        ledger=ledger,
+        approvals=approvals,
+        audit=audit,
+        sandbox=Sandbox(
+            tenant=tenant,
+            allowed_surfaces=frozenset({Surface.API}),
+            allowed_resource_prefixes=frozenset({f"{tenant}/customers/"}),
+            network_allowlist=frozenset({"api.internal"}),
+        ),
+    )
+
+    retriever = StaticRetriever(
+        corpus=[
+            Candidate(
+                text="Refund policy: refunds within 30 days need an approver.",
+                score=1.0,
+                source="policy-handbook",
+                scope=Scope(tenant=tenant),
+                observed_at=datetime.now(UTC),
+                trust=Trust.FIRST_PARTY,
+            )
+        ]
+    )
+
+    deps = TurnDeps(
+        engine=EchoEngine(),
+        registry=build_registry(),
+        gateway=gateway,
+        retriever=retriever,
+        memory=memory,
+        maintenance=maintenance,
+        steps=steps,
+        waits=waits,
+        versions=VERSIONS,
+    )
+    return Stack(
+        resolver=resolver,
+        transcripts=transcripts,
+        working_state=working_state,
+        memory=memory,
+        maintenance=maintenance,
+        approvals=approvals,
+        ledger=ledger,
+        audit=audit,
+        steps=steps,
+        waits=waits,
+        client=client,
+        deps=deps,
+    )
+
+
+def envelope_for(
+    view: SessionView, *, scopes: frozenset[str], lifetime: timedelta = timedelta(minutes=15)
+) -> IdentityEnvelope:
+    """A per-run envelope: narrow scopes, short lifetime, revocable.
+
+    Note that it is built from the *session view*, never from model or tool output.
+    """
+    return IdentityEnvelope(
+        principal=view.user_id,
+        acts_as=ActsAs.DELEGATED,
+        tenant=view.tenant,
+        delegation_scopes=scopes,
+        credential_ref=f"vault://agent/{view.tenant}/{view.user_id}",
+        expires_at=datetime.now(UTC) + lifetime,
+        revocable=True,
+    )
+
+
+def handle(
+    stack: Stack, event: InboundEvent, *, scopes: frozenset[str], run: Run | None = None
+) -> TurnResult:
+    """Channel event -> session -> run -> turn. The whole request path in one place.
+
+    Pass `run` to continue an existing run after a wait was satisfied. A new `Run`
+    would be a different execution: approvals, steps and idempotency all hang off the
+    run id, and reusing the id is what makes resume mean resume.
+    """
+    view = stack.resolver.resolve(
+        session_id=event.session_id, user_id=event.user_id, tenant=event.tenant
+    )
+    stack.transcripts.append(session_id=view.session_id, kind="user", body=event.text)
+    run = run or new_run(
+        session_id=view.session_id, tenant=view.tenant, user=view.user_id, stage=view.stage
+    )
+    result = run_turn(
+        run=run,
+        envelope=envelope_for(view, scopes=scopes),
+        message=event.text,
+        deps=stack.deps,
+    )
+    stack.transcripts.append(session_id=view.session_id, kind="agent", body=result.text)
+    return result

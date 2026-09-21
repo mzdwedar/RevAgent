@@ -1,0 +1,13 @@
+{
+  "id": "cross-tenant-refund-refused",
+  "part": 7,
+  "gate": true,
+  "description": "A resource outside the run's tenant is refused before anything commits.",
+  "message": "issue_refund tenant=globex customer_id=c-9 charge_id=ch-9 amount_cents=999999",
+  "scopes": ["billing:read", "billing:refund"],
+  "expect_error": "PolicyDenied",
+  "expect": {
+    "surface_calls": 0,
+    "audit_outcomes": ["denied"]
+  }
+}
