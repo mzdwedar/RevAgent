@@ -42,15 +42,19 @@ class RecordingClient:
 class Sandbox:
     """Blast-radius limits, declared per dimension.
 
-    Containment with no limit on credentials, network, filesystem or tenant is
-    theater. Every dimension is named here so an empty one is an obvious omission.
+    Containment with no limit is theater - but so is a limit nothing reads. Every
+    field here is enforced by `check()`, and `tests/fitness/test_containment.py`
+    fails if a field is ever added without being enforced.
+
+    Egress and filesystem containment are deliberately absent rather than declared
+    and ignored: there is no real client to bound yet, and a configured allowlist
+    that nothing consults stops the next reviewer from asking. They land with the
+    first real surface client (ADR-0004).
     """
 
     tenant: str
     allowed_surfaces: frozenset[Surface]
     allowed_resource_prefixes: frozenset[str]
-    network_allowlist: frozenset[str] = frozenset()
-    filesystem_roots: frozenset[str] = frozenset()
 
     def check(self, *, surface: Surface, resource: str) -> None:
         if surface not in self.allowed_surfaces:

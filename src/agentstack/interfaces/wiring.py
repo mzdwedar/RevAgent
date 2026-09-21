@@ -79,7 +79,6 @@ def build_stack(*, tenant: str = "acme") -> Stack:
             tenant=tenant,
             allowed_surfaces=frozenset({Surface.API}),
             allowed_resource_prefixes=frozenset({f"{tenant}/customers/"}),
-            network_allowlist=frozenset({"api.internal"}),
         ),
     )
 
