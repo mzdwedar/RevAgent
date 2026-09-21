@@ -9,6 +9,10 @@ Order matters here, and it is the order Part 7 argues for:
 5. **Commit** - the surface does the thing.
 6. **Evidence** - a span for debugging, an audit record for accountability.
 
+Every terminal decision here is audited, not just the two that succeed: a policy
+denial, an approval refusal, a containment violation, a deduplicated repeat and a
+commit all leave a record with the rule that produced them.
+
 The model cannot route around this function, which is the point: the executor, not
 the model, owns the boundary.
 """
@@ -19,10 +23,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from agentstack.execution.idempotency import IdempotencyLedger
-from agentstack.execution.surfaces import Sandbox, SurfaceClient
+from agentstack.execution.surfaces import Sandbox, SandboxViolation, SurfaceClient
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import Tracer
-from agentstack.policy.approval import ApprovalStore, require_approval
+from agentstack.policy.approval import (
+    ApprovalRecord,
+    ApprovalRequired,
+    ApprovalStale,
+    ApprovalStore,
+    require_approval,
+)
 from agentstack.policy.decisions import PolicyDenied, decide
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.tools.action import ActionRequest
@@ -66,16 +76,37 @@ class Gateway:
             self._audit(request, spec, envelope, run_id, decision.rule, None, "denied")
             raise PolicyDenied(decision.reason)
 
+        approval: ApprovalRecord | None = None
         with tracer.span("approval.request", tool=spec.name, tier=spec.approval.value):
-            approval = require_approval(
-                store=self.approvals,
-                spec=spec,
-                request=request,
-                run_id=run_id,
-                state_snapshot=state_snapshot,
-            )
+            try:
+                approval = require_approval(
+                    store=self.approvals,
+                    spec=spec,
+                    request=request,
+                    run_id=run_id,
+                    state_snapshot=state_snapshot,
+                )
+            except (ApprovalRequired, ApprovalStale) as exc:
+                rule = (
+                    "approval.required" if isinstance(exc, ApprovalRequired) else "approval.stale"
+                )
+                self._audit(request, spec, envelope, run_id, rule, None, "refused")
+                raise
 
-        self.sandbox.check(surface=request.surface, resource=request.resource)
+        with tracer.span("execution.contain", tool=spec.name, surface=request.surface.value):
+            try:
+                self.sandbox.check(surface=request.surface, resource=request.resource)
+            except SandboxViolation:
+                self._audit(
+                    request,
+                    spec,
+                    envelope,
+                    run_id,
+                    "containment.violation",
+                    approval.id if approval else None,
+                    "contained",
+                )
+                raise
 
         recorded = self.ledger.recorded(request.idempotency_key)
         if recorded is not None:
@@ -133,7 +164,10 @@ class Gateway:
         approval_id: str | None,
         outcome: str,
     ) -> None:
-        if not spec.side_effecting:
+        # A read that succeeded is not an accountability event. A *refusal* is, whatever
+        # the verb: something reached the choke point and was stopped, and six weeks
+        # from now that is the question someone will be asking.
+        if not spec.side_effecting and outcome in {"committed", "deduplicated"}:
             return
         self.audit.write(
             run_id=run_id,
