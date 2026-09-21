@@ -146,7 +146,11 @@ def run_turn(
                 )
                 observations.append(read.data)
                 continue
-            with deps.steps.step(run.run_id, f"execute:{spec.name}") as slot:
+            # The step name carries the identity of the *action*, not just the tool.
+            # Two refunds on two charges in one turn are two steps; the same refund
+            # retried is one. The action fingerprint already draws that line.
+            step_name = f"execute:{spec.name}:{request.fingerprint()}"
+            with deps.steps.step(run.run_id, step_name) as slot:
                 if slot[0] is None:
                     result = deps.gateway.execute(
                         request=request,
