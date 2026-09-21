@@ -26,6 +26,10 @@ class Wait:
     state_snapshot: str
     created_at: datetime
     satisfied: bool = False
+    # What the resume event carried. This is how the approver reaches the turn that
+    # continues: through the wait that was satisfied, not out of a store the runtime
+    # could have consulted without anyone resuming anything.
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +61,10 @@ class WaitStore:
     def pending_for(self, run_id: str) -> tuple[Wait, ...]:
         return tuple(w for w in self._waits.values() if w.run_id == run_id and not w.satisfied)
 
-    def _satisfy(self, wait: Wait) -> Wait:
+    def satisfied_for(self, run_id: str) -> tuple[Wait, ...]:
+        return tuple(w for w in self._waits.values() if w.run_id == run_id and w.satisfied)
+
+    def _satisfy(self, wait: Wait, payload: dict[str, Any]) -> Wait:
         done = Wait(
             wait_id=wait.wait_id,
             run_id=wait.run_id,
@@ -65,6 +72,7 @@ class WaitStore:
             state_snapshot=wait.state_snapshot,
             created_at=wait.created_at,
             satisfied=True,
+            payload=dict(payload),
         )
         self._waits[wait.wait_id] = done
         return done
@@ -82,4 +90,4 @@ def resume(store: WaitStore, event: ResumeEvent) -> Wait:
         raise ResumeRejected(
             "the state this run was paused against has changed; re-ask rather than resume"
         )
-    return store._satisfy(wait)
+    return store._satisfy(wait, event.payload)

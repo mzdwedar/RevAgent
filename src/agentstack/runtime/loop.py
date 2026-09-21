@@ -69,7 +69,37 @@ def run_turn(
     instructions: str = "You are a support agent. Prefer the narrowest tool that fits.",
 ) -> TurnResult:
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
-    with tracer.span("run.start", tenant=run.tenant, stage=run.stage):
+
+    # A run that is waiting is waiting. Satisfying the wait is what lets it continue -
+    # not the approval store having been written to by someone, somewhere.
+    pending = deps.waits.pending_for(run.run_id)
+    if pending:
+        with tracer.span(
+            "run.start",
+            tenant=run.tenant,
+            stage=run.stage,
+            blocked_on=[w.wait_id for w in pending],
+        ):
+            pass
+        with tracer.span("response", status="blocked", waits=len(pending)):
+            pass
+        return TurnResult(
+            run_id=run.run_id,
+            status="blocked",
+            text=(
+                f"run {run.run_id} is waiting on {pending[0].kind}; satisfy the wait "
+                "with a resume event before continuing"
+            ),
+            bundle=ContextBundle(
+                instructions="", items=(), dropped_out_of_scope=0, dropped_over_budget=0
+            ),
+            tracer=tracer,
+            pending_wait=pending[0],
+        )
+
+    resumed = deps.waits.satisfied_for(run.run_id)
+    resumed_by = resumed[-1].payload.get("approved_by") if resumed else None
+    with tracer.span("run.start", tenant=run.tenant, stage=run.stage, resumed_by=resumed_by):
         pass
 
     scope = Scope(tenant=run.tenant, user=run.user, session=run.session_id)

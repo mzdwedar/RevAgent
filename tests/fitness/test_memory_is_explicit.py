@@ -11,10 +11,10 @@ import pytest
 from agentstack.context.items import Scope, Trust
 from agentstack.context.memory import MemoryStore, write
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.wiring import Stack, handle
+from agentstack.interfaces.wiring import Stack
 from agentstack.runtime.run import Run
 
-from .conftest import SCOPES
+from .conftest import drive_to_completion
 
 SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "agentstack"
 ME = Scope(tenant="acme", user="u-1")
@@ -92,13 +92,8 @@ def test_only_the_memory_module_writes_to_the_store() -> None:
 
 def test_maintenance_is_enqueued_not_awaited(stack: Stack, event: InboundEvent, run: Run) -> None:
     before = len(stack.maintenance.jobs)
-    handle(stack, event, scopes=SCOPES, run=run)
-    # The turn parked on approval, so nothing was extracted yet; complete it and check.
-    from .conftest import approve_and_resume
+    drive_to_completion(stack, event, run)
 
-    first = handle(stack, event, scopes=SCOPES, run=run)
-    approve_and_resume(stack, first, run)
-    handle(stack, event, scopes=SCOPES, run=run)
     assert len(stack.maintenance.jobs) > before
     assert stack.memory.all_records() == (), (
         "extraction is a queued job, not something the turn blocks on"

@@ -1,0 +1,16 @@
+{
+  "id": "an-unsatisfied-wait-blocks-the-run",
+  "part": 3,
+  "gate": true,
+  "description": "A run parked on a human approval cannot reach a surface until the wait itself is satisfied - an approval record alone is not a resume.",
+  "message": "issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=1999",
+  "scopes": ["billing:read", "billing:refund"],
+  "approve": true,
+  "resume": false,
+  "repeat": 1,
+  "expect": {
+    "status": "blocked",
+    "surface_calls": 0,
+    "audit_outcomes": ["refused"]
+  }
+}

@@ -31,6 +31,10 @@ class TwoRefundsEngine:
         self.asset = ModelAsset(name="two-refunds", context_window=8192, max_output_tokens=512)
 
     def generate(self, request: ModelRequest) -> ModelResponse:
+        # Propose only what this run was actually offered - a fake that ignores the
+        # exposure filter would make the wrong tests pass.
+        if "issue_refund" not in request.exposed_tools:
+            return ModelResponse(text="nothing I can do here")
         return ModelResponse(
             text="refunding both charges",
             proposals=tuple(

@@ -40,6 +40,8 @@ class Case:
     # Make the surface apply the effect and then lose the answer, from the first
     # turn after approval. The failure the idempotency design exists for.
     fail_after_effect: bool = False
+    # Grant the approval but never satisfy the wait. The run must stay blocked.
+    resume: bool = True
     expect_error: str | None = None
     description: str = ""
 
@@ -110,15 +112,16 @@ def run_case(case: Case) -> Outcome:
                 approver="eval-approver",
                 summary=result.approval_summary,
             )
-            resume(
-                stack.waits,
-                ResumeEvent(
-                    run_id=run.run_id,
-                    wait_id=result.pending_wait.wait_id,
-                    state_snapshot=result.pending_wait.state_snapshot,
-                    payload={},
-                ),
-            )
+            if case.resume:
+                resume(
+                    stack.waits,
+                    ResumeEvent(
+                        run_id=run.run_id,
+                        wait_id=result.pending_wait.wait_id,
+                        state_snapshot=result.pending_wait.state_snapshot,
+                        payload={"approved_by": "eval-approver"},
+                    ),
+                )
             stack.client.fail_after_effect = case.fail_after_effect
             for _ in range(case.repeat):
                 result = handle(stack, event, scopes=scopes, run=run)

@@ -30,6 +30,7 @@ Stack-specific (from `STACK.md`):
 - No read entered in the idempotency ledger, and no read committed as an effect
 - No side effect committed without a claimed idempotency key, and no blind retry
   of a claim that was never settled
+- No run advancing past an unsatisfied wait
 - No declared containment dimension that `Sandbox.check()` does not read
 
 ## Enforced with numbers
@@ -63,7 +64,7 @@ Why these numbers:
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 21 | must not fall |
+| Fitness test count | 22 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |
