@@ -8,6 +8,7 @@ not negotiable whichever backend wins.
 
 from agentstack.runtime.loop import TurnResult, run_turn
 from agentstack.runtime.run import Run, new_run
+from agentstack.runtime.snapshot import resource_snapshot
 from agentstack.runtime.steps import StepLedger, StepRecord
 from agentstack.runtime.waits import ResumeEvent, ResumeRejected, Wait, WaitStore, resume
 
@@ -21,6 +22,7 @@ __all__ = [
     "Wait",
     "WaitStore",
     "new_run",
+    "resource_snapshot",
     "resume",
     "run_turn",
 ]

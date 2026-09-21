@@ -12,7 +12,7 @@ from collections.abc import Iterator
 import pytest
 
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.wiring import Stack, build_stack
+from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.runtime.run import Run, new_run
 
 TENANT = "acme"
@@ -75,3 +75,27 @@ def approve_and_resume(stack: Stack, result, run: Run, approver: str = "finance-
             payload={"approved_by": approver},
         ),
     )
+
+
+def drive_to_completion(
+    stack: Stack,
+    event: InboundEvent,
+    run: Run,
+    *,
+    scopes: frozenset[str] = SCOPES,
+    approver: str = "finance-oncall",
+    max_rounds: int = 6,
+):
+    """Run the turn, approving whatever it parks on, until it stops parking.
+
+    This is what an approval queue looks like from the outside: each action surfaces
+    on its own, bound to its own state, and is approved on its own. A helper that
+    approved everything up front would be the modal this whole design rejects.
+    """
+    result = handle(stack, event, scopes=scopes, run=run)
+    for _ in range(max_rounds):
+        if result.status != "awaiting_approval":
+            return result
+        approve_and_resume(stack, result, run, approver)
+        result = handle(stack, event, scopes=scopes, run=run)
+    raise AssertionError(f"still parked after {max_rounds} rounds")

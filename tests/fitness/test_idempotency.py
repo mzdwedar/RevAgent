@@ -39,7 +39,8 @@ def test_the_gateway_deduplicates_even_without_a_step_boundary(
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
     envelope = envelope_for(view, scopes=SCOPES)
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)
-    snapshot = first.bundle.fingerprint()
+    assert first.pending_wait is not None
+    snapshot = first.pending_wait.state_snapshot
 
     a = gateway.execute(
         request=request,

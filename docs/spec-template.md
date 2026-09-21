@@ -57,6 +57,7 @@ Lower-layer constraints this feature inherits. State them; do not discover them.
 | What is memory here, who scopes it, and when is it written? | |
 | Which capabilities are exposed, and which surface actually executes them? | |
 | Where is the approval boundary, and what isolates the action afterwards? | |
+| **What identifies "this resource, now"?** (charge status, subscription version) - the input `runtime/snapshot.py` is waiting for | |
 | What evidence is emitted, and what criteria judge it? | |
 
 ## Boundaries

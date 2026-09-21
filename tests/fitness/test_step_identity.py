@@ -19,7 +19,7 @@ from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, T
 from agentstack.runtime.run import Run
 from agentstack.tools.catalog import _refund
 
-from .conftest import SCOPES, TENANT, USER
+from .conftest import SCOPES, TENANT, USER, drive_to_completion
 
 CHARGES = ("ch-7", "ch-8")
 
@@ -48,27 +48,8 @@ class TwoRefundsEngine:
         )
 
 
-def _approve_everything(stack: Stack, run: Run, snapshot: str) -> None:
-    for charge in CHARGES:
-        stack.approvals.grant(
-            run_id=run.run_id,
-            request=_refund(
-                {
-                    "tenant": TENANT,
-                    "customer_id": "c-42",
-                    "charge_id": charge,
-                    "amount_cents": 1999,
-                }
-            ),
-            state_snapshot=snapshot,
-            approver="finance-oncall",
-            summary=f"refund $19.99 on {charge}",
-        )
-
-
-def test_two_effects_in_one_turn_are_two_steps(stack: Stack, run: Run) -> None:
-    stack.deps.engine = TwoRefundsEngine()
-    event = InboundEvent(
+def _event(run: Run) -> InboundEvent:
+    return InboundEvent(
         channel="test",
         tenant=TENANT,
         user_id=USER,
@@ -76,13 +57,12 @@ def test_two_effects_in_one_turn_are_two_steps(stack: Stack, run: Run) -> None:
         text="refund both charges",
     )
 
-    first = handle(stack, event, scopes=SCOPES, run=run)
-    assert first.status == "awaiting_approval"
-    assert first.pending_wait is not None
-    _approve_everything(stack, run, first.pending_wait.state_snapshot)
 
-    result = handle(stack, event, scopes=SCOPES, run=run)
+def test_two_effects_in_one_turn_are_two_steps(stack: Stack, run: Run) -> None:
+    stack.deps.engine = TwoRefundsEngine()
+    result = drive_to_completion(stack, _event(run), run)
 
+    assert result.status == "complete"
     assert len(stack.client.calls) == 2, (
         f"{len(stack.client.calls)} refund(s) committed for two distinct charges; "
         "the second was swallowed by the first's step record"
@@ -95,17 +75,7 @@ def test_two_effects_in_one_turn_are_two_steps(stack: Stack, run: Run) -> None:
 
 def test_the_step_name_carries_the_action_not_just_the_tool(stack: Stack, run: Run) -> None:
     stack.deps.engine = TwoRefundsEngine()
-    event = InboundEvent(
-        channel="test",
-        tenant=TENANT,
-        user_id=USER,
-        session_id=run.session_id,
-        text="refund both charges",
-    )
-    first = handle(stack, event, scopes=SCOPES, run=run)
-    assert first.pending_wait is not None
-    _approve_everything(stack, run, first.pending_wait.state_snapshot)
-    handle(stack, event, scopes=SCOPES, run=run)
+    drive_to_completion(stack, _event(run), run)
 
     names = {record.name for record in stack.steps.records_for(run.run_id)}
     assert len(names) == 2, f"two distinct actions produced {len(names)} step name(s): {names}"

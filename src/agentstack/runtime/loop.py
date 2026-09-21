@@ -24,6 +24,7 @@ from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.run import Run
+from agentstack.runtime.snapshot import resource_snapshot
 from agentstack.runtime.steps import StepLedger
 from agentstack.runtime.waits import Wait, WaitStore
 from agentstack.tools.action import ActionRequest
@@ -113,8 +114,11 @@ def run_turn(
     with tracer.span("model.call", proposals=[p.tool for p in response.proposals]):
         pass
 
-    state_snapshot = bundle.fingerprint()
     receipts: list[str] = []
+    # What this run has already changed, per resource. The input `resource_state`
+    # will eventually come from the surface (ADR pending in SPEC.md); this is the
+    # part the runtime can know on its own.
+    committed_against: dict[str, list[str]] = {}
     observations: list[dict[str, Any]] = []
 
     refusals: list[str] = []
@@ -130,6 +134,11 @@ def run_turn(
             refusals.append(str(exc))
             continue
         spec = deps.registry.spec(proposal.tool)
+        state_snapshot = resource_snapshot(
+            bundle.fingerprint(),
+            request.resource,
+            committed_against.get(request.resource, []),
+        )
         with tracer.span("tool.call", tool=spec.name, resource=request.resource):
             pass
         try:
@@ -162,6 +171,7 @@ def run_turn(
                     )
                     slot[0] = result.receipt
                 receipts.append(str(slot[0]))
+                committed_against.setdefault(request.resource, []).append(str(slot[0]))
         except (ApprovalRequired, ApprovalStale) as exc:
             wait = deps.waits.park(
                 run_id=run.run_id, kind="human_approval", state_snapshot=state_snapshot
