@@ -20,8 +20,6 @@ the model, owns the boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-
 from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import Sandbox, SandboxViolation, SurfaceClient
 from agentstack.observability.audit import AuditSink
@@ -180,8 +178,3 @@ class Gateway:
             approval_id=approval_id,
             outcome=outcome,
         )
-
-
-def payload_summary(payload: dict[str, Any]) -> str:
-    """What an approver is shown. Specific enough to inspect, not a 'proceed?' modal."""
-    return ", ".join(f"{k}={v!r}" for k, v in sorted(payload.items()))

@@ -26,6 +26,7 @@ Stack-specific (from `STACK.md`):
 - No span type removed from `observability.spans.REQUIRED_SPANS`
 - No context item without scope, provenance, freshness, reason and trust
 - No tool argument reaching a prepare function unvalidated against its input_schema
+- No irreversible tool without a reversal note the approver is shown
 - No declared containment dimension that `Sandbox.check()` does not read
 
 ## Enforced with numbers
@@ -59,7 +60,7 @@ Why these numbers:
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 16 | must not fall |
+| Fitness test count | 17 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

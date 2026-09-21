@@ -154,7 +154,11 @@ def handle(
     )
     stack.transcripts.append(session_id=view.session_id, kind="user", body=event.text)
     run = run or new_run(
-        session_id=view.session_id, tenant=view.tenant, user=view.user_id, stage=view.stage
+        session_id=view.session_id,
+        tenant=view.tenant,
+        user=view.user_id,
+        stage=view.stage,
+        channel=event.channel,
     )
     result = run_turn(
         run=run,

@@ -18,13 +18,24 @@ class Run:
     tenant: str
     user: str
     stage: str = "default"
+    # Where the request came from. A string, not an import: the runtime records
+    # provenance without depending on the channel layer.
+    channel: str = "unknown"
 
 
-def new_run(*, session_id: str, tenant: str, user: str, stage: str = "default") -> Run:
+def new_run(
+    *,
+    session_id: str,
+    tenant: str,
+    user: str,
+    stage: str = "default",
+    channel: str = "unknown",
+) -> Run:
     return Run(
         run_id=f"run-{uuid.uuid4()}",
         session_id=session_id,
         tenant=tenant,
         user=user,
         stage=stage,
+        channel=channel,
     )

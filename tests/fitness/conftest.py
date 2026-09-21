@@ -44,7 +44,7 @@ def event(session_id: str) -> InboundEvent:
 
 @pytest.fixture
 def run(session_id: str) -> Run:
-    return new_run(session_id=session_id, tenant=TENANT, user=USER)
+    return new_run(session_id=session_id, tenant=TENANT, user=USER, channel="test")
 
 
 def approve_and_resume(stack: Stack, result, run: Run, approver: str = "finance-oncall") -> None:

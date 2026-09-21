@@ -19,9 +19,11 @@ from agentstack.policy.approval import (
 )
 from agentstack.policy.decisions import Decision, PolicyDenied, decide
 from agentstack.policy.envelope import REQUIRED_ENVELOPE_FIELDS, IdentityEnvelope
+from agentstack.policy.prompt import ApprovalPrompt
 
 __all__ = [
     "REQUIRED_ENVELOPE_FIELDS",
+    "ApprovalPrompt",
     "ApprovalRecord",
     "ApprovalRequired",
     "ApprovalStale",

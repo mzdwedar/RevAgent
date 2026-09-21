@@ -46,7 +46,9 @@ def main() -> None:
         session_id=session.session_id,
         text=MESSAGE,
     )
-    run = new_run(session_id=session.session_id, tenant="acme", user="agent-operator")
+    run = new_run(
+        session_id=session.session_id, tenant="acme", user="agent-operator", channel="cli"
+    )
 
     first = handle(stack, event, scopes=SCOPES, run=run)
     _report("turn 1 - refund prepared, run parked on a human approval", first)

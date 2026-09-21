@@ -78,7 +78,7 @@ def run_case(case: Case) -> Outcome:
     failures: list[str] = []
     stack = _stack_for(case)
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
-    run = new_run(session_id=session.session_id, tenant=TENANT, user=USER)
+    run = new_run(session_id=session.session_id, tenant=TENANT, user=USER, channel="eval")
     event = InboundEvent(
         channel="eval",
         tenant=TENANT,

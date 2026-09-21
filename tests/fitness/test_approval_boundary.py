@@ -85,7 +85,7 @@ def test_the_approval_prompt_names_the_action_not_the_task(
     summary = result.approval_summary or ""
     assert "issue_refund" in summary
     assert "acme/customers/c-42/charges/ch-7" in summary
-    assert "irreversible" in summary
+    assert "irreversible" in summary.lower()
     assert "agent-operator" in summary, "an approver must see which identity will act"
 
 

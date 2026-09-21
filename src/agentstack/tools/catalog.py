@@ -44,10 +44,10 @@ REFUND = ToolSpec(
     input_schema={
         "type": "object",
         "properties": {
-            "tenant": {"type": "string"},
-            "customer_id": {"type": "string"},
-            "charge_id": {"type": "string"},
-            "amount_cents": {"type": "integer"},
+            "tenant": {"type": "string", "format": "id"},
+            "customer_id": {"type": "string", "format": "id"},
+            "charge_id": {"type": "string", "format": "id"},
+            "amount_cents": {"type": "integer", "format": "cents", "currency": "USD"},
         },
         "required": ["tenant", "customer_id", "charge_id", "amount_cents"],
     },
@@ -58,6 +58,7 @@ REFUND = ToolSpec(
     reversible=False,
     approval=Approval.ALWAYS,
     idempotency=Idempotency.KEY,
+    reversal_note="cannot be undone; reversing requires raising a new charge",
     stages=frozenset({"default"}),
 )
 

@@ -74,6 +74,7 @@ class ToolSpec:
     reversible: bool
     approval: Approval
     idempotency: Idempotency
+    reversal_note: str = ""
     stages: frozenset[str] = field(default_factory=lambda: frozenset({"default"}))
     tenants: frozenset[str] | None = None
 
@@ -96,10 +97,17 @@ class ToolSpec:
                 raise ValueError(
                     f"{self.name}: a side-effecting tool needs an approval tier (Part 7)"
                 )
-            if not self.reversible and self.approval is not Approval.ALWAYS:
-                raise ValueError(
-                    f"{self.name}: irreversible tools require approval=ALWAYS (Part 7)"
-                )
+            if not self.reversible:
+                if self.approval is not Approval.ALWAYS:
+                    raise ValueError(
+                        f"{self.name}: irreversible tools require approval=ALWAYS (Part 7)"
+                    )
+                if not self.reversal_note.strip():
+                    raise ValueError(
+                        f"{self.name}: an irreversible tool needs a reversal note - "
+                        "'irreversible' lands with an approver only when it says what "
+                        "undoing would actually take (Part 7)"
+                    )
         elif self.surface in {Surface.SHELL, Surface.FILESYSTEM}:
             raise ValueError(f"{self.name}: {self.surface.value} is never side-effect free")
 

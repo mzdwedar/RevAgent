@@ -15,12 +15,13 @@ from agentstack.context.assemble import ContextBundle, assemble
 from agentstack.context.items import ContextItem, Scope, Trust
 from agentstack.context.memory import MaintenanceQueue, MemoryStore
 from agentstack.context.retrieval import Retriever
-from agentstack.execution.gateway import Gateway, payload_summary
+from agentstack.execution.gateway import Gateway
 from agentstack.model.contract import ModelRequest
 from agentstack.model.engine import ModelEngine
 from agentstack.observability.spans import Tracer, VersionStamp
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.run import Run
 from agentstack.runtime.steps import StepLedger
 from agentstack.runtime.waits import Wait, WaitStore
@@ -155,11 +156,15 @@ def run_turn(
                 tracer=tracer,
                 pending_wait=wait,
                 pending_request=request,
-                approval_summary=(
-                    f"{spec.name} on {request.resource} "
-                    f"({'irreversible' if not spec.reversible else 'reversible'}) "
-                    f"as {envelope.principal}: {payload_summary(request.payload)}"
-                ),
+                approval_summary=ApprovalPrompt(
+                    spec=spec,
+                    resource=request.resource,
+                    payload=request.payload,
+                    principal=envelope.principal,
+                    acts_as=envelope.acts_as,
+                    requested_by=run.user,
+                    channel=run.channel,
+                ).render(),
             )
 
     if refusals and not receipts:
