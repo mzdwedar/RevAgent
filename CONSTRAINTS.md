@@ -35,6 +35,8 @@ Stack-specific (from `STACK.md`):
   of a claim that was never settled
 - No run advancing past an unsatisfied wait
 - No declared containment dimension that `Sandbox.check()` does not read
+- No cohort column dropped without a recorded reason, and no `data_as_of` derived
+  from a clock — a watermark that moves when nobody looked cannot identify a population
 
 ## Enforced with numbers
 
@@ -51,6 +53,8 @@ Stack-specific (from `STACK.md`):
 | Trace completeness | All required spans on a golden run | `uv run pytest tests/fitness/test_trace_completeness.py` | task end, CI |
 | Coverage | Changed lines >= 80% covered | `uv run pytest --cov=agentstack --cov-report=lcov` + `git diff` | task end, CI |
 | Schema migrations | Up from empty, down, and up again on a fresh database | `uv run pytest tests/infra` | task end, CI |
+| Cohort identity | Same data in, same `data_as_of` out | `uv run pytest tests/fitness/test_data_snapshot.py` | every edit |
+| Live cohort checks | Real datasets match `data/manifest.json`; no feature correlates with the target above 0.9 | `uv run pytest tests/live` | **locally, before a cohort is used in an experiment**. Not on PRs: CI has no Kaggle credentials. A scheduled run needs those secrets configured first — until then this row says only what is true. |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -68,10 +72,32 @@ Why these numbers:
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 99% | must not fall (tolerance 0.5%) |
-| Fitness test count | 23 | must not fall |
+| Fitness test count | 24 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |
+
+## Files exempt from the pattern scan
+
+`scripts/stack_guard.py`, this file, and `tests/fitness/test_the_bar_guards_itself.py`
+are not scanned for `# noqa`, `NotImplementedError` or `skipif`, because naming those
+patterns is what all three are for. The exemption is a named tuple in the guard, and a
+test asserts its exact contents so it grows only deliberately.
+
+This is not a hole in the guard: `CONSTRAINTS.md` is still checked for removed floor
+bullets, removed enforced rows and new exceptions, which is where a real weakening of
+it would show up.
+
+## The live lane
+
+`tests/live` is excluded from the default suite in one visible place — `addopts` in
+`pyproject.toml` — because it needs third-party datasets that CI has no credentials
+for. It is a directory, not a `@pytest.mark.skipif`: a conditional skip would trip the
+floor above, and the tempting fix for that would be to loosen the floor.
+
+What that costs, stated rather than implied: CI proves the loader, the watermark and
+the drop rules are correct. It does not prove the data upstream is unchanged. That is
+what the live lane is for, and it has to actually be run.
 
 ## Where checks run (cost decides placement)
 

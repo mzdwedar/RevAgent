@@ -123,12 +123,27 @@ criteria are met.
 
 ## Phase 2 — Real prediction
 
-- [ ] **T5 — Cohort data loading** · layer 5 · *S*
+- [x] **T5 — Cohort data loading** · layer 5 · *S*
   - Acceptance: load `telecom-bigml` and `bank-churn` through `churn_tabpfn`'s existing
     registry and cleaning, with a stable snapshot watermark that becomes `data_as_of`.
   - Verify: new `tests/fitness/test_data_snapshot.py` — the same snapshot yields the
     same watermark and the same row count; the documented leakage columns stay dropped.
   - Depends: none. Files: ~3.
+  - **Deviation:** `churn_tabpfn`'s source no longer exists. `~/Desktop/revenuecat` holds
+    only `README.md`, `pyproject.toml` and a lockfile; the package is installed editable
+    from a `src/` that is gone, and there is no git history there to recover it. The
+    registry and cleaning were rebuilt in `agentstack/context/datasets.py` from the
+    rules the README still documents. **If the source exists elsewhere, say so** — the
+    cleaning here matches the documented behaviour but not necessarily the code.
+  - `data_as_of` is a **content hash, not a timestamp**. A clock records when someone
+    looked; two runs on identical data would disagree and criterion 17 ("same snapshot +
+    same model version → same cohort") could never be checked.
+  - The datasets are third-party and gitignored. `data/manifest.json` is committed, so a
+    change upstream appears as a changed watermark in a diff.
+  - `tests/live/` is the declared lane for real-data checks, excluded in one visible
+    place in `pyproject.toml` with a `CONSTRAINTS.md` row — a directory, not a `skipif`.
+  - Fetching lives in `scripts/`, outside the package: it reaches the network, and
+    `lint-imports` contract 3 now names `kaggle` so that stays true.
 
 - [ ] **T6 — TabPFN classifier adapter and licence gate** · layer 4 · *M*
   - Acceptance: `prediction/` scores churn on pre-treatment features. A missing or

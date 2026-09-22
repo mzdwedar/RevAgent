@@ -130,3 +130,34 @@ def test_the_current_floor_amendment_is_recorded() -> None:
 
     assert "agentstack.storage" in amendments
     assert "docs/adr/0005" in amendments
+
+
+def test_the_documents_that_name_the_patterns_are_not_scanned_for_them() -> None:
+    """The guard, the document that forbids the patterns, and this file all contain
+    them, because naming them is the job. Scanning any of the three finds a definition.
+
+    This is an exclusion from the *pattern* scan, not from the guard: floor bullets,
+    enforced rows and exceptions in CONSTRAINTS.md are all still checked, and that is
+    where a real weakening of it would appear.
+    """
+    guard = _guard()
+    prose = {"CONSTRAINTS.md": (["- No `# noqa` anywhere, and no `@pytest.mark.skipif`"], [])}
+    code = {"src/agentstack/thing.py": (["value = compute()  # noqa"], [])}
+
+    assert guard.diff_findings(prose) == []
+    assert guard.diff_findings(code), "a suppression in real code must still be loud"
+
+
+def test_constraints_is_still_checked_for_the_things_that_matter() -> None:
+    """The exclusion above must not become a hole."""
+    guard = _guard()
+
+    assert guard.NAMES_THE_PATTERNS == (
+        "scripts/stack_guard.py",
+        "CONSTRAINTS.md",
+        "tests/fitness/test_the_bar_guards_itself.py",
+    ), "this list is an exemption; it grows only when a file's job is to name the patterns"
+    # state_findings reads CONSTRAINTS.md directly, by name, for all three of these.
+    source = (ROOT / "scripts/stack_guard.py").read_text()
+    for check in ("Enforced with numbers", "Exceptions", "_floor_bullets"):
+        assert check in source

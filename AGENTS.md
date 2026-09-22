@@ -18,7 +18,11 @@ loosening the floor to accommodate it is the move `stack_guard` exists to catch.
 
 ```
 bash scripts/dev_up.sh                   # compose up + migrate, one command
+uv run python scripts/fetch_datasets.py  # the cohort datasets (needs ~/.kaggle)
 ```
+
+The datasets are third-party and gitignored; `data/manifest.json` is committed, so a
+change upstream shows up as a changed `data_as_of` in a diff.
 
 ## Commands
 
@@ -30,6 +34,7 @@ bash scripts/check_full.sh               # CI           (minutes)
 uv run pytest tests/fitness -v           # the architecture bar
 uv run python -m evals run --gates       # Part-8 release gates
 uv run agentstack-migrate status         # schema: applied vs pending
+uv run pytest tests/live                 # real cohorts vs the manifest (needs data/)
 uv run python scripts/stack_guard.py --base main   # did the bar get weakened?
 ```
 

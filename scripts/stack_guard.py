@@ -31,6 +31,16 @@ SUPPRESSIONS = re.compile(
 STUBS = re.compile(r"raise NotImplementedError|except[^:]*:\s*pass\s*$|except\s*:\s*$")
 SKIPS = re.compile(r"@pytest\.mark\.(skip|xfail)|pytest\.skip\(|@unittest\.skip")
 
+# The guard names the forbidden patterns, and so does the document that forbids them.
+# Scanning either for those patterns only ever finds the definition. CONSTRAINTS.md is
+# still fully checked by `state_findings` - floor bullets, enforced rows, exceptions -
+# which is where a real weakening of it would show up.
+NAMES_THE_PATTERNS = (
+    "scripts/stack_guard.py",
+    "CONSTRAINTS.md",
+    "tests/fitness/test_the_bar_guards_itself.py",
+)
+
 REQUIRED_SETS = {
     "REQUIRED_SPANS": "src/agentstack/observability/spans.py",
     "REQUIRED_TOOL_FIELDS": "src/agentstack/tools/spec.py",
@@ -161,8 +171,8 @@ def _floor_bullets(source: str) -> set[str]:
 def diff_findings(per_file: dict[str, tuple[list[str], list[str]]]) -> list[Finding]:
     found: list[Finding] = []
     for path, (added, removed) in per_file.items():
-        if path.startswith("scripts/stack_guard.py"):
-            continue  # this file names the patterns it looks for
+        if path.startswith(NAMES_THE_PATTERNS):
+            continue  # these files exist to name the patterns, so they contain them
         for line in added:
             if SUPPRESSIONS.search(line):
                 found.append(Finding(path, f"new suppression: {line.strip()[:80]}", "the floor"))

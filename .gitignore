@@ -8,3 +8,5 @@ __pycache__/
 coverage.lcov
 htmlcov/
 .tmp/
+data/
+!data/manifest.json
