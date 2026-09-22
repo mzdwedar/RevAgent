@@ -176,13 +176,33 @@ criteria are met.
     `CONSTRAINTS.md` with the reason — three lines that call `TabPFNClassifier` cannot
     execute where the extra and the licence are absent.
 
-- [ ] **T7 — Targeting predicate and cohort freeze** · layers 4, 5 · *M*
+- [x] **T7 — Targeting predicate and cohort freeze** · layers 4, 5 · *M*
   - Acceptance: top-decile risk cut, minimum cohort 1,000, value-at-risk floor $50k
     from observed ARPU. The predicate, the threshold and the model version are frozen
     into `experiment_version`.
-  - Verify: new `tests/fitness/test_targeting.py` — criterion 17: same snapshot + same
-    model version → same cohort, size and risk distribution recorded.
+  - Verify: new `tests/fitness/test_targeting.py` — criterion 17.
   - Depends: T6. Files: ~4.
+  - **The spec's own defaults cannot be met by the dev data, and that is not a bug in
+    either.** telecom-bigml has 3,333 customers, so its top decile is 334 against a
+    1,000 minimum. The spec's rationale fails too: a 10% arm of 334 is 33 customers,
+    not the ≥100 it wants. The value floor passes comfortably ($242k vs $50k).
+  - Resolved with **named profiles** in `experiments/targeting.toml`: `default` is the
+    specified production rule and still refuses here; `dev` relaxes the size floor,
+    states what that costs, and puts its name into `experiment_version` and the cohort
+    description so a dev cohort cannot be mistaken for a production one. A live test
+    asserts `default` still refuses, so nobody "fixes" it by lowering the real number.
+  - **bank-churn is loadable but not targetable.** It has no observed revenue —
+    `Balance` is a deposit, `EstimatedSalary` is the customer's income, `Point Earned`
+    is loyalty points. Turning a balance into revenue needs a net interest margin, and
+    the floor is specified against *observed* ARPU. Refused with that reason rather
+    than given a modelled substitute.
+  - The cut is on **rank, not quantile**: a quantile threshold with ties returns more
+    than a decile, and cohort size is exactly what the minimum-size gate is about.
+  - Membership stays re-checkable (`Cohort.includes`) because criterion 11 needs every
+    control subject shown to have passed the same predicate at the same model version.
+  - **Still blocked on the fixture from T6:** the cohort above was exercised with
+    stand-in scores. A real frozen cohort needs `TABPFN_TOKEN` and
+    `scripts/record_scores.py`.
 
 ### ✅ Checkpoint B — a cohort is real and reproducible
 - [ ] A cohort can be produced twice from one snapshot with identical membership

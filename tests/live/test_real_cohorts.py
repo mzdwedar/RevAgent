@@ -70,3 +70,38 @@ def test_the_cohort_is_large_enough_to_target_from(key: str) -> None:
 
     assert snapshot.rows >= 1000
     assert 0.05 < snapshot.churn_rate < 0.5, "an extreme base rate makes uplift unmeasurable"
+
+
+def test_the_dev_cohort_can_actually_be_targeted() -> None:
+    """The dev profile exists because `default` refuses on a 3,333-row base. If even
+    `dev` refuses, nothing downstream has a cohort to roll out to."""
+    from agentstack.context import targeting
+
+    snapshot = datasets.load("telecom-bigml")
+    revenue = targeting.annual_revenue_cents(snapshot)
+    rule = targeting.TargetingRule.load("dev")
+    top_decile = int(snapshot.rows * (1 - rule.risk_quantile))
+
+    assert top_decile >= rule.minimum_cohort, (
+        f"the top decile of {snapshot.rows} is {top_decile}, below the dev minimum "
+        f"{rule.minimum_cohort}; no cohort can be frozen and T13 onwards has nothing to do"
+    )
+    best_case = int(revenue.sort_values(ascending=False).head(top_decile).sum())
+    assert best_case >= rule.minimum_annual_value_at_risk_cents
+
+
+def test_the_production_profile_still_refuses_on_dev_data() -> None:
+    """Recorded as a test so nobody 'fixes' it by lowering the production number."""
+    from agentstack.context import targeting
+
+    snapshot = datasets.load("telecom-bigml")
+    rule = targeting.TargetingRule.load("default")
+
+    assert int(snapshot.rows * (1 - rule.risk_quantile)) < rule.minimum_cohort
+
+
+def test_a_dataset_without_observed_revenue_is_declared_as_such() -> None:
+    from agentstack.context import targeting
+
+    with pytest.raises(targeting.RevenueNotObserved, match="cannot be targeted"):
+        targeting.annual_revenue_cents(datasets.load("bank-churn"))

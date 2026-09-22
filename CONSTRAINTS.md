@@ -40,6 +40,10 @@ Stack-specific (from `STACK.md`):
 - No churn score taken in sample — every row is scored by a model that did not see
   its label, or the top decile is the rows the model fit best
 - No scorer decides who gets an offer; it returns a probability and policy does the rest
+- No cohort widened to meet a gate — a cut that is adjusted until it qualifies is
+  not a cut; refuse and say which gate stopped it
+- No value at risk from a modelled quantity: the floor is observed ARPU, and a
+  dataset without one is loadable and not targetable
 
 ## Enforced with numbers
 
@@ -60,6 +64,7 @@ Stack-specific (from `STACK.md`):
 | Live cohort checks | Real datasets match `data/manifest.json`; no feature correlates with the target above 0.9 | `uv run pytest tests/live` | **locally, before a cohort is used in an experiment**. Not on PRs: CI has no Kaggle credentials. A scheduled run needs those secrets configured first — until then this row says only what is true. |
 | Licence gate | A missing or invalid `TABPFN_TOKEN` is refused at startup | `uv run pytest tests/fitness/test_prediction_gate.py` | every edit |
 | Live model checks | Recorded scores still match the real model; scores separate churners; scoring is reproducible | `uv run pytest tests/live` (needs `TABPFN_TOKEN` and `--extra prediction`) | **locally, before a cohort is used in an experiment** |
+| Cohort reproducibility | Same snapshot + same model version → same cohort, same `experiment_version` | `uv run pytest tests/fitness/test_targeting.py` | every edit |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -84,7 +89,7 @@ says what is actually true.
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 25 | must not fall |
+| Fitness test count | 26 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

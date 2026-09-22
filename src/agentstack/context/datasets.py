@@ -56,6 +56,15 @@ class DatasetSpec:
     drops: Mapping[str, str]
     fills: Mapping[str, Any] = field(default_factory=dict)
 
+    # Observed periodic revenue per customer, in the units the file uses. Empty when
+    # the dataset has none: the value-at-risk floor is specified against *observed*
+    # ARPU, and a dataset without it is loadable but not targetable. Inventing a
+    # margin assumption to fill the gap would make the dollar figure a prediction,
+    # which is the one thing that number is not allowed to be.
+    revenue_columns: tuple[str, ...] = ()
+    revenue_periods_per_year: int = 0
+    revenue_note: str = ""
+
 
 REGISTRY: dict[str, DatasetSpec] = {
     "telecom-bigml": DatasetSpec(
@@ -65,6 +74,19 @@ REGISTRY: dict[str, DatasetSpec] = {
         target="Churn",
         churned="True",
         drops={},
+        revenue_columns=(
+            "Total day charge",
+            "Total eve charge",
+            "Total night charge",
+            "Total intl charge",
+        ),
+        revenue_periods_per_year=12,
+        revenue_note=(
+            "The four charge columns are read as one billing month and annualised x12. "
+            "The published dataset does not state the period; this is an assumption, "
+            "recorded here rather than buried in a multiplier, because every "
+            "value-at-risk figure in an approval prompt depends on it."
+        ),
     ),
     "bank-churn": DatasetSpec(
         key="bank-churn",
@@ -91,6 +113,12 @@ REGISTRY: dict[str, DatasetSpec] = {
                 "retention offer must not be targeted on it, however predictive it is"
             ),
         },
+        # No revenue columns, deliberately. `Balance` is the customer's deposit,
+        # `EstimatedSalary` is their income and `Point Earned` is loyalty points -
+        # none is revenue to the bank. Turning a balance into revenue needs a net
+        # interest margin, which is a modelling assumption, and the floor is specified
+        # against observed ARPU. So this cohort loads and cannot be targeted.
+        revenue_note="no observed revenue column; see the comment above",
     ),
 }
 

@@ -1,0 +1,34 @@
+# Targeting rules. Change a number here, not in code (SPEC.md: "one line in
+# experiments/, versioned like everything else"). Every value is folded into
+# `experiment_version`, so changing one starts a different experiment rather than
+# quietly altering a running one. So is the profile name.
+
+# The production default, as specified.
+[profiles.default]
+# Top decile by predicted churn. A decile and not an absolute probability, because an
+# absolute cut would depend on TabPFN's calibration, which varies by dataset - the same
+# 0.6 threshold means different things on telecom and on bank data.
+risk_quantile = 0.9
+
+# A 10% rollout of 1,000 is ~100 customers, the smallest arm worth measuring.
+minimum_cohort = 1000
+
+# $50,000 of annualised revenue at risk, from observed ARPU. Below this the offers cost
+# more attention than the outcome can repay.
+minimum_annual_value_at_risk_cents = 5_000_000
+
+# The dev base is a 3,333-row benchmark dataset, not a tenant's active base. Its top
+# decile is 334 customers, so `default` refuses - correctly. This profile exists so the
+# end-to-end workflow can run on the data that is actually here.
+#
+# WHAT IT COSTS, stated rather than implied: a 10% arm of 334 is ~33 customers. That is
+# enough to exercise trigger -> score -> target -> draft -> approve -> roll out. It is
+# not enough to measure a retention effect, and an experiment decided on this profile
+# is evidence that the machinery works, not evidence that the offer works.
+#
+# The profile name is part of `experiment_version` and is shown in the cohort
+# description, so a dev cohort cannot be mistaken for a production one.
+[profiles.dev]
+risk_quantile = 0.9
+minimum_cohort = 300
+minimum_annual_value_at_risk_cents = 5_000_000
