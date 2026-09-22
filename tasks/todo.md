@@ -95,10 +95,29 @@ behaviour; it is the same behaviour that stops being a lie when the process dies
     is a real property worth keeping.
 
 ### ✅ Checkpoint A — the port weakened nothing
-- [ ] All 22 fitness tests green **against Postgres**, not fakes
-- [ ] All 11 gates green
-- [ ] `stack_guard.py --base main` clean
-- [ ] Human review before Phase 2
+- [x] All **23** fitness tests green **against Postgres**, not fakes (22 at plan time;
+      T1 added `test_the_bar_guards_itself.py`). No store is constructed empty in the
+      suite except `MemoryStore` — see the gap below.
+- [x] All 11 gates green, each against a migrated `agentstack_evals` database
+- [x] `stack_guard.py --base main` clean; coverage 99%, changed-line 100%
+- [x] `0001`–`0003` roll back to empty and forward again
+- [ ] **Human review before Phase 2**
+
+**Gap found at the checkpoint — not covered by any task in this plan.**
+
+`agentstack.context.MemoryStore` and `MaintenanceQueue` are still in memory. `STACK.md`
+layer 5 claims the authoritative store is a "retrieval index + `MemoryStore`", which is
+true only in the sense that a Python dict is a store — memory does not survive the
+process, which for a memory store is close to not existing.
+
+T2–T4 covered layers 2, 3, 7, 8 and 9. Layer 5 was never assigned a durability task, and
+T5's "cohort data loading" is a different layer-5 concern. So this is a planning gap, not
+a skipped task.
+
+It does not block Phase 2: nothing in the iteration-1 workflow writes a memory. It does
+mean the durability claim is layer-shaped rather than whole, and it should be either
+scheduled or explicitly deferred with a reason before Checkpoint F asserts the 28
+criteria are met.
 
 ---
 
