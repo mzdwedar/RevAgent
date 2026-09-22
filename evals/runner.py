@@ -21,6 +21,7 @@ from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.runtime.run import new_run
 from agentstack.runtime.waits import ResumeEvent, resume
 from agentstack.storage.database import Database
+from agentstack.storage.provision import truncate_all
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 TENANT = "acme"
@@ -61,6 +62,10 @@ class Outcome:
 
 
 def _stack_for(case: Case, db: Database) -> Stack:
+    # Each case starts from an empty substrate. Idempotency keys are stable across
+    # runs by design, so two cases refunding the same charge would otherwise share
+    # one - and the second would deduplicate against the first.
+    truncate_all(db)
     stack = build_stack(db, tenant=TENANT)
     if case.corpus:
         stack.deps.retriever = StaticRetriever(
@@ -167,10 +172,14 @@ def run_case(case: Case, db: Database) -> Outcome:
         failures.append(f"{len(stack.client.calls)} surface calls != {expect['surface_calls']}")
     if "surface_reads" in expect and len(stack.client.reads) != expect["surface_reads"]:
         failures.append(f"{len(stack.client.reads)} surface reads != {expect['surface_reads']}")
-    if "audit_records" in expect and len(stack.audit.records) != expect["audit_records"]:
-        failures.append(f"{len(stack.audit.records)} audit records != {expect['audit_records']}")
+    # Scoped to this run, not to the sink. The audit sink is a shared table now, and
+    # "every record ever written" would make each case's expectation depend on which
+    # cases ran before it.
+    audited = stack.audit.for_run(run.run_id)
+    if "audit_records" in expect and len(audited) != expect["audit_records"]:
+        failures.append(f"{len(audited)} audit records != {expect['audit_records']}")
     if "audit_outcomes" in expect:
-        outcomes = sorted({r.outcome for r in stack.audit.records})
+        outcomes = sorted({r.outcome for r in audited})
         if outcomes != sorted(expect["audit_outcomes"]):
             failures.append(f"audit outcomes {outcomes} != {sorted(expect['audit_outcomes'])}")
 

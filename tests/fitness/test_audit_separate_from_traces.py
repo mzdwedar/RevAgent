@@ -7,10 +7,11 @@ import contextlib
 import pytest
 
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.wiring import Stack, handle
+from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import Tracer
 from agentstack.runtime.run import Run
+from agentstack.storage.database import Database
 
 from .conftest import SCOPES, approve_and_resume
 
@@ -113,3 +114,49 @@ def test_a_containment_violation_is_audited(stack: Stack, run: Run) -> None:
     assert contained, "containment stopped an approved action and recorded nothing"
     assert contained[0].policy_decision == "containment.violation"
     assert contained[0].approval_id, "the audit trail names the approval it overrode"
+
+
+def test_the_audit_trail_is_not_in_the_same_schema_as_the_operational_tables(
+    app_database: Database,
+) -> None:
+    """Separate retention and access rules need somewhere to attach.
+
+    `audit.records`, not `public.audit_records`: granting read on the operational
+    schema should not hand over the accountability trail with it.
+    """
+    rows = app_database.fetch_all("SELECT schemaname FROM pg_tables WHERE tablename = 'records'")
+
+    assert [row[0] for row in rows] == ["audit"]
+
+
+def test_deleting_the_run_does_not_delete_what_it_was_accountable_for(
+    stack: Stack, event: InboundEvent, run: Run, app_database: Database
+) -> None:
+    """Every other table cascades from the session. This one must not.
+
+    "We deleted the session" is not an answer to "who authorised this refund". An
+    audit trail that a retention job can erase as a side effect of tidying up is a
+    debug log with a longer TTL, which is the Part 8 boundary collapsing.
+    """
+    first = handle(stack, event, scopes=SCOPES, run=run)
+    approve_and_resume(stack, first, run)
+    handle(stack, event, scopes=SCOPES, run=run)
+    before = stack.audit.for_run(run.run_id)
+    assert before, "expected the committed refund to be audited"
+
+    app_database.execute("DELETE FROM sessions WHERE session_id = %s", (run.session_id,))
+
+    assert app_database.fetch_all("SELECT run_id FROM runs WHERE run_id = %s", (run.run_id,)) == []
+    assert stack.audit.for_run(run.run_id) == before
+
+
+def test_audit_records_outlive_the_process_that_wrote_them(
+    stack: Stack, event: InboundEvent, run: Run, app_database: Database
+) -> None:
+    first = handle(stack, event, scopes=SCOPES, run=run)
+    approve_and_resume(stack, first, run)
+    handle(stack, event, scopes=SCOPES, run=run)
+
+    restarted = build_stack(app_database, tenant=run.tenant)
+
+    assert restarted.audit.for_run(run.run_id) == stack.audit.for_run(run.run_id)

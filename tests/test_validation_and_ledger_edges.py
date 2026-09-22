@@ -13,6 +13,7 @@ import pytest
 
 from agentstack.execution.idempotency import ClaimState, IdempotencyLedger
 from agentstack.policy.prompt import ApprovalPrompt
+from agentstack.storage.database import Database
 from agentstack.tools.catalog import LOOKUP, REFUND
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 from agentstack.tools.validation import InvalidToolArguments, validate_arguments
@@ -84,8 +85,8 @@ def test_a_number_and_a_boolean_arrive_from_text() -> None:
         validate_arguments(spec, {"ratio": "0.5", "dry_run": "perhaps"})
 
 
-def test_abandon_releases_a_claim_that_provably_did_not_apply() -> None:
-    ledger = IdempotencyLedger()
+def test_abandon_releases_a_claim_that_provably_did_not_apply(app_database: Database) -> None:
+    ledger = IdempotencyLedger(db=app_database)
     ledger.claim("k")
     assert ledger.unresolved_keys() == ("k",)
     ledger.abandon("k")
@@ -93,8 +94,8 @@ def test_abandon_releases_a_claim_that_provably_did_not_apply() -> None:
     assert ledger.claim("k").state is ClaimState.FRESH
 
 
-def test_recorded_returns_only_a_settled_receipt() -> None:
-    ledger = IdempotencyLedger(_entries={})
+def test_recorded_returns_only_a_settled_receipt(app_database: Database) -> None:
+    ledger = IdempotencyLedger(db=app_database)
     ledger.claim("k", now=datetime.now(UTC) - timedelta(minutes=5))
     assert ledger.recorded("k") is None, "a claim is not a receipt"
     ledger.finalize("k", "receipt-9")

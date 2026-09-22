@@ -15,6 +15,7 @@ import psycopg
 from psycopg import OperationalError
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+from agentstack.storage.database import Database
 from agentstack.storage.pool import redacted
 
 BRING_UP = "bash scripts/dev_up.sh"
@@ -58,3 +59,31 @@ def rebuild_database(admin_url: str, database: str) -> str:
         admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
         admin.execute(f'CREATE DATABASE "{database}"')
     return url_for(admin_url, database)
+
+
+def truncate_all(db: Database) -> None:
+    """Empty every table, keeping the schema and the migration ledger.
+
+    For test and eval substrates. It asks the connection which database it is on and
+    applies the same disposable-name rule as `rebuild_database`, because a helper
+    whose whole job is to delete everything should not take the caller's word for it.
+
+    Needed because not every key in this system is unique per run. An idempotency key
+    is deliberately stable across runs - refunding charge ch-7 twice is the thing the
+    ledger exists to stop, even from a different run - so tests sharing a database
+    share those keys. The answer is a clean substrate per test, not a weaker key.
+    """
+    row = db.fetch_one("SELECT current_database()")
+    name = str(row[0]) if row else "<unknown>"
+    if not name.endswith(DISPOSABLE_SUFFIXES):
+        raise NotDisposable(
+            f"{name!r} does not end in one of {DISPOSABLE_SUFFIXES}; refusing to empty it."
+        )
+    tables = db.fetch_all(
+        "SELECT schemaname, tablename FROM pg_tables"
+        " WHERE schemaname IN ('public', 'audit') AND tablename <> 'schema_migrations'"
+    )
+    if not tables:
+        return
+    targets = ", ".join(f'"{schema}"."{table}"' for schema, table in tables)
+    db.execute(f"TRUNCATE {targets} RESTART IDENTITY CASCADE")

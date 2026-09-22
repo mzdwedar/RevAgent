@@ -90,7 +90,8 @@ def walk_through(stack: Stack) -> None:
 
     print("\n--- evidence")
     print(f"  surface commits : {len(stack.client.calls)} (one refund, not three)")
-    print(f"  audit records   : {len(stack.audit.records)} in a sink separate from traces")
+    audited = stack.audit.for_run(run.run_id)
+    print(f"  audit records   : {len(audited)} in a sink separate from traces")
     steps = [f"{r.name}:{r.status}" for r in stack.steps.records_for(run.run_id)]
     print(f"  steps recorded  : {steps}")
     print(f"  maintenance     : {stack.maintenance.jobs} (enqueued, never on the hot path)")

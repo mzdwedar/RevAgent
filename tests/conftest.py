@@ -16,7 +16,7 @@ import pytest
 from agentstack.storage import migrate
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
-from agentstack.storage.provision import rebuild_database
+from agentstack.storage.provision import rebuild_database, truncate_all
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 
@@ -35,13 +35,23 @@ def app_database_url() -> str:
 
 
 @pytest.fixture(scope="session")
-def app_database(app_database_url: str) -> Iterator[Database]:
-    """A migrated database for everything that builds a `Stack`.
-
-    Rebuilt once per session, then shared: sessions are uuid-keyed and every other
-    table hangs off a session id, so tests cannot collide and nothing needs to be
-    truncated between them.
-    """
+def _migrated(app_database_url: str) -> Iterator[Database]:
+    """One pool and one migration run for the whole session."""
     with open_pool(app_database_url, min_size=1, max_size=8) as pool:
         migrate.apply(pool, MIGRATIONS)
         yield Database(pool=pool)
+
+
+@pytest.fixture
+def app_database(_migrated: Database) -> Database:
+    """A migrated, empty database, per test.
+
+    T2 shared this across the session on the reasoning that sessions are uuid-keyed
+    and everything else hangs off a session id, so tests could not collide. That was
+    wrong, and T4 is where it showed: an idempotency key is `refund:{tenant}:{charge}:
+    {amount}`, deliberately stable across runs, so the first test to refund ch-7
+    settles that key for every test after it. Emptying the tables is the fix; a
+    per-run key would have traded a real safety property for test convenience.
+    """
+    truncate_all(_migrated)
+    return _migrated

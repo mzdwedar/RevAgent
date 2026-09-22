@@ -73,13 +73,26 @@ behaviour; it is the same behaviour that stops being a lie when the process dies
     `started_but_unfinished`. Recording it as `failed` would invite a clean retry of an
     effect that may already have landed — T4's ledger is what settles it.
 
-- [ ] **T4 — Durable approvals, idempotency ledger and audit sink** · layers 7, 8, 9 · *M*
+- [x] **T4 — Durable approvals, idempotency ledger and audit sink** · layers 7, 8, 9 · *M*
   - Acceptance: approvals, the two-phase idempotency ledger and audit records in
     Postgres. `IN_FLIGHT` survives a restart — that is the state the whole design
     exists for. Audit retention and PII remain iteration-2 debts; durability does not.
   - Verify: `test_approval_boundary.py`, `test_unresolved_effects.py`,
     `test_audit_separate_from_traces.py` against Postgres.
   - Depends: T1. Files: ~4.
+  - **Done.** `claim` is one atomic upsert (`ON CONFLICT DO UPDATE ... RETURNING
+    xmax = 0`), not read-then-insert. Sabotage-verified: the old shape tells four
+    concurrent callers they may all act.
+  - `audit.records` sits in its own schema and carries **no** FK onto `runs`. Every
+    other table cascades from sessions; an audit record must not, or a retention job
+    erases accountability as a side effect of tidying up. Demonstrated by adding the
+    cascading FK on a scratch database and watching the record vanish.
+  - **T2's shared-database reasoning was wrong** and this is where it showed. An
+    idempotency key is `refund:{tenant}:{charge}:{amount}`, stable across runs by
+    design, so the first test to refund ch-7 settled it for every test after. Fixed by
+    emptying the tables per test (`storage.provision.truncate_all`, guarded by the same
+    disposable-name rule), not by weakening the key — cross-run double-refund protection
+    is a real property worth keeping.
 
 ### ✅ Checkpoint A — the port weakened nothing
 - [ ] All 22 fitness tests green **against Postgres**, not fakes

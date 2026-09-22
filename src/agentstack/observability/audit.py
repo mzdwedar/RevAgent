@@ -7,8 +7,10 @@ the first loses the access controls and retention the second needs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
+
+from agentstack.storage.database import Database
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,11 +27,22 @@ class AuditRecord:
     at: datetime
 
 
-@dataclass(slots=True)
-class AuditSink:
-    """A separate sink with its own retention and access rules."""
+_COLUMNS = (
+    "run_id, principal, tenant, action_fingerprint, surface, resource, "
+    "policy_decision, approval_id, outcome, at"
+)
 
-    records: list[AuditRecord] = field(default_factory=list)
+
+@dataclass(frozen=True, slots=True)
+class AuditSink:
+    """A separate sink with its own retention and access rules.
+
+    Separate in the schema too: `audit.records`, not `public.audit_records`. And with
+    no foreign key onto `runs`, unlike every other table - the operational record can
+    be deleted, and the accountability record must not go with it.
+    """
+
+    db: Database
 
     def write(
         self,
@@ -44,20 +57,27 @@ class AuditSink:
         approval_id: str | None,
         outcome: str,
     ) -> AuditRecord:
-        record = AuditRecord(
-            run_id=run_id,
-            principal=principal,
-            tenant=tenant,
-            action_fingerprint=action_fingerprint,
-            surface=surface,
-            resource=resource,
-            policy_decision=policy_decision,
-            approval_id=approval_id,
-            outcome=outcome,
-            at=datetime.now(UTC),
+        row = self.db.fetch_one(
+            f"INSERT INTO audit.records ({_COLUMNS})"
+            f" VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+            (
+                run_id,
+                principal,
+                tenant,
+                action_fingerprint,
+                surface,
+                resource,
+                policy_decision,
+                approval_id,
+                outcome,
+                datetime.now(UTC),
+            ),
         )
-        self.records.append(record)
-        return record
+        assert row is not None  # RETURNING on a successful insert always yields a row
+        return AuditRecord(*row)
 
     def for_run(self, run_id: str) -> list[AuditRecord]:
-        return [r for r in self.records if r.run_id == run_id]
+        rows = self.db.fetch_all(
+            f"SELECT {_COLUMNS} FROM audit.records WHERE run_id = %s ORDER BY id", (run_id,)
+        )
+        return [AuditRecord(*row) for row in rows]

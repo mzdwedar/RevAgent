@@ -16,21 +16,24 @@ never as "not yet done".
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.idempotency import ClaimState, IdempotencyLedger
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.wiring import Stack, envelope_for, handle
+from agentstack.interfaces.wiring import Stack, build_stack, envelope_for, handle
 from agentstack.observability.spans import Tracer
 from agentstack.runtime.run import Run
+from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.catalog import REFUND
 
-from .conftest import SCOPES, approve_and_resume
+from .conftest import SCOPES, TENANT, approve_and_resume
 
 
-def test_the_ledger_distinguishes_unknown_from_not_yet_done() -> None:
-    ledger = IdempotencyLedger()
+def test_the_ledger_distinguishes_unknown_from_not_yet_done(app_database: Database) -> None:
+    ledger = IdempotencyLedger(db=app_database)
     assert ledger.claim("k").state is ClaimState.FRESH
     assert ledger.claim("k").state is ClaimState.IN_FLIGHT, (
         "a claimed key whose outcome never came back is unknown, not available"
@@ -115,3 +118,74 @@ def test_reconciliation_settles_the_key_and_the_retry_deduplicates(
     assert result.deduplicated is True
     assert result.receipt == "receipt-reconciled"
     assert len(stack.client.calls) == 1
+
+
+def test_an_unresolved_claim_survives_the_process_that_made_it(
+    stack: Stack, event: InboundEvent, run: Run, app_database: Database
+) -> None:
+    """The state the whole two-phase design exists for.
+
+    A ledger that only lives in the process is at its least useful exactly when it is
+    most needed: the process that dispatched the effect is the one that died.
+    """
+    _approved_run(stack, event, run)
+    stack.client.fail_after_effect = True
+    with pytest.raises(UnresolvedEffect):
+        handle(stack, event, scopes=SCOPES, run=run)
+
+    restarted = build_stack(app_database, tenant=TENANT)
+
+    assert restarted.ledger.unresolved_keys() == stack.ledger.unresolved_keys()
+    key = restarted.ledger.unresolved_keys()[0]
+    assert restarted.ledger.claim(key).state is ClaimState.IN_FLIGHT
+    assert restarted.ledger.recorded(key) is None
+
+
+def test_a_restarted_process_refuses_to_retry_the_unresolved_effect(
+    stack: Stack, event: InboundEvent, run: Run, app_database: Database
+) -> None:
+    """A fresh process is the most dangerous retrier: it remembers nothing."""
+    _approved_run(stack, event, run)
+    stack.client.fail_after_effect = True
+    with pytest.raises(UnresolvedEffect):
+        handle(stack, event, scopes=SCOPES, run=run)
+
+    restarted = build_stack(app_database, tenant=TENANT)
+    with pytest.raises(UnresolvedEffect, match="(?i)reconcile"):
+        handle(restarted, event, scopes=SCOPES, run=run)
+
+    assert restarted.client.calls == [], "the money left twice across a restart"
+
+
+def test_two_processes_claiming_one_key_produce_one_winner(app_database: Database) -> None:
+    """Read-then-insert lets both callers see an empty ledger and both commit.
+
+    `ON CONFLICT DO NOTHING RETURNING` is what decides it: exactly one gets a row.
+    """
+    ledger = IdempotencyLedger(db=app_database)
+    states: list[ClaimState] = []
+    barrier = threading.Barrier(4)
+
+    def attempt() -> None:
+        barrier.wait()
+        states.append(ledger.claim("refund:acme:ch-contended:1999").state)
+
+    threads = [threading.Thread(target=attempt) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert states.count(ClaimState.FRESH) == 1, f"{states.count(ClaimState.FRESH)} callers may act"
+    assert states.count(ClaimState.IN_FLIGHT) == 3
+
+
+def test_a_settled_claim_cannot_be_half_recorded(app_database: Database) -> None:
+    """A receipt with no time, or a time with no receipt, is an outcome nobody can read."""
+    with pytest.raises(IntegrityViolation) as caught:
+        app_database.execute(
+            "INSERT INTO idempotency_claims (key, claimed_at, receipt) VALUES (%s, now(), 'r')",
+            ("half-recorded",),
+        )
+
+    assert caught.value.constraint == "settled_claims_record_both"

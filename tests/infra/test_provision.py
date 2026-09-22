@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 
 from agentstack.storage import provision
+from agentstack.storage.database import Database
+from agentstack.storage.pool import open_pool
+from tests.conftest import admin_url
 
 
 def test_a_database_that_does_not_look_disposable_is_not_dropped() -> None:
@@ -43,3 +46,23 @@ def test_url_for_keeps_the_connection_details_and_changes_the_database() -> None
     assert "dbname=other_test" in url
     assert "port=5433" in url
     assert "user=agent" in url
+
+
+def test_emptying_a_database_that_does_not_look_disposable_is_refused() -> None:
+    """The connection is asked its own name; the caller is not taken at its word.
+
+    Pointed at `postgres`, which holds none of this project's tables - so a regression
+    in the guard shows up as a failing assertion rather than as a wiped database.
+    """
+    url = provision.url_for(admin_url(), "postgres")
+    with (
+        open_pool(url, min_size=1, max_size=1) as pool,
+        pytest.raises(provision.NotDisposable, match="postgres"),
+    ):
+        provision.truncate_all(Database(pool=pool))
+
+
+def test_emptying_a_database_with_no_tables_yet_does_nothing() -> None:
+    url = provision.rebuild_database(admin_url(), "blank_test")
+    with open_pool(url, min_size=1, max_size=1) as pool:
+        provision.truncate_all(Database(pool=pool))  # no migrations applied, no tables

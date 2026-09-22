@@ -15,9 +15,10 @@ these. Approval sits immediately before the irreversible act.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from agentstack.storage.database import Database
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.spec import Approval, ToolSpec
 
@@ -41,9 +42,12 @@ class ApprovalRecord:
     summary: str
 
 
-@dataclass(slots=True)
+_COLUMNS = "id, run_id, action_fingerprint, state_snapshot, approver, granted_at, summary"
+
+
+@dataclass(frozen=True, slots=True)
 class ApprovalStore:
-    _records: list[ApprovalRecord] = field(default_factory=list)
+    db: Database
 
     def grant(
         self,
@@ -58,7 +62,8 @@ class ApprovalStore:
 
         Both fields are required and both are load-bearing. An empty summary records
         that someone agreed to a blank screen; an unnamed approver leaves an audit
-        trail that cannot answer who decided.
+        trail that cannot answer who decided. The database restates both as CHECK
+        constraints, because these two are worth holding twice.
         """
         if not summary.strip():
             raise ValueError(
@@ -67,17 +72,22 @@ class ApprovalStore:
             )
         if not approver.strip():
             raise ValueError("an approval needs a named approver")
-        record = ApprovalRecord(
-            id=str(uuid.uuid4()),
-            run_id=run_id,
-            action_fingerprint=request.fingerprint(),
-            state_snapshot=state_snapshot,
-            approver=approver,
-            granted_at=datetime.now(UTC),
-            summary=summary,
+        row = self.db.fetch_one(
+            "INSERT INTO approvals"
+            " (id, run_id, action_fingerprint, state_snapshot, approver, granted_at, summary)"
+            f" VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+            (
+                str(uuid.uuid4()),
+                run_id,
+                request.fingerprint(),
+                state_snapshot,
+                approver,
+                datetime.now(UTC),
+                summary,
+            ),
         )
-        self._records.append(record)
-        return record
+        assert row is not None  # RETURNING on a successful insert always yields a row
+        return ApprovalRecord(*row)
 
     def find(
         self,
@@ -92,19 +102,18 @@ class ApprovalStore:
         Without this, a run that was approved twice for the same action would read as
         stale on the approval that actually matches - reporting staleness that is not
         there, which is the fastest way to teach people to ignore it.
+
+        Ordered by `seq`, not by `granted_at`: two approvals in the same microsecond
+        are possible, and "most recent" has to have one answer.
         """
-        candidates = [
-            record
-            for record in self._records
-            if record.run_id == run_id and record.action_fingerprint == action_fingerprint
-        ]
-        if not candidates:
-            return None
-        if state_snapshot is not None:
-            exact = [r for r in candidates if r.state_snapshot == state_snapshot]
-            if exact:
-                return exact[-1]
-        return candidates[-1]
+        row = self.db.fetch_one(
+            f"SELECT {_COLUMNS} FROM approvals"
+            " WHERE run_id = %s AND action_fingerprint = %s"
+            " ORDER BY (state_snapshot = %s) DESC NULLS LAST, seq DESC"
+            " LIMIT 1",
+            (run_id, action_fingerprint, state_snapshot),
+        )
+        return None if row is None else ApprovalRecord(*row)
 
 
 def require_approval(

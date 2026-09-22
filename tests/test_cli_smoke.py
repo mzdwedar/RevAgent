@@ -25,6 +25,7 @@ def test_the_walkthrough_runs_and_commits_exactly_one_refund(
     assert "missing  : none of the required spans" in out
 
 
+@pytest.mark.usefixtures("app_database")
 def test_main_opens_its_own_pool_from_the_environment(
     app_database_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
