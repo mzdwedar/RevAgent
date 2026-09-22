@@ -22,6 +22,18 @@ CLIENT_MODULES = {
     "smtplib",
     "boto3",
     "psycopg",
+    "psycopg_pool",
+}
+
+# Which layer may hold which real client, and nothing beyond it.
+#
+# `execution` is the gateway (Part 7): the systems the agent acts upon. `storage` is
+# the substrate (layer 10, ADR-0005): the agent's own state. They are exempt from
+# different things, which is the whole reason they are two entries and not one list -
+# storage holding an HTTP client would be exactly as wrong as runtime holding a driver.
+ALLOWED_CLIENTS = {
+    "execution": CLIENT_MODULES,
+    "storage": {"psycopg", "psycopg_pool"},
 }
 
 
@@ -49,20 +61,31 @@ def test_import_linter_contracts_hold() -> None:
     assert result.returncode == 0, f"layer contracts broken:\n{result.stdout}\n{result.stderr}"
 
 
-def test_only_the_execution_layer_imports_a_real_client() -> None:
+def test_only_the_named_layers_import_a_real_client() -> None:
     offenders: list[str] = []
     for path in SRC.rglob("*.py"):
         layer = path.relative_to(SRC).parts[0]
-        if layer == "execution":
-            continue
+        allowed = ALLOWED_CLIENTS.get(layer, set())
         for module in _imported_modules(path):
             root = module.split(".")[0]
-            if module in CLIENT_MODULES or root in CLIENT_MODULES:
+            if (module in CLIENT_MODULES or root in CLIENT_MODULES) and not (
+                module in allowed or root in allowed
+            ):
                 offenders.append(f"{path.relative_to(SRC)} imports {module}")
     assert not offenders, (
-        "capability exposure is not execution authority (Part 7): only "
-        "agentstack.execution may touch a real client.\n" + "\n".join(offenders)
+        "capability exposure is not execution authority (Part 7), and the state "
+        "substrate is not an execution surface (ADR-0005).\n" + "\n".join(offenders)
     )
+
+
+def test_the_storage_exemption_covers_the_driver_and_nothing_else() -> None:
+    """`storage` is exempt for the database, not for the network.
+
+    A blanket "storage may import anything" would quietly re-create the god-module the
+    layering exists to prevent - egress would just move one package down.
+    """
+    assert ALLOWED_CLIENTS["storage"] == {"psycopg", "psycopg_pool"}
+    assert {"httpx", "requests", "subprocess", "socket"}.isdisjoint(ALLOWED_CLIENTS["storage"])
 
 
 def test_every_layer_directory_is_declared_in_the_ledger() -> None:

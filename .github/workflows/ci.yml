@@ -8,6 +8,26 @@ on:
 jobs:
   bar:
     runs-on: ubuntu-latest
+
+    services:
+      # tests/infra does not skip when Postgres is absent - it fails and says so.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent
+          POSTGRES_DB: agentstack
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U agent -d agentstack"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+
+    env:
+      DATABASE_URL: postgresql://agent:agent@localhost:5433/agentstack
+
     steps:
       - uses: actions/checkout@v4
         with:

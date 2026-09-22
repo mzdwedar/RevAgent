@@ -126,6 +126,38 @@ def _table_rows(source: str, heading: str) -> set[str]:
     return rows
 
 
+def _section(source: str, heading: str) -> str:
+    """The raw text under one `##` heading, used to look for an acknowledgement."""
+    lines: list[str] = []
+    inside = False
+    for line in source.splitlines():
+        if line.startswith("## "):
+            inside = line.strip().lower() == f"## {heading.lower()}"
+            continue
+        if inside:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _floor_bullets(source: str) -> set[str]:
+    """The bullets under `## Floor` in CONSTRAINTS.md.
+
+    The table checks below watch for *removed* rows. The floor is prose bullets, and
+    until T1 nothing watched it at all - so amending a floor rule was the one way to
+    lower the bar silently. Rewording shows up here as a removal plus an addition,
+    which is correct: a reworded floor rule deserves the same look as a deleted one.
+    """
+    bullets: set[str] = set()
+    inside = False
+    for line in source.splitlines():
+        if line.startswith("## "):
+            inside = line.strip().lower().startswith("## floor")
+            continue
+        if inside and line.lstrip().startswith("- "):
+            bullets.add(line.strip())
+    return bullets
+
+
 def diff_findings(per_file: dict[str, tuple[list[str], list[str]]]) -> list[Finding]:
     found: list[Finding] = []
     for path, (added, removed) in per_file.items():
@@ -198,6 +230,20 @@ def state_findings(base: str | None) -> list[Finding]:
             found.append(
                 Finding("CONSTRAINTS.md", f"{len(lost)} enforced row(s) removed", "the bar")
             )
+        amendments = _section(current, "Amendments to the floor")
+        weakened = {
+            bullet
+            for bullet in _floor_bullets(before) - _floor_bullets(current)
+            if bullet.lstrip("- ").strip() not in amendments
+        }
+        for bullet in sorted(weakened):
+            found.append(
+                Finding(
+                    "CONSTRAINTS.md",
+                    f"floor rule removed or reworded: {bullet[:90]}",
+                    "the floor is the part nothing else re-checks",
+                )
+            )
         gained = _table_rows(current, "Exceptions") - _table_rows(before, "Exceptions")
         if gained:
             found.append(
@@ -244,7 +290,8 @@ def main() -> int:
         print(f"      ({finding.why})")
     print(
         "\nTightening the bar is silent; loosening it is loud. If one of these is "
-        "deliberate, record it in CONSTRAINTS.md with an owner and an expiry."
+        "deliberate, record it in CONSTRAINTS.md - an exception needs an owner and an "
+        "expiry, an amended floor rule needs a row under 'Amendments to the floor'."
     )
     return 1
 

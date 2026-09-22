@@ -1,0 +1,31 @@
+# Dev substrate (layer 10). Production is not this file - see docs/adr/0005.
+#
+# Port 5433, not 5432: a laptop usually already has a Postgres on the default port,
+# and silently connecting to the wrong database is a bad way to learn that.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentstack-postgres
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent      # dev only; real credentials are an iteration-2 debt
+      POSTGRES_DB: agentstack
+    ports:
+      - "5433:5432"
+    volumes:
+      - agentstack-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agentstack"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    command:
+      # The concurrency target in T21 is 100 runs. The default 100 connections leaves
+      # nothing for psql or the migrator; the pool caps itself well below this.
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+
+volumes:
+  agentstack-pgdata:

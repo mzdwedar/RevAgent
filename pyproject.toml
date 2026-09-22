@@ -3,10 +3,14 @@ name = "revenuecat-agent"
 version = "0.1.0"
 description = "A layered, production agent built to The Agent Stack (Parts 1-8) invariants"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+]
 
 [project.scripts]
 agentstack = "agentstack.interfaces.cli:main"
+agentstack-migrate = "agentstack.interfaces.migrate_cli:main"
 
 [dependency-groups]
 dev = [

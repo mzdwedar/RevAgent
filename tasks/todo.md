@@ -14,12 +14,21 @@ clean.
 Everything in iteration 1 rests on state surviving a process. Nothing here is new
 behaviour; it is the same behaviour that stops being a lie when the process dies.
 
-- [ ] **T1 — Postgres, migrations, pooling** · layer 10 · *S*
+- [x] **T1 — Postgres, migrations, pooling** · layer 10 · *S*
   - Acceptance: `docker-compose.yml` for Postgres, a migration runner, a versioned
     schema directory, a pooled connection factory, and dev bring-up in one command.
   - Verify: `uv run pytest tests/infra/test_migrations.py` — migrate up from empty,
     down, and up again on a fresh database.
   - Depends: none. Files: ~4.
+  - **Done.** New bottom layer `agentstack.storage` holds the driver — not
+    `execution`, because the agent's own state is substrate, not a surface it acts
+    upon ([ADR-0005](../docs/adr/0005-state-substrate-and-migrations.md)). That
+    amended a floor rule in `CONSTRAINTS.md`, which `stack_guard` could not see, so
+    T1 also closed that blind spot and added the *Amendments to the floor* log as the
+    way a deliberate change is acknowledged. `lint-imports` contract 5 and a narrowed
+    per-layer client exemption both enforce the driver rule.
+  - Consequence: **Postgres must be up to run the suite** (`bash scripts/dev_up.sh`).
+    `tests/infra` fails loudly instead of skipping; CI gets a service container.
 
 - [ ] **T2 — Durable control plane** · layer 2 · *M*
   - Acceptance: sessions, transcripts and working state in Postgres behind the existing

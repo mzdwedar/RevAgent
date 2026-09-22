@@ -10,6 +10,16 @@ A production, multi-user, side-effecting AI agent, built to the invariants in
 3. Never collapse two layers to save a file. The six boundary confusions in `STACK.md`
    are the ones that matter; if a change needs to blur one, write an ADR in `docs/adr/`.
 
+## The substrate must be up
+
+From T1 onward the suite talks to a real Postgres. `tests/infra` **fails** when it
+is missing rather than skipping — a conditional skip would trip our own floor, and
+loosening the floor to accommodate it is the move `stack_guard` exists to catch.
+
+```
+bash scripts/dev_up.sh                   # compose up + migrate, one command
+```
+
 ## Commands
 
 ```
@@ -19,6 +29,7 @@ bash scripts/check_task.sh               # turn end     (<90s)
 bash scripts/check_full.sh               # CI           (minutes)
 uv run pytest tests/fitness -v           # the architecture bar
 uv run python -m evals run --gates       # Part-8 release gates
+uv run agentstack-migrate status         # schema: applied vs pending
 uv run python scripts/stack_guard.py --base main   # did the bar get weakened?
 ```
 
@@ -41,6 +52,8 @@ uv run python scripts/stack_guard.py --base main   # did the bar get weakened?
   the action fingerprint and a state snapshot.
 - **Ask first:** adding a dependency, changing a layer contract in `.importlinter`,
   choosing or changing the durable-execution backend, widening a tool's scope.
+- **Never:** import the database driver outside `agentstack.storage`, or edit a
+  migration that has already been applied. Fix forward with a new version.
 - **Never:** give a tool function its own I/O. Capability exposure is not execution authority.
 - **Never:** write memory implicitly because the model said something.
 - **Never:** approve at the start of a task for an act that happens ten steps later.

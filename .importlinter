@@ -19,6 +19,7 @@ layers =
     agentstack.context
     agentstack.model
     agentstack.observability
+    agentstack.storage
 
 [importlinter:contract:2]
 name = Capability exposure is not execution authority (Part 6)
@@ -65,3 +66,27 @@ source_modules =
     agentstack.observability
 forbidden_modules =
     agentstack.interfaces
+
+[importlinter:contract:5]
+# The database driver lives in agentstack.storage and nowhere else (docs/adr/0005).
+#
+# Separate from contract 3, and deliberately direct-imports-only: every layer reaches
+# storage transitively by design - that is what a substrate is for - so a transitive
+# ban would be unsatisfiable. What the invariant is actually about is which module
+# holds the driver handle, and that is a direct import.
+name = Only agentstack.storage holds the database driver (Part 2)
+type = forbidden
+allow_indirect_imports = True
+source_modules =
+    agentstack.interfaces
+    agentstack.control_plane
+    agentstack.runtime
+    agentstack.execution
+    agentstack.policy
+    agentstack.tools
+    agentstack.context
+    agentstack.model
+    agentstack.observability
+forbidden_modules =
+    psycopg
+    psycopg_pool

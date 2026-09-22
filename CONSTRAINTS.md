@@ -19,7 +19,10 @@ Generic (from `constraint-driven-development`):
 
 Stack-specific (from `STACK.md`):
 
-- No module outside `agentstack.execution` imports an HTTP client, DB driver, shell, socket or mailer
+- No module outside `agentstack.execution` imports an HTTP client, shell, socket or mailer
+- No module outside `agentstack.storage` imports a database driver — the agent's own
+  state is substrate (layer 10), not an execution surface (layer 7); see docs/adr/0005
+- No migration is edited after it has been applied, and no version gap is tolerated
 - No tool registers without complete capability metadata
 - No side-effecting tool without an idempotency policy and an approval tier
 - No write to the memory store outside `agentstack.context.memory.write()`
@@ -47,6 +50,7 @@ Stack-specific (from `STACK.md`):
 | Approval coverage | 100% of irreversible tools gated | `uv run pytest tests/fitness/test_approval_boundary.py` | task end, CI |
 | Trace completeness | All required spans on a golden run | `uv run pytest tests/fitness/test_trace_completeness.py` | task end, CI |
 | Coverage | Changed lines >= 80% covered | `uv run pytest --cov=agentstack --cov-report=lcov` + `git diff` | task end, CI |
+| Schema migrations | Up from empty, down, and up again on a fresh database | `uv run pytest tests/infra` | task end, CI |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -63,8 +67,8 @@ Why these numbers:
 
 | Metric | Today | Direction |
 |---|---|---|
-| Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 22 | must not fall |
+| Project coverage | 99% | must not fall (tolerance 0.5%) |
+| Fitness test count | 23 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |
@@ -85,6 +89,16 @@ than no gate. If a stage goes over budget, move the check outward — do not del
 At least one constraint must be judged by something other than tests we wrote
 ourselves. Here: `osv-scanner` (vulnerability database), `gitleaks` (secret patterns),
 `mypy --strict` and `import-linter` (rules we cannot argue with at runtime).
+
+## Amendments to the floor
+
+A floor rule can be replaced. It cannot be replaced quietly: `stack_guard` reports a
+removed or reworded floor bullet until the old text appears here with a reason. An
+exception says "not here, for now"; an amendment says "this rule was wrong".
+
+| Date | Rule removed | Replaced by | Why | Recorded in |
+|---|---|---|---|---|
+| 2026-09-22 | No module outside `agentstack.execution` imports an HTTP client, DB driver, shell, socket or mailer | the same rule minus "DB driver", plus a driver rule naming `agentstack.storage` | The rule conflated two things layer 7 keeps apart. An execution surface is a system the agent acts *upon*, gated by policy, approval and containment. The agent's own state store is substrate: recording that a step completed is not an effect anyone approves, and `agentstack.context` cannot reach layer 7 at all under contract 2, so it could never be persisted. Paired with a tightening — `lint-imports` contract 5 now enforces the driver rule, which no layer contract did before (only an AST scan in `tests/fitness/test_layer_boundaries.py` did), and that scan now names which layer may hold which client instead of exempting `execution` from all of them. | [ADR-0005](docs/adr/0005-state-substrate-and-migrations.md) |
 
 ## Exceptions
 
