@@ -20,6 +20,7 @@ from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.runtime.run import new_run
 from agentstack.runtime.waits import ResumeEvent, resume
+from agentstack.storage.database import Database
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 TENANT = "acme"
@@ -59,8 +60,8 @@ class Outcome:
     seconds: float
 
 
-def _stack_for(case: Case) -> Stack:
-    stack = build_stack(tenant=TENANT)
+def _stack_for(case: Case, db: Database) -> Stack:
+    stack = build_stack(db, tenant=TENANT)
     if case.corpus:
         stack.deps.retriever = StaticRetriever(
             corpus=[
@@ -78,10 +79,10 @@ def _stack_for(case: Case) -> Stack:
     return stack
 
 
-def run_case(case: Case) -> Outcome:
+def run_case(case: Case, db: Database) -> Outcome:
     started = time.perf_counter()
     failures: list[str] = []
-    stack = _stack_for(case)
+    stack = _stack_for(case, db)
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
     run = new_run(session_id=session.session_id, tenant=TENANT, user=USER, channel="eval")
     event = InboundEvent(

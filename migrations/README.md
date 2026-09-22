@@ -16,4 +16,5 @@ Rules the migrator enforces, so they are not conventions anyone has to remember:
 - **A file without a `.down.sql` cannot be rolled back** — the rollback refuses rather
   than stopping halfway through.
 
-Empty at T1 by design: the runner is this task's deliverable, the schema is T2's.
+`0001` is the control plane (T2): sessions, transcript events and working state —
+three tables, because they are three stores.

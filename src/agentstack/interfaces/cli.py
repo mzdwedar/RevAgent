@@ -11,10 +11,12 @@ deduplicated instead of refunding twice.
 from __future__ import annotations
 
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.wiring import build_stack, handle
+from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.runtime.loop import TurnResult
 from agentstack.runtime.run import new_run
 from agentstack.runtime.waits import ResumeEvent, resume
+from agentstack.storage.database import Database
+from agentstack.storage.pool import open_pool
 
 SCOPES = frozenset({"billing:read", "billing:refund"})
 MESSAGE = (
@@ -37,7 +39,11 @@ def _report(label: str, result: TurnResult) -> None:
 
 
 def main() -> None:
-    stack = build_stack()
+    with open_pool(min_size=1, max_size=4) as pool:
+        walk_through(build_stack(Database(pool=pool)))
+
+
+def walk_through(stack: Stack) -> None:
     session = stack.resolver.start(user_id="agent-operator", tenant="acme")
     event = InboundEvent(
         channel="cli",

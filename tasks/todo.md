@@ -30,12 +30,25 @@ behaviour; it is the same behaviour that stops being a lie when the process dies
   - Consequence: **Postgres must be up to run the suite** (`bash scripts/dev_up.sh`).
     `tests/infra` fails loudly instead of skipping; CI gets a service container.
 
-- [ ] **T2 — Durable control plane** · layer 2 · *M*
+- [x] **T2 — Durable control plane** · layer 2 · *M*
   - Acceptance: sessions, transcripts and working state in Postgres behind the existing
     interfaces. `session_id` is still never the user id; the runtime still receives a
     bounded `SessionView`.
   - Verify: `tests/fitness/test_session_ownership.py` passes **against Postgres**.
   - Depends: T1. Files: ~4.
+  - **Done.** `migrations/0001` adds three tables, and `session_id <> user_id` is now a
+    CHECK constraint as well as a constructor guard. The implicit `_sessions` dict in
+    `SessionResolver` became a named `SessionStore`, so layer 2 has three stores rather
+    than two and a dictionary.
+  - The seam is `storage.database.Database` — SQL in, tuples out — so each store keeps
+    its own SQL next to the invariants that SQL holds, instead of the stores migrating
+    into layer 10 to satisfy contract 5.
+  - **No in-memory variant.** A fake here would be a second implementation of the only
+    thing these tests exist to prove, and it would be the one the suite exercised.
+  - `build_stack` now requires a `Database`. Three test substrates, kept apart:
+    `agentstack_test` (destructive, migrator only), `agentstack_app_test` (shared,
+    migrated once), `agentstack_evals` (gates). `rebuild_database` refuses any name that
+    does not end in `_test` or `_evals`.
 
 - [ ] **T3 — Durable step ledger and wait store** · layer 3 · *M*
   - Acceptance: steps and waits in Postgres. A completed step is still skipped on

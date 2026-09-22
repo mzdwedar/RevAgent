@@ -14,6 +14,7 @@ import pytest
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.runtime.run import Run, new_run
+from agentstack.storage.database import Database
 
 TENANT = "acme"
 USER = "agent-operator"
@@ -22,8 +23,8 @@ REFUND_MESSAGE = "issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amoun
 
 
 @pytest.fixture
-def stack() -> Iterator[Stack]:
-    yield build_stack(tenant=TENANT)
+def stack(app_database: Database) -> Iterator[Stack]:
+    yield build_stack(app_database, tenant=TENANT)
 
 
 @pytest.fixture

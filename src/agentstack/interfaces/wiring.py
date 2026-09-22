@@ -15,7 +15,7 @@ from agentstack.context.memory import MaintenanceQueue, MemoryStore
 from agentstack.context.retrieval import Candidate, StaticRetriever
 from agentstack.control_plane.resolve import SessionResolver
 from agentstack.control_plane.session import SessionView
-from agentstack.control_plane.stores import TranscriptStore, WorkingStateStore
+from agentstack.control_plane.stores import SessionStore, TranscriptStore, WorkingStateStore
 from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import RecordingClient, Sandbox
@@ -29,6 +29,7 @@ from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
 from agentstack.runtime.run import Run, new_run
 from agentstack.runtime.steps import StepLedger
 from agentstack.runtime.waits import WaitStore
+from agentstack.storage.database import Database
 from agentstack.tools.catalog import build_registry
 from agentstack.tools.spec import ActsAs, Surface
 
@@ -44,6 +45,7 @@ VERSIONS = VersionStamp(
 @dataclass(slots=True)
 class Stack:
     resolver: SessionResolver
+    sessions: SessionStore
     transcripts: TranscriptStore
     working_state: WorkingStateStore
     memory: MemoryStore
@@ -57,10 +59,19 @@ class Stack:
     deps: TurnDeps
 
 
-def build_stack(*, tenant: str = "acme") -> Stack:
-    transcripts = TranscriptStore()
-    working_state = WorkingStateStore()
-    resolver = SessionResolver(transcripts=transcripts, working_state=working_state)
+def build_stack(db: Database, *, tenant: str = "acme") -> Stack:
+    """Assemble the stack against a migrated database.
+
+    `db` is required rather than defaulted. A default would open a pool as a side
+    effect of importing convenience, and the first thing to go wrong would be a test
+    quietly writing to the dev database.
+    """
+    sessions = SessionStore(db=db)
+    transcripts = TranscriptStore(db=db)
+    working_state = WorkingStateStore(db=db)
+    resolver = SessionResolver(
+        sessions=sessions, transcripts=transcripts, working_state=working_state
+    )
     memory = MemoryStore()
     maintenance = MaintenanceQueue()
     approvals = ApprovalStore()
@@ -108,6 +119,7 @@ def build_stack(*, tenant: str = "acme") -> Stack:
     )
     return Stack(
         resolver=resolver,
+        sessions=sessions,
         transcripts=transcripts,
         working_state=working_state,
         memory=memory,

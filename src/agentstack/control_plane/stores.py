@@ -1,16 +1,27 @@
-"""Transcript state and working state - two stores, named (Part 3).
+"""Three stores, named, and now durable (Part 3).
 
-The transcript is the durable record of what occurred. The working state is the
-mutable scratchpad for the live interaction. Memory is neither, and lives in
-`agentstack.context.memory`. Worker-local state is not a third option: a restart
-would take continuity with it.
+The session record says who owns a piece of work. The transcript is the authoritative
+record of what occurred. The working state is the mutable scratchpad for the live
+interaction. Memory is none of these and lives in `agentstack.context.memory`.
+
+They are three tables rather than one with a `kind` column, for the same reason they
+are three classes: the moment they share a row shape, someone starts deriving one from
+another, and the transcript quietly becomes the context window.
+
+There is no in-memory variant. A fake here would be a second implementation of the
+only thing these tests exist to prove - that the state survives the process - and it
+would be the one the suite actually exercised.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+import json
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
+
+from agentstack.control_plane.session import Session
+from agentstack.storage.database import Database
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,29 +32,78 @@ class TranscriptEvent:
     at: datetime
 
 
-@dataclass(slots=True)
-class TranscriptStore:
-    """The authoritative record. Prompt context is derived from it, never equal to it."""
+@dataclass(frozen=True, slots=True)
+class SessionStore:
+    """The canonical session records. The model never sees one of these."""
 
-    _events: list[TranscriptEvent] = field(default_factory=list)
+    db: Database
+
+    def put(self, session: Session) -> Session:
+        self.db.execute(
+            "INSERT INTO sessions (session_id, user_id, tenant, created_at)"
+            " VALUES (%s, %s, %s, %s)",
+            (session.session_id, session.user_id, session.tenant, session.created_at),
+        )
+        return session
+
+    def get(self, session_id: str) -> Session | None:
+        row = self.db.fetch_one(
+            "SELECT session_id, user_id, tenant, created_at FROM sessions WHERE session_id = %s",
+            (session_id,),
+        )
+        return None if row is None else Session(*row)
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptStore:
+    """Append-only. Prompt context is derived from it, never equal to it."""
+
+    db: Database
 
     def append(self, *, session_id: str, kind: str, body: str) -> TranscriptEvent:
-        event = TranscriptEvent(session_id=session_id, kind=kind, body=body, at=datetime.now(UTC))
-        self._events.append(event)
-        return event
+        row = self.db.fetch_one(
+            "INSERT INTO transcript_events (session_id, kind, body)"
+            " VALUES (%s, %s, %s) RETURNING session_id, kind, body, at",
+            (session_id, kind, body),
+        )
+        assert row is not None  # RETURNING on a successful insert always yields a row
+        return TranscriptEvent(*row)
 
     def for_session(self, session_id: str) -> tuple[TranscriptEvent, ...]:
-        return tuple(e for e in self._events if e.session_id == session_id)
+        rows = self.db.fetch_all(
+            "SELECT session_id, kind, body, at FROM transcript_events"
+            " WHERE session_id = %s ORDER BY id",
+            (session_id,),
+        )
+        return tuple(TranscriptEvent(*row) for row in rows)
+
+    def count_for(self, session_id: str) -> int:
+        """The turn index, without loading a transcript to measure its length."""
+        row = self.db.fetch_one(
+            "SELECT count(*) FROM transcript_events WHERE session_id = %s", (session_id,)
+        )
+        return 0 if row is None else int(row[0])
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class WorkingStateStore:
-    """Ordered, rewindable scratch state. Never the place to record a side effect."""
+    """Rewindable scratch state. Never the place to record a side effect."""
 
-    _state: dict[str, dict[str, Any]] = field(default_factory=dict)
+    db: Database
 
     def get(self, session_id: str) -> dict[str, Any]:
-        return dict(self._state.get(session_id, {}))
+        rows = self.db.fetch_all(
+            "SELECT key, value FROM working_state WHERE session_id = %s ORDER BY key",
+            (session_id,),
+        )
+        return {key: value for key, value in rows}
 
     def put(self, session_id: str, key: str, value: Any) -> None:
-        self._state.setdefault(session_id, {})[key] = value
+        # Serialised here rather than handed to the driver as a dict: a psycopg Json
+        # wrapper in this signature would put a driver type in layer 2 (contract 5).
+        self.db.execute(
+            "INSERT INTO working_state (session_id, key, value) VALUES (%s, %s, %s::jsonb)"
+            " ON CONFLICT (session_id, key)"
+            " DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+            (session_id, key, json.dumps(value)),
+        )
