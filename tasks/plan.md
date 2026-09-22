@@ -1,0 +1,125 @@
+# Implementation Plan: Experiment Operator, iteration 1
+
+Derived from `SPEC.md` (approved, revision 10). Tasks are in `tasks/todo.md`.
+
+## Overview
+
+Build the first half of the experiment lifecycle — **score → target → propose →
+launch** — end to end, on durable infrastructure, with a real churn model and a real
+human in Slack. The second half (measure → promote) is iteration 2.
+
+The nine layers, the gateway, the approval machinery, the 22 fitness tests and the 11
+release gates already exist and are green. This plan does not rebuild them. It makes
+them durable, gives them a real workload, and adds the two ingresses they have never
+had.
+
+## Architecture decisions carried in from the spec
+
+- **LangGraph** for durable execution, Postgres checkpointer. The existing
+  `Wait`/`ResumeEvent`/`StepLedger` semantics are the contract; LangGraph is how they
+  survive a process.
+- **TabPFN classifier is real from task 6.** Zero-training, so there is nothing to stub
+  around. The regressor and the covariate are iteration 2.
+- **The model drafts the candidate**, and that output travels the full chain —
+  exposure filter, schema validation, policy, gateway — before anything is written.
+- **Slack is an untrusted ingress.** Signature verification is in scope even though
+  credential *storage* is not.
+- **Fail loud and park** on checkpoint incompatibility; `needs_migration` is a distinct
+  state from `stalled`.
+
+## Two decisions this plan makes that the spec left implicit
+
+1. **The rollout surface is a local fake in iteration 1.** No external rollout API
+   exists yet and its credential is deferred. Building against a fake HTTP service that
+   can be made to time out is what exercises `UnresolvedEffect` against a real socket
+   rather than a Python exception — which is the whole point of that code. The
+   `SurfaceClient` protocol means swapping it is contained. **Flagged for review.**
+2. **Audit records become durable in task 4, retention does not.** Accountability
+   records that vanish on restart are not accountability records. The *retention and
+   PII* policy remains the named iteration-2 debt; durability is not optional.
+
+## Dependency graph
+
+```
+      T1 Postgres + migrations
+              │
+    ┌─────────┼──────────┬────────────────┐
+    │         │          │                │
+   T2        T3         T4              T5 datasets
+ control   steps +   approvals +          │
+  plane     waits    idempotency         T6 TabPFN + licence gate
+    │         │          │                │
+    └─────────┴────┬─────┘               T7 targeting + cohort freeze
+                   │                      │
+         T8a graph  →  T8b PG checkpointer ┘
+                   │
+              T9 trigger ingress
+                   │
+              T10 kill / resume
+                   │
+      ┌────────────┼─────────────┐
+   T11 PRE_COMMIT  T12 Ollama    │
+      └────────────┴──► T13 draft tool + registry surface
+                              │
+                        T14 Slack out
+                              │
+                   T15 Slack in (signature)
+                              │
+                   T16 approver group (policy)
+                              │
+                   T17 approve → resume → roll out
+                              │
+       ┌──────────┬───────────┼───────────┐
+      T18        T19         T20         T21
+    deadlines  migration   CI guard   concurrency
+```
+
+Slices are vertical after T8: each of T9–T17 adds one visible step of the end-to-end
+path and leaves the system working.
+
+## Risks and mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| LangGraph API differs from memory | High — T8a blocks everything after it | `source-driven-development` at T8a, and T8a runs on an in-process checkpointer so the API is proven before Postgres is underneath it. |
+| Porting to Postgres silently weakens a fitness test | **High** — the bar is the project's whole value | Checkpoint A requires all 22 green *against Postgres*, not against fakes. No task after T4 starts until it is. |
+| TabPFN weights are licence-gated; CI has no token | Medium | T6 makes it a startup check. Prediction tests skip explicitly with a named reason when `TABPFN_TOKEN` is absent; the skip is visible, never silent. |
+| Local model drafts malformed candidates | Low | Already handled: `InvalidToolArguments` → `tool.reject` → the turn still answers. T12 proves it with a real model rather than a fixture. |
+| Concurrency target unreachable on a laptop | Low | T21 verifies at 100 and records the number actually achieved. A documented lower number beats an aspirational higher one. |
+| The fake rollout surface diverges from the real API | Medium | Contain it behind `SurfaceClient`; T17's tests assert on gateway behaviour, not on the fake's internals. |
+
+## Definition of Done
+
+Every task clears `references/definition-of-done.md` plus `CONSTRAINTS.md`: fast checks
+green, changed-line coverage ≥80%, project coverage ratchet held at 98%, all fitness
+tests and all gates green, and `stack_guard.py` clean. A task is not done because its
+own test passes.
+
+## Answered at review
+
+1. **Fake rollout surface: approved** for iteration 1.
+2. **No `TABPFN_TOKEN` in CI.** See below — this does not mean skipped tests.
+3. **Postgres in dev: docker-compose**, brought up by T1.
+
+### The no-token consequence, worked through
+
+The obvious implementation is `@pytest.mark.skipif(not os.getenv("TABPFN_TOKEN"))`.
+That trips `stack_guard`'s own skip detector on every commit, and the tempting fix
+would be to loosen the guard — which is exactly the move it exists to catch. So the
+plan does not skip.
+
+**Split by what is actually being tested.** TabPFN's weights are not our code; the
+adapter, the targeting predicate and the cohort selection are.
+
+| | Runs in CI | How |
+|---|---|---|
+| Adapter contract, targeting, cohort reproducibility | **yes** | against a committed fixture of recorded scores for the dev snapshots, seed-pinned as the benchmark already is |
+| "the real model still returns scores in the expected shape" | no | one test in a declared `live` suite, run locally and nightly |
+
+The `live` suite is declared as a row in `CONSTRAINTS.md` with its own `Runs at` value,
+not hidden in a decorator. A lane where some tests do not run on PRs is acceptable when
+it is written where people look; it is not acceptable as a quiet marker.
+
+The honest limit: CI proves our code handles the model's output correctly. It does not
+prove the model still works. That is what nightly is for, and it is stated rather than
+implied.
