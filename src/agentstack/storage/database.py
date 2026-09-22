@@ -14,11 +14,27 @@ that needs it, shaped by what that caller actually does.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from psycopg import IntegrityError
 from psycopg_pool import ConnectionPool
+
+
+class IntegrityViolation(RuntimeError):
+    """A constraint refused the write.
+
+    Translated here because the layers above cannot import psycopg to catch the
+    driver's own exception (contract 5). Carries the constraint name, so a caller can
+    tell "this step already completed" from "that run does not exist" without parsing
+    an error string.
+    """
+
+    def __init__(self, constraint: str | None, message: str) -> None:
+        super().__init__(message)
+        self.constraint = constraint
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,13 +42,21 @@ class Database:
     pool: ConnectionPool
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
-        with self.pool.connection() as conn:
+        with self.pool.connection() as conn, _translated():
             conn.execute(sql, params)
 
     def fetch_all(self, sql: str, params: Sequence[Any] = ()) -> list[tuple[Any, ...]]:
-        with self.pool.connection() as conn:
+        with self.pool.connection() as conn, _translated():
             return conn.execute(sql, params).fetchall()
 
     def fetch_one(self, sql: str, params: Sequence[Any] = ()) -> tuple[Any, ...] | None:
-        with self.pool.connection() as conn:
+        with self.pool.connection() as conn, _translated():
             return conn.execute(sql, params).fetchone()
+
+
+@contextmanager
+def _translated() -> Iterator[None]:
+    try:
+        yield
+    except IntegrityError as exc:
+        raise IntegrityViolation(exc.diag.constraint_name, str(exc).strip()) from exc

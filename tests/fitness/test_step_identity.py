@@ -13,10 +13,13 @@ The action fingerprint is already computed for exactly this purpose.
 
 from __future__ import annotations
 
+import pytest
+
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.wiring import Stack, handle
+from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.runtime.run import Run
+from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.catalog import _refund
 
 from .conftest import SCOPES, TENANT, USER, drive_to_completion
@@ -107,3 +110,81 @@ def test_a_repeat_of_the_same_action_is_still_one_step(stack: Stack, run: Run) -
     for _ in range(3):
         handle(stack, event, scopes=SCOPES, run=run)
     assert len(stack.client.calls) == 1
+
+
+def test_a_completed_step_is_skipped_by_a_process_that_did_not_run_it(
+    stack: Stack, run: Run, app_database: Database
+) -> None:
+    """The reason step records are durable: replay happens in a new process."""
+    stack.deps.engine = TwoRefundsEngine()
+    drive_to_completion(stack, _event(run), run)
+    assert len(stack.client.calls) == 2
+
+    restarted = build_stack(app_database, tenant=TENANT)
+    restarted.deps.engine = TwoRefundsEngine()
+    result = drive_to_completion(restarted, _event(run), run)
+
+    assert result.status == "complete"
+    assert restarted.client.calls == [], "the replay re-committed through a fresh surface"
+    assert len(restarted.steps.records_for(run.run_id)) == len(stack.steps.records_for(run.run_id))
+
+
+def test_the_database_refuses_a_second_completion_of_one_step(
+    stack: Stack, run: Run, app_database: Database
+) -> None:
+    """The ledger checks before writing. The index is what holds when two checks race."""
+    with stack.steps.step(run.run_id, "execute:once") as slot:
+        slot[0] = "receipt-1"
+
+    with pytest.raises(IntegrityViolation) as caught:
+        app_database.execute(
+            "INSERT INTO run_steps (run_id, name, status, receipt)"
+            " VALUES (%s, 'execute:once', 'completed', 'receipt-2')",
+            (run.run_id,),
+        )
+
+    assert caught.value.constraint == "run_steps_complete_once"
+
+
+def test_a_step_that_started_and_never_finished_is_reported_as_unknown(
+    stack: Stack, run: Run
+) -> None:
+    """A process died mid-step. The honest answer is not "failed" - it is "nobody knows".
+
+    Calling it failed would invite a clean retry of an effect that may already have
+    landed. This is the state the two-phase idempotency ledger exists to settle.
+    """
+    with (
+        pytest.raises(RuntimeError, match="the process died here"),
+        stack.steps.step(run.run_id, "execute:interrupted"),
+    ):
+        raise RuntimeError("the process died here")
+
+    # A raised step records `failed`, which is a known outcome.
+    assert stack.steps.started_but_unfinished(run.run_id) == ()
+
+    # A step whose process vanished records nothing after `started`.
+    stack.steps._write(run.run_id, "execute:vanished", "started", None)
+    unfinished = stack.steps.started_but_unfinished(run.run_id)
+
+    assert [record.name for record in unfinished] == ["execute:vanished"]
+    assert stack.steps.completed(run.run_id, "execute:vanished") is None
+
+
+def test_a_step_for_a_run_that_does_not_exist_is_refused(stack: Stack) -> None:
+    with pytest.raises(IntegrityViolation) as caught:
+        stack.steps._write("run-never-created", "execute:x", "started", None)
+
+    assert caught.value.constraint == "run_steps_run_id_fkey"
+
+
+def test_the_run_itself_is_readable_by_a_process_that_did_not_start_it(
+    run: Run, app_database: Database
+) -> None:
+    """Part 4's anchor. A step or a wait keyed on a run nothing recorded is an orphan."""
+    restarted = build_stack(app_database, tenant=TENANT)
+
+    found = restarted.runs.get(run.run_id)
+
+    assert found == run
+    assert restarted.runs.get("run-never-created") is None

@@ -50,12 +50,28 @@ behaviour; it is the same behaviour that stops being a lie when the process dies
     migrated once), `agentstack_evals` (gates). `rebuild_database` refuses any name that
     does not end in `_test` or `_evals`.
 
-- [ ] **T3 — Durable step ledger and wait store** · layer 3 · *M*
+- [x] **T3 — Durable step ledger and wait store** · layer 3 · *M*
   - Acceptance: steps and waits in Postgres. A completed step is still skipped on
     replay; an unsatisfied wait still blocks the run.
   - Verify: `test_waiting_is_state.py`, `test_wait_gates_the_run.py`,
     `test_step_identity.py` against Postgres.
   - Depends: T1. Files: ~4.
+  - **Done**, and `migrations/0002` includes a `runs` table beyond the stated scope: a
+    step or wait keyed on a run id nothing records is an orphan, with no row saying
+    which tenant it belongs to and nothing for T10 to resume from. Run identity is the
+    Part 4 invariant these two hang off.
+  - Two invariants moved from code into the schema: `run_steps_complete_once` (partial
+    unique index) refuses a second completion, and `satisfied_waits_record_when` refuses
+    a wait marked satisfied with no time.
+  - `_satisfy` now updates `WHERE ... AND NOT satisfied`. The read-then-decide checks in
+    `resume` cannot settle two approvals landing together; without this both callers
+    were told they resumed the run. Sabotage-verified.
+  - `storage.database.IntegrityViolation` translates driver constraint errors, since
+    layers above cannot import psycopg to catch them (contract 5). It carries the
+    constraint name, so callers distinguish causes without parsing error strings.
+  - A `started` row with no outcome is left as-is and reported by
+    `started_but_unfinished`. Recording it as `failed` would invite a clean retry of an
+    effect that may already have landed — T4's ledger is what settles it.
 
 - [ ] **T4 — Durable approvals, idempotency ledger and audit sink** · layers 7, 8, 9 · *M*
   - Acceptance: approvals, the two-phase idempotency ledger and audit records in

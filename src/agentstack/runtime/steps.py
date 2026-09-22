@@ -3,14 +3,19 @@
 Retrying the whole agent after a partial side effect is the classic Part 4 failure:
 the branch was already pushed, step six failed, the retry pushes again. A step records
 its completion, and a completed step is not re-run on replay.
+
+Durable since T3. In memory the guarantee held only within one process, which is the
+single case where retry never needed it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import datetime
+
+from agentstack.storage.database import Database
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,25 +27,52 @@ class StepRecord:
     at: datetime
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class StepLedger:
-    _records: list[StepRecord] = field(default_factory=list)
+    db: Database
 
     def completed(self, run_id: str, name: str) -> StepRecord | None:
-        for record in self._records:
-            if record.run_id == run_id and record.name == name and record.status == "completed":
-                return record
-        return None
+        row = self.db.fetch_one(
+            "SELECT run_id, name, status, receipt, at FROM run_steps"
+            " WHERE run_id = %s AND name = %s AND status = 'completed'",
+            (run_id, name),
+        )
+        return None if row is None else StepRecord(*row)
 
     def records_for(self, run_id: str) -> tuple[StepRecord, ...]:
-        return tuple(r for r in self._records if r.run_id == run_id)
+        rows = self.db.fetch_all(
+            "SELECT run_id, name, status, receipt, at FROM run_steps WHERE run_id = %s ORDER BY id",
+            (run_id,),
+        )
+        return tuple(StepRecord(*row) for row in rows)
+
+    def started_but_unfinished(self, run_id: str) -> tuple[StepRecord, ...]:
+        """Steps that began and never reported an outcome.
+
+        A process that died mid-step leaves one of these. It is not a failure record:
+        the effect may or may not have landed, and the only honest thing the ledger
+        can say is that nobody knows. The idempotency ledger settles it.
+        """
+        rows = self.db.fetch_all(
+            "SELECT s.run_id, s.name, s.status, s.receipt, s.at FROM run_steps s"
+            " WHERE s.run_id = %s AND s.status = 'started'"
+            " AND NOT EXISTS ("
+            "   SELECT 1 FROM run_steps done"
+            "   WHERE done.run_id = s.run_id AND done.name = s.name"
+            "     AND done.status <> 'started' AND done.id > s.id)"
+            " ORDER BY s.id",
+            (run_id,),
+        )
+        return tuple(StepRecord(*row) for row in rows)
 
     def _write(self, run_id: str, name: str, status: str, receipt: str | None) -> StepRecord:
-        record = StepRecord(
-            run_id=run_id, name=name, status=status, receipt=receipt, at=datetime.now(UTC)
+        row = self.db.fetch_one(
+            "INSERT INTO run_steps (run_id, name, status, receipt) VALUES (%s, %s, %s, %s)"
+            " RETURNING run_id, name, status, receipt, at",
+            (run_id, name, status, receipt),
         )
-        self._records.append(record)
-        return record
+        assert row is not None  # RETURNING on a successful insert always yields a row
+        return StepRecord(*row)
 
     @contextmanager
     def step(self, run_id: str, name: str) -> Iterator[list[str | None]]:

@@ -8,10 +8,13 @@ input that satisfies it. Anything less resumes into a world it never saw.
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+from agentstack.storage.database import Database
 
 
 class ResumeRejected(RuntimeError):
@@ -40,42 +43,57 @@ class ResumeEvent:
     payload: dict[str, Any]
 
 
-@dataclass(slots=True)
+_COLUMNS = "wait_id, run_id, kind, state_snapshot, created_at, satisfied, payload"
+
+
+@dataclass(frozen=True, slots=True)
 class WaitStore:
-    _waits: dict[str, Wait] = field(default_factory=dict)
+    db: Database
 
     def park(self, *, run_id: str, kind: str, state_snapshot: str) -> Wait:
-        wait = Wait(
-            wait_id=f"wait-{uuid.uuid4()}",
-            run_id=run_id,
-            kind=kind,
-            state_snapshot=state_snapshot,
-            created_at=datetime.now(UTC),
+        row = self.db.fetch_one(
+            "INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at)"
+            f" VALUES (%s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+            (f"wait-{uuid.uuid4()}", run_id, kind, state_snapshot, datetime.now(UTC)),
         )
-        self._waits[wait.wait_id] = wait
-        return wait
+        assert row is not None  # RETURNING on a successful insert always yields a row
+        return Wait(*row)
 
     def get(self, wait_id: str) -> Wait | None:
-        return self._waits.get(wait_id)
+        row = self.db.fetch_one(f"SELECT {_COLUMNS} FROM waits WHERE wait_id = %s", (wait_id,))
+        return None if row is None else Wait(*row)
 
     def pending_for(self, run_id: str) -> tuple[Wait, ...]:
-        return tuple(w for w in self._waits.values() if w.run_id == run_id and not w.satisfied)
+        rows = self.db.fetch_all(
+            f"SELECT {_COLUMNS} FROM waits WHERE run_id = %s AND NOT satisfied ORDER BY created_at",
+            (run_id,),
+        )
+        return tuple(Wait(*row) for row in rows)
 
     def satisfied_for(self, run_id: str) -> tuple[Wait, ...]:
-        return tuple(w for w in self._waits.values() if w.run_id == run_id and w.satisfied)
+        rows = self.db.fetch_all(
+            f"SELECT {_COLUMNS} FROM waits WHERE run_id = %s AND satisfied"
+            " ORDER BY satisfied_at, created_at",
+            (run_id,),
+        )
+        return tuple(Wait(*row) for row in rows)
 
     def _satisfy(self, wait: Wait, payload: dict[str, Any]) -> Wait:
-        done = Wait(
-            wait_id=wait.wait_id,
-            run_id=wait.run_id,
-            kind=wait.kind,
-            state_snapshot=wait.state_snapshot,
-            created_at=wait.created_at,
-            satisfied=True,
-            payload=dict(payload),
+        """Mark the wait satisfied, once, even if two resumes arrive together.
+
+        The checks in `resume` read and then decide, which is a race the moment two
+        approvals land at the same moment. `AND NOT satisfied` in the UPDATE is what
+        actually settles it: the loser gets no row back and is told so, rather than
+        both callers being told they resumed the run.
+        """
+        row = self.db.fetch_one(
+            "UPDATE waits SET satisfied = true, satisfied_at = now(), payload = %s::jsonb"
+            f" WHERE wait_id = %s AND NOT satisfied RETURNING {_COLUMNS}",
+            (json.dumps(payload), wait.wait_id),
         )
-        self._waits[wait.wait_id] = done
-        return done
+        if row is None:
+            raise ResumeRejected(f"{wait.wait_id} was already satisfied")
+        return Wait(*row)
 
 
 def resume(store: WaitStore, event: ResumeEvent) -> Wait:

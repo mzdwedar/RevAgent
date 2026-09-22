@@ -17,4 +17,5 @@ Rules the migrator enforces, so they are not conventions anyone has to remember:
   than stopping halfway through.
 
 `0001` is the control plane (T2): sessions, transcript events and working state —
-three tables, because they are three stores.
+three tables, because they are three stores. `0002` is the runtime (T3): runs,
+step records and waits.

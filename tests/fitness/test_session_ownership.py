@@ -8,13 +8,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import psycopg
 import pytest
 
 from agentstack.control_plane.resolve import SessionOwnershipError
 from agentstack.control_plane.session import Session, new_session
 from agentstack.interfaces.wiring import Stack, build_stack
-from agentstack.storage.database import Database
+from agentstack.storage.database import Database, IntegrityViolation
 
 TENANT = "acme"
 
@@ -31,12 +30,14 @@ def test_a_session_keyed_on_the_user_id_is_refused() -> None:
 
 def test_the_database_refuses_it_too_not_just_the_constructor(app_database: Database) -> None:
     """A constructor guards the path that goes through it. A CHECK guards the rest."""
-    with pytest.raises(psycopg.errors.CheckViolation, match="session_id_is_not_the_user_id"):
+    with pytest.raises(IntegrityViolation) as caught:
         app_database.execute(
             "INSERT INTO sessions (session_id, user_id, tenant, created_at)"
             " VALUES (%s, %s, %s, now())",
             ("u-1", "u-1", TENANT),
         )
+
+    assert caught.value.constraint == "session_id_is_not_the_user_id"
 
 
 def test_one_user_can_own_several_isolated_sessions() -> None:

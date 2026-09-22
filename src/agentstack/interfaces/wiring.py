@@ -26,7 +26,7 @@ from agentstack.observability.spans import VersionStamp
 from agentstack.policy.approval import ApprovalStore
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
-from agentstack.runtime.run import Run, new_run
+from agentstack.runtime.run import Run, RunStore, new_run
 from agentstack.runtime.steps import StepLedger
 from agentstack.runtime.waits import WaitStore
 from agentstack.storage.database import Database
@@ -46,6 +46,7 @@ VERSIONS = VersionStamp(
 class Stack:
     resolver: SessionResolver
     sessions: SessionStore
+    runs: RunStore
     transcripts: TranscriptStore
     working_state: WorkingStateStore
     memory: MemoryStore
@@ -77,8 +78,9 @@ def build_stack(db: Database, *, tenant: str = "acme") -> Stack:
     approvals = ApprovalStore()
     ledger = IdempotencyLedger()
     audit = AuditSink()
-    steps = StepLedger()
-    waits = WaitStore()
+    steps = StepLedger(db=db)
+    waits = WaitStore(db=db)
+    runs = RunStore(db=db)
     client = RecordingClient()
 
     gateway = Gateway(
@@ -120,6 +122,7 @@ def build_stack(db: Database, *, tenant: str = "acme") -> Stack:
     return Stack(
         resolver=resolver,
         sessions=sessions,
+        runs=runs,
         transcripts=transcripts,
         working_state=working_state,
         memory=memory,
@@ -165,12 +168,15 @@ def handle(
         session_id=event.session_id, user_id=event.user_id, tenant=event.tenant
     )
     stack.transcripts.append(session_id=view.session_id, kind="user", body=event.text)
-    run = run or new_run(
-        session_id=view.session_id,
-        tenant=view.tenant,
-        user=view.user_id,
-        stage=view.stage,
-        channel=event.channel,
+    run = stack.runs.ensure(
+        run
+        or new_run(
+            session_id=view.session_id,
+            tenant=view.tenant,
+            user=view.user_id,
+            stage=view.stage,
+            channel=event.channel,
+        )
     )
     result = run_turn(
         run=run,

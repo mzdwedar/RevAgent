@@ -10,6 +10,8 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
+from agentstack.storage.database import Database
+
 
 @dataclass(frozen=True, slots=True)
 class Run:
@@ -39,3 +41,31 @@ def new_run(
         stage=stage,
         channel=channel,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class RunStore:
+    """Run identity, durably.
+
+    `ensure` rather than `put`: a run is written once and then continued many times,
+    and every turn after the first arrives with a run that already exists. Making the
+    caller remember which turn it is on would be a worse API than an upsert.
+    """
+
+    db: Database
+
+    def ensure(self, run: Run) -> Run:
+        self.db.execute(
+            "INSERT INTO runs (run_id, session_id, tenant, acting_user, stage, channel)"
+            " VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (run_id) DO NOTHING",
+            (run.run_id, run.session_id, run.tenant, run.user, run.stage, run.channel),
+        )
+        return run
+
+    def get(self, run_id: str) -> Run | None:
+        row = self.db.fetch_one(
+            "SELECT run_id, session_id, tenant, acting_user, stage, channel"
+            " FROM runs WHERE run_id = %s",
+            (run_id,),
+        )
+        return None if row is None else Run(*row)

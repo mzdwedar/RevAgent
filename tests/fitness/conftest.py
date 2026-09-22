@@ -44,8 +44,11 @@ def event(session_id: str) -> InboundEvent:
 
 
 @pytest.fixture
-def run(session_id: str) -> Run:
-    return new_run(session_id=session_id, tenant=TENANT, user=USER, channel="test")
+def run(stack: Stack, session_id: str) -> Run:
+    """A persisted run. Steps and waits carry a foreign key onto it."""
+    return stack.runs.ensure(
+        new_run(session_id=session_id, tenant=TENANT, user=USER, channel="test")
+    )
 
 
 def approve_and_resume(stack: Stack, result, run: Run, approver: str = "finance-oncall") -> None:
