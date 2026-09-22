@@ -145,16 +145,36 @@ criteria are met.
   - Fetching lives in `scripts/`, outside the package: it reaches the network, and
     `lint-imports` contract 3 now names `kaggle` so that stays true.
 
-- [ ] **T6 — TabPFN classifier adapter and licence gate** · layer 4 · *M*
+- [x] **T6 — TabPFN classifier adapter and licence gate** · layer 4 · *M*
   - Acceptance: `prediction/` scores churn on pre-treatment features. A missing or
     invalid `TABPFN_TOKEN` is refused **at startup**. A committed fixture of recorded,
     seed-pinned scores for the dev snapshots lets CI test our adapter without the
     weights; one live test goes in a declared `live` suite.
   - Verify: new `tests/fitness/test_prediction_gate.py` — criterion 18, running in CI
-    off the fixture. `CONSTRAINTS.md` gains a row declaring the `live` suite and where
-    it runs. **No `skipif` anywhere** — a conditional skip trips our own floor, and the
-    fix for that is not to loosen the floor.
+    off the fixture. **No `skipif` anywhere.**
   - Depends: T5. Files: ~5.
+  - **Done except the recorded fixture.** No `TABPFN_TOKEN` is configured on this
+    machine, so `data/scores/` is empty and cannot be produced. Everything else is
+    built and tested: the gate, the fold assignment, the encoding, the cross-fitting
+    loop, the replay guards, and the startup command. `scripts/record_scores.py` makes
+    the fixture in one command once a token exists; `tests/live` then checks it against
+    the real model. **Action for a human: set `TABPFN_TOKEN`, run
+    `uv sync --extra prediction`, then `uv run python scripts/record_scores.py`.**
+  - **Closed the carried-forward gap:** `agentstack.prediction` was in none of the
+    `.importlinter` contracts. It is now in all five. Sabotage-verified — an `httpx`
+    import and an upward import into `execution` each break a contract that previously
+    would not have noticed.
+  - **Scores are out of fold.** TabPFN is zero-training but still conditions on the
+    rows it is given, so in-sample scores would rank the rows the model fit best rather
+    than the customers most at risk — and the targeted experiment would then measure
+    regression to the mean, already named in `SPEC.md` as the easiest way to get a
+    confident wrong answer. The fold assignment is ours, not a library's, because the
+    same snapshot and seed must give the same cohort.
+  - **`tabpfn` is an optional extra.** It pulls torch; a CI run checking the approval
+    boundary should not build a deep-learning stack to do it. `uv sync --extra prediction`.
+  - Ratchets: fitness tests 24 → 25; project coverage 99% → **98%**, recorded in
+    `CONSTRAINTS.md` with the reason — three lines that call `TabPFNClassifier` cannot
+    execute where the extra and the licence are absent.
 
 - [ ] **T7 — Targeting predicate and cohort freeze** · layers 4, 5 · *M*
   - Acceptance: top-decile risk cut, minimum cohort 1,000, value-at-risk floor $50k

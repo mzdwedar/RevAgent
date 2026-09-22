@@ -34,7 +34,8 @@ bash scripts/check_full.sh               # CI           (minutes)
 uv run pytest tests/fitness -v           # the architecture bar
 uv run python -m evals run --gates       # Part-8 release gates
 uv run agentstack-migrate status         # schema: applied vs pending
-uv run pytest tests/live                 # real cohorts vs the manifest (needs data/)
+uv run pytest tests/live                 # real cohorts + real model (needs data/, token)
+uv run agentstack-preflight              # licence gate, as a deploy would run it
 uv run python scripts/stack_guard.py --base main   # did the bar get weakened?
 ```
 

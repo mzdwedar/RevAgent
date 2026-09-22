@@ -10,3 +10,4 @@ htmlcov/
 .tmp/
 data/
 !data/manifest.json
+!data/scores/

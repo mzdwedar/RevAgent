@@ -37,6 +37,9 @@ Stack-specific (from `STACK.md`):
 - No declared containment dimension that `Sandbox.check()` does not read
 - No cohort column dropped without a recorded reason, and no `data_as_of` derived
   from a clock — a watermark that moves when nobody looked cannot identify a population
+- No churn score taken in sample — every row is scored by a model that did not see
+  its label, or the top decile is the rows the model fit best
+- No scorer decides who gets an offer; it returns a probability and policy does the rest
 
 ## Enforced with numbers
 
@@ -55,6 +58,8 @@ Stack-specific (from `STACK.md`):
 | Schema migrations | Up from empty, down, and up again on a fresh database | `uv run pytest tests/infra` | task end, CI |
 | Cohort identity | Same data in, same `data_as_of` out | `uv run pytest tests/fitness/test_data_snapshot.py` | every edit |
 | Live cohort checks | Real datasets match `data/manifest.json`; no feature correlates with the target above 0.9 | `uv run pytest tests/live` | **locally, before a cohort is used in an experiment**. Not on PRs: CI has no Kaggle credentials. A scheduled run needs those secrets configured first — until then this row says only what is true. |
+| Licence gate | A missing or invalid `TABPFN_TOKEN` is refused at startup | `uv run pytest tests/fitness/test_prediction_gate.py` | every edit |
+| Live model checks | Recorded scores still match the real model; scores separate churners; scoring is reproducible | `uv run pytest tests/live` (needs `TABPFN_TOKEN` and `--extra prediction`) | **locally, before a cohort is used in an experiment** |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -67,12 +72,19 @@ Why these numbers:
   gradients. One violation is a collapsed layer.
 - **High and above** for dependencies: below that is mostly noise.
 
+**Project coverage moved 99% → 98% at T6, deliberately.** Three lines in
+`prediction/engine.py` construct and call `TabPFNClassifier`, and they cannot execute
+anywhere the optional extra and the licence are absent — which is CI, by design. The
+alternatives were a `pragma` (banned by the floor), installing torch in CI to raise a
+percentage, or pretending. The lines are covered in `tests/live`, and the ratchet now
+says what is actually true.
+
 ## Measured, not yet enforced
 
 | Metric | Today | Direction |
 |---|---|---|
-| Project coverage | 99% | must not fall (tolerance 0.5%) |
-| Fitness test count | 24 | must not fall |
+| Project coverage | 98% | must not fall (tolerance 0.5%) |
+| Fitness test count | 25 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |
@@ -95,9 +107,15 @@ it would show up.
 for. It is a directory, not a `@pytest.mark.skipif`: a conditional skip would trip the
 floor above, and the tempting fix for that would be to loosen the floor.
 
-What that costs, stated rather than implied: CI proves the loader, the watermark and
-the drop rules are correct. It does not prove the data upstream is unchanged. That is
-what the live lane is for, and it has to actually be run.
+What that costs, stated rather than implied: CI proves the loader, the watermark, the
+drop rules, the licence gate, the fold assignment and the replay guards are correct.
+It does not prove the data upstream is unchanged, and it does not prove TabPFN still
+returns what we recorded. That is what the live lane is for, and it has to actually
+be run.
+
+**Not yet recorded.** `data/scores/` is empty: producing it needs a `TABPFN_TOKEN`,
+and none is configured on this machine. Until it exists, `tests/live` fails with the
+command that fixes it rather than skipping — the same posture as a missing database.
 
 ## Where checks run (cost decides placement)
 

@@ -9,9 +9,17 @@ dependencies = [
     "pandas>=2.2",
 ]
 
+[project.optional-dependencies]
+# TabPFN pulls torch. Kept out of the default install so CI can check the approval
+# boundary without building a deep-learning stack to do it.
+prediction = [
+    "tabpfn>=9.0.0",
+]
+
 [project.scripts]
 agentstack = "agentstack.interfaces.cli:main"
 agentstack-migrate = "agentstack.interfaces.migrate_cli:main"
+agentstack-preflight = "agentstack.interfaces.preflight_cli:main"
 
 [dependency-groups]
 dev = [
@@ -46,6 +54,13 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ARG", "SIM"]
+
+[[tool.mypy.overrides]]
+# tabpfn ships no type stubs. Declared here, scoped to that one module, rather than as
+# an inline suppression at the import site: the floor bans those, and a config entry
+# naming exactly which third-party library is untyped is the honest form.
+module = ["tabpfn.*"]
+ignore_missing_imports = true
 
 [tool.mypy]
 python_version = "3.12"

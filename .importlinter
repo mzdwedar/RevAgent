@@ -17,6 +17,7 @@ layers =
     agentstack.policy
     agentstack.tools
     agentstack.context
+    agentstack.prediction
     agentstack.model
     agentstack.observability
     agentstack.storage
@@ -27,6 +28,7 @@ type = forbidden
 source_modules =
     agentstack.tools
     agentstack.context
+    agentstack.prediction
     agentstack.model
 forbidden_modules =
     agentstack.execution
@@ -41,6 +43,7 @@ source_modules =
     agentstack.policy
     agentstack.tools
     agentstack.context
+    agentstack.prediction
     agentstack.model
     agentstack.observability
 forbidden_modules =
@@ -63,6 +66,7 @@ source_modules =
     agentstack.policy
     agentstack.tools
     agentstack.context
+    agentstack.prediction
     agentstack.model
     agentstack.observability
 forbidden_modules =
@@ -86,6 +90,7 @@ source_modules =
     agentstack.policy
     agentstack.tools
     agentstack.context
+    agentstack.prediction
     agentstack.model
     agentstack.observability
 forbidden_modules =
