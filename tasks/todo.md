@@ -293,12 +293,28 @@ criteria are met.
   - The plan said "the existing look-vs-decide asymmetry test" — there wasn't one. It
     exists now (`tests/fitness/test_trigger_asymmetry.py`, 20 tests).
 
-- [ ] **T10 — Kill and resume in a fresh process** · layer 3 · *M*
+- [x] **T10 — Kill and resume in a fresh process** · layer 3 · *M*
   - Acceptance: a parked run resumes from Postgres in a process that did not write the
     checkpoint.
-  - Verify: new `tests/durability/test_process_death.py` — criterion 1. Spawns a real
-    subprocess, kills it, rebuilds. A same-process resume does not count.
+  - Verify: new `tests/durability/test_process_death.py` — criterion 1.
   - Depends: T8b. Files: ~2.
+  - **Done, with a real kill.** `tests/durability/worker.py` is started with
+    `python -m`, runs a turn, hangs inside `act` on a surface that never answers, and
+    is killed with **SIGKILL** — no atexit, no flush, no pool close. The test asserts
+    the exit code is `-9` first, because if the worker exited cleanly the rest of the
+    file proves nothing.
+  - The kill is timed off a marker the hanging surface writes, so the model call is
+    already checkpointed when the signal lands. Killing earlier would prove nothing
+    about resuming past it.
+  - **Model calls are counted across both processes** by appending PIDs to a file. The
+    resumed turn must add no line. Under sabotage the failure reads
+    `['42958', '42951']` — two different processes, which is the evidence this test
+    exists to produce.
+  - Two sabotages confirm it depends on durable storage: disabling resume, and swapping
+    the Postgres saver for an in-memory one, both fail it.
+  - A companion test asserts the resumed turn **did** reach the surface — resuming
+    without re-calling the model must not mean resuming without doing the work.
+  - Runs in the default suite; `check_task.sh` is 12s against a 90s budget.
 
 ### ✅ Checkpoint C — the runtime is genuinely durable
 - [ ] A triggered run scores a real cohort, is killed mid-flight, and resumes

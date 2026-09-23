@@ -84,6 +84,7 @@ failure, so the loop fails closed whether or not anyone remembers to run them.
 | `experiments/` | targeting thresholds, versioned — change a number here, not in code |
 | `tests/fitness/` | 28 tests, one per collapsed-boundary failure mode |
 | `tests/live/` | checks needing real datasets or the model; excluded from CI, declared in `CONSTRAINTS.md` |
+| `tests/durability/` | spawns a real process, kills it with SIGKILL, and resumes the run from Postgres |
 | `evals/` | 13 release gates that judge the path, not just the answer |
 | `scripts/` | the three check stages and the bar guard |
 | `.claude/` | hooks, the `agent-stack-auditor` subagent, and `/spec` `/plan` `/stack-audit` |
