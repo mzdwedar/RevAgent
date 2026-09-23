@@ -317,9 +317,36 @@ criteria are met.
   - Runs in the default suite; `check_task.sh` is 12s against a 90s budget.
 
 ### ✅ Checkpoint C — the runtime is genuinely durable
-- [ ] A triggered run scores a real cohort, is killed mid-flight, and resumes
-- [ ] Checkpoint round-trips through Postgres, not memory
-- [ ] Human review before side effects are wired
+- [x] **Checkpoint round-trips through Postgres, not memory.** Four tables in the
+      `langgraph` schema; a SIGKILLed worker's turn resumes in another process without
+      re-calling the model, and both sabotages (resume disabled, in-memory saver) fail it.
+- [ ] **A triggered run scores a real cohort, is killed mid-flight, and resumes** —
+      **partially met, and the shortfall is a planning gap, not a skipped task.**
+- [ ] **Human review before side effects are wired**
+
+**What is actually true.** Every piece exists and is tested on its own:
+
+| | |
+|---|---|
+| Trigger ingress, idempotent cycle, authority asymmetry | T9 ✓ |
+| Cohort loads, watermarked, reproducible | T5 ✓ |
+| Targeting predicate, frozen `experiment_version` | T7 ✓ (on stand-in scores) |
+| Killed mid-flight, resumes in a fresh process | T10 ✓ |
+
+**Two gaps between those and the checkpoint's sentence.**
+
+1. **Nothing wires trigger → score → target.** `runtime.cycles.evaluate` takes the
+   evaluator as a seam, and no task in this plan fills it. T9's acceptance was the
+   ingress, the idempotency and the asymmetry; T7's was the freeze. Connecting them was
+   never assigned. Same shape as the `MemoryStore` gap found at Checkpoint A: the
+   checkpoint asserts something no task builds.
+2. **"A real cohort" is still stand-in scores.** `data/scores/` is empty pending a
+   `TABPFN_TOKEN` and `scripts/record_scores.py` (T6).
+
+Neither blocks Phase 4 — T11 (`PRE_COMMIT`) and T12 (Ollama) depend on neither, and
+T13 is the natural place for the wiring since it is the first task that needs a cohort
+to draft *from*. But the checkpoint should not be ticked as written, and the decision —
+add a wiring task, fold it into T13, or restate the checkpoint — is a human one.
 
 ---
 
