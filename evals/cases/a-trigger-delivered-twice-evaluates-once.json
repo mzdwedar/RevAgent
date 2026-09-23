@@ -1,0 +1,19 @@
+{
+  "id": "a-trigger-delivered-twice-evaluates-once",
+  "part": 4,
+  "gate": true,
+  "description": "At-least-once delivery meets an idempotent cycle keyed on the experiment, the watermark and the kind. A redelivered trigger must not score the cohort again, draft again, and ask a human again about a decision they already made.",
+  "message": "",
+  "scopes": [],
+  "trigger": {
+    "kind": "data_arrival",
+    "experiment_id": "exp-gate",
+    "data_as_of": "telecom-bigml:f107d488f7bf4651",
+    "tenant": "acme"
+  },
+  "deliveries": 3,
+  "expect": {
+    "evaluations": 1,
+    "outcome": "propose"
+  }
+}

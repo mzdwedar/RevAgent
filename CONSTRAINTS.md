@@ -35,6 +35,10 @@ Stack-specific (from `STACK.md`):
   of a claim that was never settled
 - No run advancing past an unsatisfied wait
 - No graph node advancing a run whose checkpoint names a different run
+- No `metric_movement` trigger reaching a propose — looking is not deciding, and a
+  look that can also advance an experiment is an optional-stopping machine
+- No trigger evaluated twice: brokers redeliver, and a second evaluation asks a
+  human again about a decision they already made
 - No checkpoint written asynchronously — durability that loses the last step is not
   durability
 - No vendor-owned tables in `public`: a library that migrates its own schema gets a
@@ -100,7 +104,7 @@ ratchet says what is true today, not what was convenient at the time.
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 99% | must not fall (tolerance 0.5%) |
-| Fitness test count | 27 | must not fall |
+| Fitness test count | 28 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

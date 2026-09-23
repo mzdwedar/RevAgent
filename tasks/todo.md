@@ -266,13 +266,32 @@ criteria are met.
     shared, not that anything was stored. The replacement stack now opens its own pool
     and saver, and sabotage confirms the assertion fails without shared storage.
 
-- [ ] **T9 — Trigger ingress** · layers 1, 3 · *M*
+- [x] **T9 — Trigger ingress** · layers 1, 3 · *M*
   - Acceptance: an endpoint accepting a trigger with `kind` and `data_as_of`; the
     evaluation is idempotent on `(experiment_id, data_as_of)`; `metric_movement` cannot
     reach a propose.
-  - Verify: criterion 3 gate plus `test_wait_gates_the_run.py`; the existing
-    look-vs-decide asymmetry test now runs against the real ingress.
+  - Verify: criterion 3 gate plus the look-vs-decide asymmetry.
   - Depends: T8b. Files: ~3.
+  - **Done.** Two new gate cases (13 total): a trigger delivered three times evaluates
+    once, and a `metric_movement` reaching a propose is refused.
+  - **Deviation from the spec's wording, for review.** The spec says the cycle is
+    "keyed on `data_as_of`"; the key is `(experiment_id, data_as_of, kind)`. The hazard
+    is a broker redelivering *the same message*, which carries the same kind, so this
+    covers it. Dropping `kind` would also collapse a `data_arrival` into an earlier
+    `metric_movement` at the same watermark — the trigger that may propose silently
+    suppressed by the one that may not. That is an authority downgrade arriving
+    disguised as a deduplication.
+  - The asymmetry is held **twice**: `policy.triggers.authorize` refuses at the point
+    of recording (the evaluator is the thing that might be wrong), and a CHECK
+    constraint refuses a `metric_movement` row carrying a propose.
+  - A refused outcome leaves the cycle **claimed and unsettled**, visible via
+    `unsettled()` — the same shape as an unresolved idempotency claim. Recording some
+    safer outcome instead would be inventing a decision to tidy up a refusal.
+  - **Contract 4 caught a design error**: `runtime` cannot import the channel layer, so
+    `TriggerEvent` moved to `policy/triggers.py` beside the authority table. The parsing
+    of an untrusted payload stayed in layer 1, which is its job.
+  - The plan said "the existing look-vs-decide asymmetry test" — there wasn't one. It
+    exists now (`tests/fitness/test_trigger_asymmetry.py`, 20 tests).
 
 - [ ] **T10 — Kill and resume in a fresh process** · layer 3 · *M*
   - Acceptance: a parked run resumes from Postgres in a process that did not write the

@@ -17,7 +17,11 @@ from typing import Any
 from agentstack.context.items import Scope, Trust
 from agentstack.context.retrieval import Candidate, StaticRetriever
 from agentstack.interfaces.inbound import InboundEvent
+from agentstack.interfaces.triggers import parse_trigger
 from agentstack.interfaces.wiring import Stack, build_stack, handle
+from agentstack.policy.triggers import Outcome as Outcome_
+from agentstack.policy.triggers import OutcomeNotAuthorized
+from agentstack.runtime.cycles import CycleStore, evaluate
 from agentstack.runtime.run import new_run
 from agentstack.runtime.waits import ResumeEvent, resume
 from agentstack.storage.database import Database
@@ -45,6 +49,10 @@ class Case:
     # Grant the approval but never satisfy the wait. The run must stay blocked.
     resume: bool = True
     expect_error: str | None = None
+    # A trigger case exercises the ingress instead of a turn: the same trigger is
+    # delivered `deliveries` times and the cycle count is what is asserted.
+    trigger: dict[str, Any] | None = None
+    deliveries: int = 1
     description: str = ""
 
     @staticmethod
@@ -84,8 +92,43 @@ def _stack_for(case: Case, db: Database, checkpointer: Any) -> Stack:
     return stack
 
 
+def _run_trigger_case(case: Case, db: Database, started: float) -> Outcome:
+    """Deliver one trigger `deliveries` times and count the evaluations it caused."""
+    failures: list[str] = []
+    truncate_all(db)
+    store = CycleStore(db=db)
+    assert case.trigger is not None
+    event = parse_trigger(case.trigger, source="eval")
+    evaluations: list[str] = []
+
+    def evaluator(_: Any) -> tuple[Outcome_, str | None]:
+        evaluations.append("evaluated")
+        return Outcome_(str(case.expect.get("outcome", "continue"))), None
+
+    refused: str | None = None
+    for _ in range(case.deliveries):
+        try:
+            evaluate(store, event, evaluator)
+        except OutcomeNotAuthorized as exc:
+            refused = str(exc)
+
+    expected = int(case.expect.get("evaluations", 1))
+    if len(evaluations) != expected:
+        failures.append(f"{len(evaluations)} evaluation(s) != {expected}")
+    if case.expect_error and (refused is None or case.expect_error not in refused):
+        failures.append(f"expected a refusal mentioning {case.expect_error!r}, got {refused!r}")
+    if not case.expect_error and refused is not None:
+        failures.append(f"unexpected refusal: {refused}")
+
+    return Outcome(
+        case=case, passed=not failures, failures=failures, seconds=time.perf_counter() - started
+    )
+
+
 def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
     started = time.perf_counter()
+    if case.trigger is not None:
+        return _run_trigger_case(case, db, started)
     failures: list[str] = []
     stack = _stack_for(case, db, checkpointer)
     session = stack.resolver.start(user_id=USER, tenant=TENANT)

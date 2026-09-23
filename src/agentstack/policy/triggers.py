@@ -1,0 +1,94 @@
+"""Looking is not deciding (Part 8 authority, applied to triggers).
+
+The two trigger kinds wake the same run and do not carry the same authority, and that
+asymmetry is the load-bearing decision in the spec.
+
+Waking on `metric_movement` means evaluating **precisely when noise is largest**. If
+that wake could also propose a rollout, the system would be an optional-stopping
+machine: structurally biased toward acting on the looks that flatter the variant. A
+`data_arrival` wake has no such bias, because a watermark advancing is independent of
+what the data says.
+
+So a `metric_movement` can stop an experiment and can never advance one. That is not a
+compromise. Stopping early for harm does not need protection against false positives in
+the way stopping early for benefit does - you do not owe statistical rigour to the claim
+"this is hurting people, stop".
+
+The trigger decides **when we look**. The inference rule decides **when we may decide**.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+
+class TriggerKind(StrEnum):
+    DATA_ARRIVAL = "data_arrival"
+    METRIC_MOVEMENT = "metric_movement"
+
+
+class Outcome(StrEnum):
+    """What one evaluation cycle concluded."""
+
+    # Evidence refreshed, nothing else changed. Both kinds may reach this.
+    CONTINUE = "continue"
+    # A guardrail tripped: stop the experiment. Both kinds may reach this.
+    ABSTAIN = "abstain"
+    # An analysis point was reached: propose a rollout. `data_arrival` only.
+    PROPOSE = "propose"
+
+
+@dataclass(frozen=True, slots=True)
+class TriggerEvent:
+    """A well-formed trigger. Nothing here has been authorised yet.
+
+    It lives beside the authority table rather than in `agentstack.interfaces`, where
+    the parsing is: the runtime has to consume one, and contract 4 says nothing imports
+    the channel layer. The kind is what carries authority, so the event belongs with
+    the rule that reads it.
+    """
+
+    kind: TriggerKind
+    experiment_id: str
+    data_as_of: str
+    # A claim about who this is for, not an authorisation. Layer 8 tests it.
+    tenant: str
+    # Where it came from, for the audit trail. A string, not an import.
+    source: str = "unknown"
+
+    def cycle_key(self) -> str:
+        return f"{self.experiment_id}:{self.data_as_of}:{self.kind.value}"
+
+
+class OutcomeNotAuthorized(PermissionError):
+    """This trigger kind may not reach this outcome."""
+
+
+# Which outcomes each kind may reach. Written as data so the asymmetry can be read
+# rather than traced through branches - it is the design, not an implementation detail.
+AUTHORITY: dict[TriggerKind, frozenset[Outcome]] = {
+    TriggerKind.DATA_ARRIVAL: frozenset(Outcome),
+    TriggerKind.METRIC_MOVEMENT: frozenset({Outcome.CONTINUE, Outcome.ABSTAIN}),
+}
+
+
+def may_reach(kind: TriggerKind, outcome: Outcome) -> bool:
+    return outcome in AUTHORITY[kind]
+
+
+def authorize(kind: TriggerKind, outcome: Outcome) -> Outcome:
+    """Check an outcome against the kind that produced it, before it is recorded.
+
+    Checked at the point of recording rather than where the outcome is computed,
+    because the evaluator is the thing that might be wrong. A rule enforced only inside
+    the code it constrains is a comment.
+    """
+    if not may_reach(kind, outcome):
+        raise OutcomeNotAuthorized(
+            f"a {kind.value} trigger reached {outcome.value}, which it may never do: "
+            "waking on a metric crossing a threshold means looking precisely when "
+            "noise is largest, and a look that can also advance an experiment is an "
+            "optional-stopping machine"
+        )
+    return outcome

@@ -1,0 +1,20 @@
+{
+  "id": "a-metric-movement-cannot-propose",
+  "part": 8,
+  "gate": true,
+  "description": "Looking is not deciding. A metric_movement wake evaluates precisely when noise is largest, so it may stop an experiment and may never advance one - otherwise the system is an optional-stopping machine, biased toward acting on the looks that flatter the variant.",
+  "message": "",
+  "scopes": [],
+  "trigger": {
+    "kind": "metric_movement",
+    "experiment_id": "exp-gate-asym",
+    "data_as_of": "telecom-bigml:f107d488f7bf4651",
+    "tenant": "acme"
+  },
+  "deliveries": 1,
+  "expect": {
+    "evaluations": 1,
+    "outcome": "propose"
+  },
+  "expect_error": "optional-stopping machine"
+}

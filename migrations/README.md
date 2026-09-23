@@ -21,3 +21,4 @@ three tables, because they are three stores. `0002` is the runtime (T3): runs,
 step records and waits. `0003` is approvals, the idempotency ledger and the audit
 trail — the last in a schema of its own. `0004` creates the `langgraph` schema, whose
 tables are created and versioned by `PostgresSaver.setup()` rather than from here.
+`0005` is the trigger cycle ledger: one evaluation per (experiment, watermark, kind).
