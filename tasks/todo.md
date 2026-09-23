@@ -538,6 +538,17 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
   - Depends: T19. Files: ~2.
 
 - [ ] **T21 — Concurrency** · layers 2, 3, 10 · *M*
+  - **Observed once at T15, unexplained:** `tests/infra/test_migrations.py::
+    test_two_migrators_do_not_race` failed during a `check_task.sh` run and has passed
+    six consecutive full-suite runs since, including four deliberate attempts to
+    reproduce. Not reproduced, so the cause is **not** established.
+  - What is known: it passes 6/6 in isolation; it failed under the coverage-instrumented
+    full run; the suite now opens many pools at once (app 8, checkpointer 4, infra,
+    evals, plus subprocess pools in `tests/durability`). Pool exhaustion under load is a
+    *plausible* explanation and nothing more — the assertion text was truncated in the
+    output and was not captured.
+  - T21 should reproduce it deliberately rather than tune numbers until it stops. If it
+    is pool sizing, that is exactly the number this task exists to establish.
   - Acceptance: trigger fan-out without stampede, pooling sized for the target, 100
     concurrent runs verified. Record the number actually achieved.
   - Verify: new `tests/durability/test_concurrency.py`.
