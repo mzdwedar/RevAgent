@@ -1,9 +1,16 @@
 """The TabPFN licence gate (criterion 18).
 
-TabPFN's weights sit behind a licence gate at PriorLabs, fetched from Hugging Face on
-first use. A run that discovers this halfway through - after it has parked on a human
-approval, or after it has drafted a candidate - has wasted a person's attention on work
-it could never finish. So the check happens at startup.
+TabPFN-3.5's weights are open, under a non-commercial licence that has to be accepted
+once per machine through a gated Hugging Face repo. Not a paywall - an acceptance step,
+and a real constraint on shipping this commercially.
+
+Only some checkpoints are gated. `tabpfn` 9.x maps v2.5, v2.6, v3, v3.5 and v3.5-fast
+to licence acceptance; **v2 is ungated** and would need none of this. v3.5 is a
+deliberate choice, and `CHECKPOINT` in `engine.py` is where it is made.
+
+A run that discovers the licence halfway through - after it has parked on a human
+approval, or after it has drafted a candidate - has wasted a person's attention on
+work it could never finish. So the check happens at startup.
 
 Two checks, and the difference between them matters:
 

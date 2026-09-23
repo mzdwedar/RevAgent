@@ -10,6 +10,7 @@ refuse when they are absent, and that is exactly the condition CI is in.
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -301,7 +302,10 @@ class RecordingClassifier:
 
     fitted: list[set[int]] = []
 
-    def __init__(self) -> None:
+    requested: list[str] = []
+
+    def __init__(self, checkpoint: str) -> None:
+        RecordingClassifier.requested.append(checkpoint)
         self.seen: set[int] = set()
         self.labelled: dict[int, int] = {}
 
@@ -394,8 +398,15 @@ def test_scoring_the_same_cohort_twice_gives_the_same_numbers(
 def test_without_the_optional_extra_the_message_names_it(
     monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
 ) -> None:
-    """tabpfn is not installed in the default environment, which is deliberate."""
+    """The extra is absent by design, and this test does not rely on that.
+
+    Asserting an ImportError by simply not installing the package makes the test pass
+    for a reason outside the repository: anyone who runs `uv sync --extra prediction`
+    flips it to red, having changed nothing. Hiding the module makes the condition the
+    test's own.
+    """
     monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    monkeypatch.setitem(sys.modules, "tabpfn", None)
     features, labels = cohort
 
     with pytest.raises(ScoringError, match="--extra prediction"):
@@ -408,6 +419,7 @@ def test_preflight_reports_a_missing_extra_rather_than_blaming_the_licence(
     """ "Your licence is bad" when the real problem is an uninstalled package sends
     someone to the wrong website."""
     monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    monkeypatch.setitem(sys.modules, "tabpfn", None)
 
     with pytest.raises(ScoringError, match="--extra prediction"):
         TabPFNScorer().preflight()
@@ -423,6 +435,9 @@ class WorkingClassifier:
     rows, because it is asking "can the weights load at all", not "what is this
     customer's risk".
     """
+
+    def __init__(self, checkpoint: str) -> None:
+        self.checkpoint = checkpoint
 
     def fit(self, features: pd.DataFrame, labels: pd.Series) -> None:
         assert len(features) == len(labels)
@@ -448,6 +463,9 @@ def test_a_refused_licence_at_load_time_is_reported_as_one(
     monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
 
     class Rejected:
+        def __init__(self, checkpoint: str) -> None:
+            self.checkpoint = checkpoint
+
         def fit(self, features: pd.DataFrame, labels: pd.Series) -> None:
             raise RuntimeError(
                 f"403 Forbidden: licence not accepted (asked about {len(features)} rows, "
@@ -484,3 +502,44 @@ def test_scores_become_a_series_aligned_to_the_cohort() -> None:
     assert list(series.index) == [10, 11, 12]
     assert series.name == "churn_probability"
     assert list(series) == [0.1, 0.9, 0.3]
+
+
+def test_the_checkpoint_is_named_not_inherited() -> None:
+    """`tabpfn` resolves a bare classifier against its own default version, which is
+    the package's to change. `MODEL_VERSION` travels in `experiment_version`, so an
+    upgrade must not be able to make a recorded provenance wrong."""
+    from agentstack.prediction.engine import CHECKPOINT
+
+    assert CHECKPOINT == "v3.5"
+    assert MODEL_VERSION == "tabpfn-3.5"
+    assert f"tabpfn-{CHECKPOINT.removeprefix('v')}" == MODEL_VERSION
+
+
+def test_the_non_commercial_licence_is_recorded_where_it_is_relevant() -> None:
+    """TabPFN-3.5 is open to read and run, not open to ship commercially. This system
+    is built to production shape, so that constrains deploying it as one."""
+    from agentstack.prediction import engine
+
+    assert engine.__doc__ is not None
+    source = Path(engine.__file__).read_text()
+    assert "non-commercial" in source
+
+
+def test_the_scorer_asks_for_the_checkpoint_it_claims_to_use(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    """`MODEL_VERSION` is recorded in every experiment's provenance. This is the test
+    that it describes the checkpoint actually requested, rather than whichever one the
+    package happened to default to."""
+    from agentstack.prediction.engine import CHECKPOINT
+
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    RecordingClassifier.requested = []
+    features, labels = cohort
+
+    TabPFNScorer(folds=4, build_classifier=RecordingClassifier).score(
+        features=features, labels=labels, dataset="d", data_as_of="d:1"
+    )
+
+    assert set(RecordingClassifier.requested) == {CHECKPOINT}
+    assert CHECKPOINT == "v3.5"

@@ -77,18 +77,21 @@ Why these numbers:
   gradients. One violation is a collapsed layer.
 - **High and above** for dependencies: below that is mostly noise.
 
-**Project coverage moved 99% → 98% at T6, deliberately.** Three lines in
-`prediction/engine.py` construct and call `TabPFNClassifier`, and they cannot execute
-anywhere the optional extra and the licence are absent — which is CI, by design. The
+**Three lines in `prediction/engine.py` cannot be covered in CI.** They construct and
+call `TabPFNClassifier`, and they do not execute anywhere the optional extra and the
+licence are absent — which is CI, by design. They are exercised by `tests/live`. The
 alternatives were a `pragma` (banned by the floor), installing torch in CI to raise a
-percentage, or pretending. The lines are covered in `tests/live`, and the ratchet now
-says what is actually true.
+percentage, or pretending.
+
+This briefly took project coverage to 98% at T6; it is back at 99% because the
+checkpoint-pinning work that followed added more tests than uncovered lines. The
+ratchet says what is true today, not what was convenient at the time.
 
 ## Measured, not yet enforced
 
 | Metric | Today | Direction |
 |---|---|---|
-| Project coverage | 98% | must not fall (tolerance 0.5%) |
+| Project coverage | 99% | must not fall (tolerance 0.5%) |
 | Fitness test count | 26 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |

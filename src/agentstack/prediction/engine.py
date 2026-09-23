@@ -35,9 +35,20 @@ from agentstack.prediction.churn import (
 )
 from agentstack.prediction.licence import LicenceRefused, check_token
 
-# Recorded in every experiment's provenance. Pinned rather than read from the package
-# at runtime: "whatever was installed" is not a model version.
-MODEL_VERSION = "tabpfn-3.5"
+# The checkpoint, named explicitly rather than inherited.
+#
+# `tabpfn` picks a version from `settings.model_version` when the classifier is built
+# bare, and that default is the package's to change. `MODEL_VERSION` goes into every
+# experiment's provenance, so taking the default would mean a package upgrade could
+# silently make a recorded version wrong - and an experiment whose provenance names a
+# model it did not use is worse than one with no provenance at all.
+CHECKPOINT = "v3.5"
+MODEL_VERSION = f"tabpfn-{CHECKPOINT.removeprefix('v')}"
+
+# TabPFN-3.5's weights are open under a **non-commercial** licence, accepted once per
+# machine through the Hugging Face gate (see `licence.py`). Open to read and run; not
+# open to ship in a commercial product. This system is built to production shape, so
+# that is a real constraint on deploying it as one and not merely a setup step.
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +60,11 @@ class TabPFNScorer:
     # is the property stopping the targeted cohort from measuring regression to the
     # mean, and it is ours, not TabPFN's. A fake that records which rows it was fit on
     # proves it exactly; a real model would prove it no better and far more slowly.
-    build_classifier: Callable[[], Any] | None = None
+    #
+    # It takes the checkpoint name so that choice is observable too: "this scorer asks
+    # for v3.5" is the claim `MODEL_VERSION` makes in every experiment's provenance,
+    # and a claim worth recording is worth being able to check.
+    build_classifier: Callable[[str], Any] | None = None
     # bank-churn's training folds are 8,000 rows, above the 5,000-sample soft limit
     # that applies outside CUDA. The benchmark set this too; it is a limit on the
     # advertised operating range, not a correctness switch.
@@ -61,7 +76,7 @@ class TabPFNScorer:
 
     def _classifier(self) -> Any:
         if self.build_classifier is not None:
-            return self.build_classifier()
+            return self.build_classifier(CHECKPOINT)
         try:
             from tabpfn import TabPFNClassifier
         except ImportError as exc:
@@ -69,7 +84,14 @@ class TabPFNScorer:
                 "tabpfn is not installed. It is an optional extra because it pulls "
                 "torch: uv sync --extra prediction"
             ) from exc
-        return TabPFNClassifier(
+        # The checkpoint goes in as a string rather than a `tabpfn.constants`
+        # enum member: `ModelVersion` is a str-Enum, so the comparison inside is the
+        # same one either way, and this avoids depending on a submodule that is not
+        # part of the package's documented surface. If the name is ever retired,
+        # `create_default_for_version` raises "Unknown version" - which is the failure
+        # we want, loud at construction rather than a silently different model.
+        return TabPFNClassifier.create_default_for_version(
+            CHECKPOINT,
             random_state=self.seed,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
