@@ -37,6 +37,8 @@ class Surface(Enum):
 
     NONE = "none"
     API = "api"
+    # The experiment registry: where candidates are written and rollouts recorded.
+    REGISTRY = "registry"
     DATABASE = "database"
     BROWSER = "browser"
     SHELL = "shell"

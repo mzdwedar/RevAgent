@@ -183,3 +183,22 @@ def test_the_new_file_scan_skips_what_it_cannot_read_usefully() -> None:
 
     assert ".lock" not in guard.SCANNED_SUFFIXES
     assert ".png" not in guard.SCANNED_SUFFIXES
+
+
+def test_every_file_that_declares_tools_is_watched_for_a_downgrade() -> None:
+    """The check read one hardcoded filename. T13 added a second catalog, and a rollout
+    could have gone from ALWAYS to PRE_COMMIT without the guard saying anything."""
+    guard = _guard()
+    watched = {p.name for p in guard.TOOL_SOURCES}
+
+    assert {"catalog.py", "experiments.py"} <= watched
+    assert "src/agentstack/tools/catalog.py" not in inspect.getsource(guard.state_findings)
+
+
+def test_a_downgrade_is_read_out_of_the_source() -> None:
+    guard = _guard()
+    before = 'ToolSpec(\n  name="roll_out",\n  approval=Approval.ALWAYS,\n)'
+    after = 'ToolSpec(\n  name="roll_out",\n  approval=Approval.PRE_COMMIT,\n)'
+
+    assert guard._tool_approvals(before) == {"roll_out": "ALWAYS"}
+    assert guard._tool_approvals(after) == {"roll_out": "PRE_COMMIT"}

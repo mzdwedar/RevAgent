@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from agentstack.tools.action import ActionRequest
+from agentstack.tools.experiments import DRAFT, ROLLOUT, prepare_draft, prepare_rollout
 from agentstack.tools.registry import Registry
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 
@@ -94,7 +95,17 @@ def _refund(arguments: Mapping[str, Any]) -> ActionRequest:
 
 
 def build_registry() -> Registry:
+    """Every tool this system has, on the stages they belong to.
+
+    The refund pair is the walkthrough: it exists so the stack is runnable end to end
+    and so the layer invariants have something concrete to be asserted against. The
+    experiment pair is what the operator actually does. They are on different stages,
+    so no run is ever shown both - a drafting turn cannot see the rollout tool, and a
+    refund turn cannot see either.
+    """
     registry = Registry()
     registry.register(LOOKUP, _lookup)
     registry.register(REFUND, _refund)
+    registry.register(DRAFT, prepare_draft)
+    registry.register(ROLLOUT, prepare_rollout)
     return registry

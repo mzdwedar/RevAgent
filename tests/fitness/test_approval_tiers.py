@@ -28,46 +28,35 @@ from agentstack.runtime.run import Run
 from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.catalog import LOOKUP, REFUND, _refund
+from agentstack.tools.experiments import DRAFT, prepare_draft
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 
 from .conftest import SCOPES
 
 ARGS = {"tenant": "acme", "customer_id": "c-42", "charge_id": "ch-7", "amount_cents": 1999}
 
-DRAFT = ToolSpec(
-    name="create_experiment_draft",
-    description="Write a candidate experiment into the registry. Reversible: drafts are deleted.",
-    input_schema={
-        "type": "object",
-        "properties": {"tenant": {"type": "string"}, "experiment_id": {"type": "string"}},
-        "required": ["tenant", "experiment_id"],
-    },
-    acts_as=ActsAs.DELEGATED,
-    scope="billing:read",
-    surface=Surface.API,
-    side_effecting=True,
-    reversible=True,
-    approval=Approval.PRE_COMMIT,
-    idempotency=Idempotency.KEY,
-    stages=frozenset({"default"}),
-)
-
 
 def draft_request(tenant: str = "acme") -> ActionRequest:
-    return ActionRequest(
-        tool=DRAFT.name,
-        surface=Surface.API,
-        # Inside the run's allowed prefixes: this exercises the approval tier, and a
-        # containment refusal would stop it before the tier was reached.
-        resource=f"{tenant}/customers/c-42/experiments/exp-7",
-        payload={"experiment_id": "exp-7"},
-        idempotency_key=f"draft:{tenant}:exp-7",
+    """The real tool's own request builder, not a stand-in for it."""
+    return prepare_draft(
+        {
+            "tenant": tenant,
+            "experiment_id": "exp-7",
+            "experiment_version": "exp:abc123",
+            "hypothesis": "a discount retains at-risk customers",
+            "variant": "20-percent-off",
+        }
     )
 
 
-def envelope(stack: Stack, run: Run) -> IdentityEnvelope:
+EXPERIMENT_SCOPES = SCOPES | {"experiments:write", "experiments:rollout"}
+
+
+def envelope(
+    stack: Stack, run: Run, scopes: frozenset[str] = EXPERIMENT_SCOPES
+) -> IdentityEnvelope:
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
-    return envelope_for(view, scopes=SCOPES)
+    return envelope_for(view, scopes=frozenset(scopes))
 
 
 # --- PRE_COMMIT proceeds on policy, with the rule on the record ---
@@ -330,7 +319,6 @@ def test_a_stale_policy_grant_is_refused_like_any_other(stack: Stack, run: Run) 
 
 def test_a_pre_commit_action_is_audited_through_the_gateway(stack: Stack, run: Run) -> None:
     """Criterion 20's other half: it proceeds *and* leaves a record naming the rule."""
-    stack.deps.registry.register(DRAFT, lambda args: draft_request(str(args["tenant"])))
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)
 
     result = stack.deps.gateway.execute(

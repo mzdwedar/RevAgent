@@ -404,17 +404,30 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
   - Ratchets: fitness tests 29 → 30; project coverage 99% → 98% (two lines constructing
     the real Ollama client, exercised in `tests/live`).
 
-- [ ] **T13 — Candidate drafting tool and registry surface** · layers 6, 7 · *M*
-  - **Also carries the Checkpoint C wiring** (decided after C): connect trigger → score
-    → target → draft, filling the evaluator seam `runtime.cycles.evaluate` takes. T13 is
-    where it belongs because it is the first task that needs a cohort to draft from.
-  - Acceptance: replace the placeholder catalog with `create_experiment_draft`
-    (side-effecting, reversible, `PRE_COMMIT`) and `roll_out_variant_to_percentage`
-    (irreversible, `ALWAYS`, carrying the cohort predicate). Registry client lives in
-    `execution/surfaces.py` and nowhere else.
+- [x] **T13 — Candidate drafting tool and registry surface** · layers 6, 7 · *M*
+  - Acceptance: `create_experiment_draft` (side-effecting, reversible, `PRE_COMMIT`) and
+    `roll_out_variant_to_percentage` (irreversible, `ALWAYS`, carrying the cohort
+    predicate). Registry client in `execution/surfaces.py` and nowhere else.
   - Verify: criterion 19 — a proposal with a missing field, wrong type, extra argument
-    or unexposed tool is refused before the registry is touched.
-  - Depends: T11, T12, T7. Files: ~5.
+    or unexposed tool is refused before the registry is touched. 23 tests.
+  - **Also carried the Checkpoint C wiring**, now done: `runtime/operator.py` fills the
+    evaluator seam — trigger → load snapshot → score → target → frozen cohort or a
+    recorded reason. 11 tests.
+  - **Deviation:** the plan said "replace the placeholder catalog". The refund pair is
+    kept and the experiment pair added on its own stage. Those two tools are the CLI
+    walkthrough and ~20 fitness tests proving layer invariants; deleting them destroys
+    working evidence for no gain, and separate stages are the exposure filter doing
+    exactly its job — a drafting run is never shown the rollout tool.
+  - The wiring **stops before drafting**. Drafting is the model's job and happens in a
+    turn through the exposure filter, policy and the gateway; this produces the cohort a
+    draft is written *about*, because the point of deterministic targeting is that no
+    model gets a say in who enters the experiment.
+  - Idempotency keys are the identity of the effect: the rollout percentage is in the
+    key, so 10% and 25% are two effects and widening a rollout cannot be swallowed as a
+    retry of the first.
+  - **Found another guard gap:** the approval-downgrade check read one hardcoded
+    filename, so `experiments.py` was unwatched — a rollout could go `ALWAYS` →
+    `PRE_COMMIT` silently. It now watches every file under `tools/`.
 
 ### ✅ Checkpoint D — untrusted model output reaches a real side effect safely
 - [ ] A model-drafted candidate is validated, policy-checked and written

@@ -35,6 +35,10 @@ SKIPS = re.compile(r"@pytest\.mark\.(skip|xfail)|pytest\.skip\(|@unittest\.skip"
 # Scanning either for those patterns only ever finds the definition. CONSTRAINTS.md is
 # still fully checked by `state_findings` - floor bullets, enforced rows, exceptions -
 # which is where a real weakening of it would show up.
+# Everywhere a ToolSpec is declared. A tier downgrade in any of them is a Part 7
+# finding, and hardcoding one filename meant the next catalog was unguarded.
+TOOL_SOURCES = tuple(sorted((ROOT / "src" / "agentstack" / "tools").glob("*.py")))
+
 NAMES_THE_PATTERNS = (
     "scripts/stack_guard.py",
     "CONSTRAINTS.md",
@@ -239,19 +243,20 @@ def state_findings(base: str | None) -> list[Finding]:
                 Finding(".importlinter", f"layer contract removed: {sorted(lost)}", "Part 1")
             )
 
-    before = _file_at(base, "src/agentstack/tools/catalog.py")
-    if before is not None:
-        rank = {"NONE": 0, "PRE_COMMIT": 1, "ALWAYS": 2}
+    # Every file that declares tools, not just the first one there was. T13 added
+    # `experiments.py`, and until this was a glob a rollout could be downgraded from
+    # ALWAYS to PRE_COMMIT without the guard saying anything.
+    rank = {"NONE": 0, "PRE_COMMIT": 1, "ALWAYS": 2}
+    for path in sorted(p.relative_to(ROOT).as_posix() for p in TOOL_SOURCES):
+        before = _file_at(base, path)
+        if before is None:
+            continue
         old = _tool_approvals(before)
-        new = _tool_approvals(_current("src/agentstack/tools/catalog.py"))
+        new = _tool_approvals(_current(path))
         for tool, tier in new.items():
             if tool in old and rank.get(tier, 0) < rank.get(old[tool], 0):
                 found.append(
-                    Finding(
-                        "src/agentstack/tools/catalog.py",
-                        f"{tool}: approval downgraded {old[tool]} -> {tier}",
-                        "Part 7",
-                    )
+                    Finding(path, f"{tool}: approval downgraded {old[tool]} -> {tier}", "Part 7")
                 )
 
     before = _file_at(base, "CONSTRAINTS.md")

@@ -90,3 +90,39 @@ class Sandbox:
             raise SandboxViolation(f"{resource} is outside this run's allowed resources")
         if not resource.startswith(f"{self.tenant}/"):
             raise SandboxViolation(f"{resource} crosses the tenant boundary")
+
+
+@dataclass(slots=True)
+class RegistryClient:
+    """The experiment registry, in process.
+
+    A fake for iteration 1, and named as one. It keeps drafts and rollouts so a test can
+    ask what actually reached the surface, which is the question every effect invariant
+    in this repository is really asking.
+
+    What it deliberately does not do is validate. A surface that rejected a malformed
+    draft would make the schema validator look unnecessary, and the point of criterion
+    19 is that nothing malformed gets this far.
+    """
+
+    drafts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    rollouts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    reads: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # Apply the effect and then lose the answer: the failure two-phase idempotency
+    # exists for. Same switch as RecordingClient, for the same reason.
+    fail_after_effect: bool = False
+
+    def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
+        self.reads.append((resource, dict(query)))
+        return dict(self.drafts.get(resource, {}))
+
+    def commit(self, resource: str, payload: dict[str, Any]) -> str:
+        if resource.endswith("/rollout"):
+            self.rollouts.append((resource, dict(payload)))
+            receipt = f"rollout-{len(self.rollouts)}"
+        else:
+            self.drafts[resource] = dict(payload)
+            receipt = f"draft-{len(self.drafts)}"
+        if self.fail_after_effect:
+            raise SurfaceTimeout(f"{resource} applied, answer lost")
+        return receipt

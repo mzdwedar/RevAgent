@@ -19,7 +19,7 @@ from agentstack.control_plane.session import SessionView
 from agentstack.control_plane.stores import SessionStore, TranscriptStore, WorkingStateStore
 from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
-from agentstack.execution.surfaces import RecordingClient, Sandbox
+from agentstack.execution.surfaces import RecordingClient, RegistryClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.model.engine import EchoEngine
 from agentstack.observability.audit import AuditSink
@@ -59,6 +59,7 @@ class Stack:
     steps: StepLedger
     waits: WaitStore
     client: RecordingClient
+    registry_client: RegistryClient
     deps: TurnDeps
 
 
@@ -87,16 +88,17 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     waits = WaitStore(db=db)
     runs = RunStore(db=db)
     client = RecordingClient()
+    registry_client = RegistryClient()
 
     gateway = Gateway(
-        surfaces={Surface.API: client},
+        surfaces={Surface.API: client, Surface.REGISTRY: registry_client},
         ledger=ledger,
         approvals=approvals,
         audit=audit,
         sandbox=Sandbox(
             tenant=tenant,
-            allowed_surfaces=frozenset({Surface.API}),
-            allowed_resource_prefixes=frozenset({f"{tenant}/customers/"}),
+            allowed_surfaces=frozenset({Surface.API, Surface.REGISTRY}),
+            allowed_resource_prefixes=frozenset({f"{tenant}/customers/", f"{tenant}/experiments/"}),
         ),
     )
 
@@ -139,6 +141,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
         steps=steps,
         waits=waits,
         client=client,
+        registry_client=registry_client,
         deps=deps,
     )
 
