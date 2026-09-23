@@ -465,12 +465,33 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
   - **Coverage caught dead code:** `_message_id` was defined and never called — a
     `ruff format` reflow had made my edit miss, leaving the inline version in place.
 
-- [ ] **T15 — Slack inbound and transport authentication** · layer 1 · *M*
+- [x] **T15 — Slack inbound and transport authentication** · layer 1 · *M*
   - Acceptance: signature over the raw body, timestamp freshness, replay rejection. The
     adapter passes the user id onward as a **claim** and decides nothing with it.
   - Verify: criterion 24 — bad signature, stale timestamp and replayed body each
-    refused before any policy runs.
+    refused before any policy runs. 34 tests.
   - Depends: T14. Files: ~3.
+  - **Three checks, each catching what the others cannot.** A signature proves the
+    bytes came from Slack; freshness proves they are recent; the replay guard proves
+    this is the first time. The second copy of an "Approve" is not a second decision.
+  - **Order is load-bearing.** Freshness first (cheap, drops stale floods without
+    hashing), signature second, **replay last** — recording an unverified signature
+    would let anyone fill the table by posting garbage, turning a defence into a
+    denial-of-service surface. A test asserts a forged signature is never recorded.
+  - Verification strictly precedes parsing: parsing first would mean acting on the
+    shape of bytes nobody authenticated.
+  - The replay guard is in Postgres (`migrations/0007`), not a per-process set: a
+    replay landing on a different worker is exactly the case it exists for.
+  - **A contract collision worth recording.** `lint-imports` forbids `urllib` to layer
+    1, and `urllib.parse.parse_qs` tripped it. The rule means "no network client", but
+    import-linter rejects `urllib.request` as a forbidden module ("subpackages of
+    external packages are not valid"), so it cannot be written narrowly. Widening it to
+    admit a URL *parser* would weaken a real constraint for a tooling limitation, so
+    the form decoding is ten hand-rolled lines instead — tested against `urllib` itself
+    in a file where importing it is allowed.
+  - `MalformedCallback` is deliberately **not** a `CallbackRefused`:
+    authentic-but-unintelligible and forged are different problems, and collapsing them
+    loses the distinction in the audit trail.
 
 - [ ] **T16 — Approver authorisation** · layer 8 · *S*
   - Acceptance: approver-group membership checked in policy, scoped to the acting

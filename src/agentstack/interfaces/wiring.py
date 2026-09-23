@@ -22,6 +22,7 @@ from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import RecordingClient, RegistryClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.slack import Notifier, RecordingNotifier
+from agentstack.interfaces.slack_callback import ReplayGuard
 from agentstack.model.engine import EchoEngine
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import VersionStamp
@@ -65,6 +66,9 @@ class Stack:
     # test must not post to a real channel, and one built for the walkthrough has
     # no workspace to post to.
     notifier: Notifier
+    # Transport-level deduplication for Slack callbacks. In Postgres, because a
+    # replay landing on a different worker is the case it exists for.
+    replay_guard: ReplayGuard
     deps: TurnDeps
 
 
@@ -95,6 +99,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     client = RecordingClient()
     registry_client = RegistryClient()
     notifier = RecordingNotifier()
+    replay_guard = ReplayGuard(db=db)
 
     gateway = Gateway(
         surfaces={Surface.API: client, Surface.REGISTRY: registry_client},
@@ -149,6 +154,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
         client=client,
         registry_client=registry_client,
         notifier=notifier,
+        replay_guard=replay_guard,
         deps=deps,
     )
 
