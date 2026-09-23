@@ -51,6 +51,10 @@ Stack-specific (from `STACK.md`):
 - No side effect committed without a claimed idempotency key, and no blind retry
   of a claim that was never settled
 - No run advancing past an unsatisfied wait
+- No human-approval wait that does not record what it is asking about — the process
+  that answers is not the one that asked
+- No approval bound to a fingerprint recomputed at answer time: it binds the one the
+  wait recorded, or it approves something other than what was shown
 - No graph node advancing a run whose checkpoint names a different run
 - No `metric_movement` trigger reaching a propose — looking is not deciding, and a
   look that can also advance an experiment is an optional-stopping machine
@@ -104,6 +108,7 @@ Stack-specific (from `STACK.md`):
 | Approval legibility | The prompt names a headcount, not a percentage | `uv run pytest tests/fitness/test_slack_outbound.py` | every edit |
 | Callback authenticity | Bad signature, stale timestamp and replay each refused before any policy | `uv run pytest tests/fitness/test_slack_inbound.py` | every edit |
 | Approver authorisation | A signed interaction from an outsider is refused in layer 8, not the adapter | `uv run pytest tests/fitness/test_approver_authorisation.py` | every edit |
+| Approve to rollout | A human's answer grants a bound approval, satisfies the wait, and the rollout commits once — across a process death | `uv run pytest tests/fitness/test_approve_resume_rollout.py tests/durability` | task end, CI |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -131,7 +136,7 @@ landed.
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 35 | must not fall |
+| Fitness test count | 36 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

@@ -115,6 +115,30 @@ class ApprovalStore:
             )
         if not approver.strip():
             raise ValueError("an approval needs a named approver")
+        return self.grant_for_fingerprint(
+            run_id=run_id,
+            action_fingerprint=request.fingerprint(),
+            state_snapshot=state_snapshot,
+            approver=approver,
+            summary=summary,
+        )
+
+    def grant_for_fingerprint(
+        self,
+        *,
+        run_id: str,
+        action_fingerprint: str,
+        state_snapshot: str,
+        approver: str,
+        summary: str,
+    ) -> ApprovalRecord:
+        """Grant against a fingerprint computed elsewhere.
+
+        The Slack path needs this. The process that prepared the action recorded its
+        fingerprint on the wait; the process handling the click an hour later has no
+        `ActionRequest` to ask, and re-deriving one would mean approving whatever *this*
+        process computes rather than what the approver was actually shown.
+        """
         row = self.db.fetch_one(
             "INSERT INTO approvals"
             " (id, run_id, action_fingerprint, state_snapshot, approver, granted_at, summary)"
@@ -122,7 +146,7 @@ class ApprovalStore:
             (
                 str(uuid.uuid4()),
                 run_id,
-                request.fingerprint(),
+                action_fingerprint,
                 state_snapshot,
                 approver,
                 datetime.now(UTC),

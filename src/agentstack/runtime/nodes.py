@@ -224,14 +224,7 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 receipts.append(str(slot[0]))
                 committed_against.setdefault(request.resource, []).append(str(slot[0]))
         except (ApprovalRequired, ApprovalStale) as exc:
-            wait = deps.waits.park(
-                run_id=run.run_id, kind="human_approval", state_snapshot=state_snapshot
-            )
-            with tracer.span("response", status="awaiting_approval", wait=wait.wait_id):
-                pass
-            ctx.carried["pending_wait"] = wait
-            ctx.carried["pending_request"] = request
-            ctx.carried["approval_summary"] = ApprovalPrompt(
+            summary = ApprovalPrompt(
                 spec=spec,
                 resource=request.resource,
                 payload=request.payload,
@@ -240,6 +233,20 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 requested_by=run.user,
                 channel=run.channel,
             ).render()
+            wait = deps.waits.park(
+                run_id=run.run_id,
+                kind="human_approval",
+                state_snapshot=state_snapshot,
+                # What the wait is about, recorded now because the process that
+                # handles the answer may not be this one.
+                action_fingerprint=request.fingerprint(),
+                approval_summary=summary,
+            )
+            with tracer.span("response", status="awaiting_approval", wait=wait.wait_id):
+                pass
+            ctx.carried["pending_wait"] = wait
+            ctx.carried["pending_request"] = request
+            ctx.carried["approval_summary"] = summary
             return {
                 "status": "awaiting_approval",
                 "text": str(exc),

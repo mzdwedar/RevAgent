@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from agentstack.policy.approvers import ApprovalReply
 from agentstack.storage.database import Database
 
 SECRET_VARIABLE = "SLACK_SIGNING_SECRET"
@@ -59,23 +60,6 @@ class ReplayedDelivery(CallbackRefused):
 
 class MalformedCallback(ValueError):
     """Authentic, and not an interaction this system understands."""
-
-
-@dataclass(frozen=True, slots=True)
-class ApprovalReply:
-    """A human's answer, bound to what was asked.
-
-    `slack_user_id` is a **claim**: the adapter read it, nothing has checked whether
-    this person may approve anything. Layer 8 does that.
-    """
-
-    run_id: str
-    wait_id: str
-    experiment_version: str
-    data_as_of: str
-    approved: bool
-    slack_user_id: str
-    channel: str
 
 
 def signing_secret(env: dict[str, str] | None = None) -> str:

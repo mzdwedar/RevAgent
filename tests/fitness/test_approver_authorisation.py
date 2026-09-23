@@ -203,12 +203,19 @@ def test_the_principal_survives_a_recycled_slack_id(directory: ApproverDirectory
 # --- the layer boundary itself ---
 
 
-def test_the_adapter_does_not_import_the_directory() -> None:
-    """Criterion 25 is about *where* the decision is made, so the layers stay apart."""
+def test_the_adapter_does_not_authorise_anyone() -> None:
+    """Criterion 25 is about *where* the decision is made.
+
+    The adapter names `policy.approvers` because `ApprovalReply` lives there - contract
+    4 forbids the runtime importing the channel layer, so the reply had to move down.
+    What it must not do is consult the directory or call the authorisation, which is
+    what this checks rather than the mere mention of a module name.
+    """
     source = inspect.getsource(slack_callback)
 
-    assert "approvers" not in source
     assert "ApproverDirectory" not in source
+    assert "authorize_approver" not in source
+    assert "ApprovalReply" in source, "it still builds one; it just does not judge it"
 
 
 def test_the_directory_knows_nothing_about_slack_signatures() -> None:

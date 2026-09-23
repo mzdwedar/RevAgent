@@ -15,10 +15,25 @@ import pytest
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.runtime.run import Run
-from agentstack.runtime.waits import ResumeEvent, ResumeRejected, resume
+from agentstack.runtime.waits import ResumeEvent, ResumeRejected, Wait, resume
 from agentstack.storage.database import Database, IntegrityViolation
 
 from .conftest import SCOPES, TENANT
+
+
+def park_approval(stack: Stack, run: Run, state_snapshot: str = "fp-1") -> Wait:
+    """An approval wait names the action it is about; the database insists.
+
+    The process that parks it holds the request in memory and the one that answers an
+    hour later does not, so what is being approved has to be on the row.
+    """
+    return stack.waits.park(
+        run_id=run.run_id,
+        kind="human_approval",
+        state_snapshot=state_snapshot,
+        action_fingerprint="fp-action-1",
+        approval_summary="roll_out_variant_to_percentage — IRREVERSIBLE",
+    )
 
 
 def test_a_paused_run_leaves_a_persisted_wait(stack: Stack, event: InboundEvent, run: Run) -> None:
@@ -31,7 +46,7 @@ def test_a_paused_run_leaves_a_persisted_wait(stack: Stack, event: InboundEvent,
 
 
 def test_a_resume_event_must_identify_run_wait_and_state(stack: Stack, run: Run) -> None:
-    wait = stack.waits.park(run_id=run.run_id, kind="human_approval", state_snapshot="fp-1")
+    wait = park_approval(stack, run)
 
     with pytest.raises(ResumeRejected, match="different run"):
         resume(stack.waits, ResumeEvent("run-other", wait.wait_id, "fp-1", {}))
@@ -56,7 +71,7 @@ def test_a_wait_outlives_the_process_that_parked_it(
     stack: Stack, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """The property the word "persisted" was claiming before T3."""
-    wait = stack.waits.park(run_id=run.run_id, kind="human_approval", state_snapshot="fp-1")
+    wait = park_approval(stack, run)
 
     restarted = build_stack(app_database, checkpointer, tenant=TENANT)
     pending = restarted.waits.pending_for(run.run_id)
@@ -70,7 +85,7 @@ def test_what_satisfied_the_wait_is_readable_afterwards(
     stack: Stack, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """The resume payload is the audit trail of why the run continued."""
-    wait = stack.waits.park(run_id=run.run_id, kind="human_approval", state_snapshot="fp-1")
+    wait = park_approval(stack, run)
     resume(
         stack.waits,
         ResumeEvent(run.run_id, wait.wait_id, "fp-1", {"approved_by": "finance-oncall"}),
@@ -97,7 +112,7 @@ def test_two_resumes_arriving_together_produce_one_winner(stack: Stack, run: Run
     `resume` and both are told they resumed the run, which is two different people
     each believing they are the reason it continued.
     """
-    wait = stack.waits.park(run_id=run.run_id, kind="human_approval", state_snapshot="fp-1")
+    wait = park_approval(stack, run)
     outcomes: list[object] = []
     barrier = threading.Barrier(2)
 

@@ -29,6 +29,7 @@ from agentstack.observability.spans import VersionStamp
 from agentstack.policy.approval import ApprovalStore
 from agentstack.policy.approvers import ApproverDirectory
 from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.runtime.approvals import ApprovalCoordinator
 from agentstack.runtime.graph import build_turn_graph
 from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
 from agentstack.runtime.run import Run, RunStore, new_run
@@ -72,6 +73,9 @@ class Stack:
     replay_guard: ReplayGuard
     # Who may approve, per tenant. Consulted in layer 8, never in the adapter.
     approver_directory: ApproverDirectory
+    # Turns a human's answer into an approval the gateway will accept. Commits
+    # nothing itself: the next turn does, through the gateway.
+    coordinator: ApprovalCoordinator
     deps: TurnDeps
 
 
@@ -104,6 +108,9 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     notifier = RecordingNotifier()
     replay_guard = ReplayGuard(db=db)
     approvers = ApproverDirectory(db=db)
+    coordinator = ApprovalCoordinator(
+        runs=runs, waits=waits, approvals=approvals, directory=approvers
+    )
 
     gateway = Gateway(
         surfaces={Surface.API: client, Surface.REGISTRY: registry_client},
@@ -160,6 +167,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
         notifier=notifier,
         replay_guard=replay_guard,
         approver_directory=approvers,
+        coordinator=coordinator,
         deps=deps,
     )
 

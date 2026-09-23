@@ -33,6 +33,12 @@ class Wait:
     # continues: through the wait that was satisfied, not out of a store the runtime
     # could have consulted without anyone resuming anything.
     payload: dict[str, Any] = field(default_factory=dict)
+    # What a human approval wait is *about*. The process that parks the wait holds the
+    # prepared request and the rendered prompt in memory; the one that handles the
+    # answer an hour later holds neither, and cannot bind an approval to a fingerprint
+    # it never computed.
+    action_fingerprint: str | None = None
+    approval_summary: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,18 +49,38 @@ class ResumeEvent:
     payload: dict[str, Any]
 
 
-_COLUMNS = "wait_id, run_id, kind, state_snapshot, created_at, satisfied, payload"
+_COLUMNS = (
+    "wait_id, run_id, kind, state_snapshot, created_at, satisfied, payload, "
+    "action_fingerprint, approval_summary"
+)
 
 
 @dataclass(frozen=True, slots=True)
 class WaitStore:
     db: Database
 
-    def park(self, *, run_id: str, kind: str, state_snapshot: str) -> Wait:
+    def park(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        state_snapshot: str,
+        action_fingerprint: str | None = None,
+        approval_summary: str | None = None,
+    ) -> Wait:
         row = self.db.fetch_one(
-            "INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at)"
-            f" VALUES (%s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
-            (f"wait-{uuid.uuid4()}", run_id, kind, state_snapshot, datetime.now(UTC)),
+            "INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at,"
+            "  action_fingerprint, approval_summary)"
+            f" VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+            (
+                f"wait-{uuid.uuid4()}",
+                run_id,
+                kind,
+                state_snapshot,
+                datetime.now(UTC),
+                action_fingerprint,
+                approval_summary,
+            ),
         )
         assert row is not None  # RETURNING on a successful insert always yields a row
         return Wait(*row)

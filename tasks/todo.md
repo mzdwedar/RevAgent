@@ -513,13 +513,31 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
   - Two tests hold the layer boundary from both sides: the adapter does not import the
     directory, and the directory contains no transport vocabulary.
 
-- [ ] **T17 — Approve → resume → roll out** · layers 3, 7 · *M*
+- [x] **T17 — Approve → resume → roll out** · layers 3, 7 · *M*
   - Acceptance: a Slack approval grants an `ApprovalRecord` bound to
-    `(run_id, fingerprint, experiment_version, data_as_of)`, satisfies the wait, and the
-    rollout commits exactly once through the gateway against the fake surface.
-  - Verify: criterion 23 — the full path, with the process killed while parked and
-    restarted before the human answers.
+    `(run_id, fingerprint, experiment_version, data_as_of)`, satisfies the wait, and
+    the rollout commits exactly once through the gateway.
+  - Verify: criterion 23 — the full path with the process killed while parked. 11
+    fitness tests + 4 in `tests/durability/test_approve_after_death.py`.
   - Depends: T16, T10. Files: ~4.
+  - **The binding was already structural.** `ActionRequest.fingerprint()` covers the
+    payload, and T13 made `experiment_version`, `targeting_model_version` and
+    `risk_threshold` required rollout arguments — so a different frozen cohort is a
+    different payload, a different fingerprint, and an approval that simply does not
+    match. Criterion 5 needed no new machinery, only the observation.
+  - **The real gap only appears across a process death.** The process that parked the
+    wait held the prepared request and the rendered prompt in memory; the process
+    handling the click an hour later holds neither, and cannot bind an approval to a
+    fingerprint it never computed. `migrations/0009` puts both on the wait, with a
+    CHECK that an approval wait has them.
+  - `grant_for_fingerprint` exists so the answer path binds the fingerprint the wait
+    **recorded**, never one recomputed at answer time — recomputing would approve
+    whatever *that* process derives rather than what the approver was shown.
+  - The coordinator **commits nothing**. The next turn does, through the gateway, which
+    keeps the commit on the one path with idempotency, containment and an audit record.
+  - **Contract 4 caught the same design error as T9:** `runtime` cannot import the
+    channel layer, so `ApprovalReply` moved to `policy/approvers.py` beside the code
+    that authorises its claim. It carries no tenant — that comes from the run.
 
 ### ✅ Checkpoint E — the end-to-end path runs
 - [ ] Trigger → score → target → draft → registry → Slack → approve → rollout

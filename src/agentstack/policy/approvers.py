@@ -26,6 +26,31 @@ from agentstack.storage.database import Database
 _COLUMNS = "tenant, slack_user_id, principal, added_at, added_by"
 
 
+@dataclass(frozen=True, slots=True)
+class ApprovalReply:
+    """A human's answer, bound to what was asked.
+
+    It lives here rather than in `agentstack.interfaces`, where it is parsed, because
+    the runtime has to consume one and contract 4 says nothing imports the channel
+    layer - the same reason `TriggerEvent` moved at T9.
+
+    `slack_user_id` is a **claim**: the adapter read it off a payload and nothing has
+    checked whether this person may approve anything. `authorize_approver` below is
+    what turns it into a principal.
+
+    Note what is absent: a tenant. The tenant comes from the run this is bound to, and
+    a field here would be something to be tempted by.
+    """
+
+    run_id: str
+    wait_id: str
+    experiment_version: str
+    data_as_of: str
+    approved: bool
+    slack_user_id: str
+    channel: str
+
+
 class ApproverNotAuthorized(PermissionError):
     """This person has no standing to approve this tenant's actions."""
 

@@ -25,3 +25,4 @@ tables are created and versioned by `PostgresSaver.setup()` rather than from her
 `0006` records whether an approval came from a person or from a rule, and which rule.
 `0007` remembers which Slack deliveries were accepted, so a replay is refused.
 `0008` is the approver group, per tenant, with who added each member.
+`0009` lets an approval wait record what it is asking about, for the process that answers.
