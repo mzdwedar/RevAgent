@@ -93,3 +93,16 @@ def test_every_layer_directory_is_declared_in_the_ledger() -> None:
     packages = {p.name for p in SRC.iterdir() if p.is_dir() and not p.name.startswith("_")}
     missing = {p for p in packages if f"agentstack.{p}" not in ledger}
     assert not missing, f"layers not recorded in STACK.md: {sorted(missing)}"
+
+
+def test_the_readme_counts_match_what_is_actually_here() -> None:
+    """The README claimed 22 fitness tests and nine layers while there were 26 and
+    eleven. A count in prose is a fact with no verdict attached, so here is the verdict."""
+    root = SRC.parents[1]
+    readme = (root / "README.md").read_text()
+
+    fitness = len(list((root / "tests" / "fitness").glob("test_*.py")))
+    packages = len([p for p in SRC.iterdir() if p.is_dir() and not p.name.startswith("_")])
+
+    assert f"{fitness} tests" in readme, f"README does not say there are {fitness} fitness tests"
+    assert f"{packages} packages" in readme, f"README does not say there are {packages} packages"

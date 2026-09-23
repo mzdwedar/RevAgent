@@ -15,10 +15,40 @@ Prose describing those boundaries survives until the next agent is in a hurry. S
 each one is a layer with an owner (`STACK.md`), a number in the bar (`CONSTRAINTS.md`),
 and a test that fails when the boundary is collapsed (`tests/fitness/`).
 
+## Licensing, before anything else
+
+**The churn model at the centre of this system is licensed for non-commercial use.**
+
+This repository declares no licence of its own yet. What it does depend on is settled:
+`agentstack.prediction` scores churn with PriorLabs' **TabPFN-3.5**, whose weights are
+open for **non-commercial use only**. Using them means accepting that licence once per
+machine, through a gated Hugging Face repository:
+
+1. Register at <https://ux.priorlabs.ai> and accept the licence on the **Licenses** tab
+2. Copy the API key from <https://ux.priorlabs.ai/account>
+3. `export TABPFN_TOKEN="<your-api-key>"`
+
+**What this means in practice.** Everything here is shaped like a production system —
+durable runtime, multi-tenant, side-effecting, approval-gated — and the model at the
+centre of it cannot be shipped in a commercial product under this licence. That is a
+real constraint, not a setup step, and it is stated here rather than discovered during
+a launch review.
+
+If you need a commercial path, the checkpoint is one constant:
+`CHECKPOINT` in `src/agentstack/prediction/engine.py`. `tabpfn` 9.x gates v2.5, v2.6,
+v3, v3.5 and v3.5-fast; **v2 is ungated** and needs no acceptance step at all. Whether
+v2's own terms suit your use is a question for its licence — this note records only
+that it does not require the gate above.
+
+The checkpoint is named explicitly rather than inherited from the package default,
+because the model version travels in every experiment's `experiment_version` and a
+silent upgrade would make recorded provenance wrong.
+
 ## See it run
 
 ```bash
 uv sync
+bash scripts/dev_up.sh        # Postgres via docker compose, then migrations
 uv run agentstack
 ```
 
@@ -49,8 +79,11 @@ failure, so the loop fails closed whether or not anyone remembers to run them.
 | `CLAUDE.md` / `AGENTS.md` | what an agent must read before writing code here |
 | `docs/spec-template.md` | six core areas plus the three Agent Stack sections |
 | `docs/adr/` | one ADR per boundary decision |
-| `src/agentstack/` | nine layers, dependency direction enforced by `.importlinter` |
-| `tests/fitness/` | 22 tests, one per collapsed-boundary failure mode |
+| `src/agentstack/` | 11 packages across the ten layers, dependency direction enforced by five `.importlinter` contracts |
+| `migrations/` | versioned SQL; an applied migration is immutable, a version gap is refused |
+| `experiments/` | targeting thresholds, versioned — change a number here, not in code |
+| `tests/fitness/` | 26 tests, one per collapsed-boundary failure mode |
+| `tests/live/` | checks needing real datasets or the model; excluded from CI, declared in `CONSTRAINTS.md` |
 | `evals/` | release gates that judge the path, not just the answer |
 | `scripts/` | the three check stages and the bar guard |
 | `.claude/` | hooks, the `agent-stack-auditor` subagent, and `/spec` `/plan` `/stack-audit` |
@@ -67,7 +100,16 @@ whether a memory should exist at all.
 
 ## What is deliberately unfinished
 
-The in-memory stores in `control_plane`, `runtime` and `context` are reference
-implementations. The durable-execution backend is an open decision
-(`docs/adr/0002`); the fitness tests assert the invariants rather than a vendor, so
-whichever backend wins has to satisfy them rather than replace them.
+- **`context.MemoryStore` and `MaintenanceQueue` are still process-local.** Layers 2,
+  3, 7, 8 and 9 are on Postgres; layer 5's memory never got a durability task. Found by
+  auditing the stores at Checkpoint A rather than by trusting the task list, and
+  recorded in `tasks/todo.md` instead of quietly left.
+- **No recorded TabPFN scores yet** (`data/scores/`). Producing them needs the licence
+  above. Everything around them — the gate, the fold assignment, the cross-fitting, the
+  replay guards — is built and tested without it.
+- **LangGraph is not wired in.** The `Wait` / `ResumeEvent` / `StepLedger` semantics are
+  the contract and are already durable; `docs/adr/0002` records the backend decision and
+  the fitness tests assert the invariants rather than a vendor, so whichever runtime runs
+  them has to satisfy them rather than replace them.
+- **Credential storage and PII retention** are named debts, not oversights.
+  `DATABASE_URL` and `TABPFN_TOKEN` are environment variables today.

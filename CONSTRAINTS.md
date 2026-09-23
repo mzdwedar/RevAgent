@@ -40,6 +40,8 @@ Stack-specific (from `STACK.md`):
 - No churn score taken in sample — every row is scored by a model that did not see
   its label, or the top decile is the rows the model fit best
 - No scorer decides who gets an offer; it returns a probability and policy does the rest
+- No README claim that nothing checks: the licence constraint and the counts it
+  states are asserted by `tests/fitness/`
 - No cohort widened to meet a gate — a cut that is adjusted until it qualifies is
   not a cut; refuse and say which gate stopped it
 - No value at risk from a modelled quantity: the floor is observed ARPU, and a

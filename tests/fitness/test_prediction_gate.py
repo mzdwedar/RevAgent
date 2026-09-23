@@ -29,6 +29,7 @@ from agentstack.prediction.engine import MODEL_VERSION, TabPFNScorer, _encode
 from agentstack.prediction.licence import LicenceRefused
 
 GOOD_TOKEN = "prior-labs-key-0123456789"
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_a_missing_token_is_refused_and_says_how_to_get_one() -> None:
@@ -543,3 +544,20 @@ def test_the_scorer_asks_for_the_checkpoint_it_claims_to_use(
 
     assert set(RecordingClassifier.requested) == {CHECKPOINT}
     assert CHECKPOINT == "v3.5"
+
+
+def test_the_readme_leads_with_the_non_commercial_constraint() -> None:
+    """A licence that forbids the use this system is shaped for is not a footnote.
+
+    Tested because it is prose, and prose is what gets trimmed when someone is tidying
+    up. It has to survive, and it has to stay above the setup instructions - a reader
+    who has already run `uv sync` has stopped reading.
+    """
+    readme = (ROOT / "README.md").read_text()
+
+    assert "non-commercial" in readme
+    assert readme.index("non-commercial") < readme.index("## See it run"), (
+        "the licence constraint has drifted below the setup steps"
+    )
+    assert "ux.priorlabs.ai" in readme
+    assert "cannot be shipped in a commercial product" in readme
