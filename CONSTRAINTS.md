@@ -31,6 +31,9 @@ Stack-specific (from `STACK.md`):
 - No interaction accepted without signature, freshness **and** replay checks — a
   signature proves a payload is authentic, never that it arrived once
 - No payload parsed before it is verified, and no unverified signature recorded
+- No approver authorised against a tenant the interaction named: the tenant comes
+  from the run the approval is bound to, or two correct checks compose into a hole
+- No approval standing without a row somebody added, and a record of who added it
 - No notification failure swallowed — a run parked on a question nobody received
   waits forever, and looks exactly like waiting patiently
 - No tool exposed on a stage it does not belong to: drafting and rolling out are
@@ -100,6 +103,7 @@ Stack-specific (from `STACK.md`):
 | Candidate validation | A malformed, over-specified or unexposed proposal is refused before the registry is touched | `uv run pytest tests/fitness/test_experiment_tools.py` | every edit |
 | Approval legibility | The prompt names a headcount, not a percentage | `uv run pytest tests/fitness/test_slack_outbound.py` | every edit |
 | Callback authenticity | Bad signature, stale timestamp and replay each refused before any policy | `uv run pytest tests/fitness/test_slack_inbound.py` | every edit |
+| Approver authorisation | A signed interaction from an outsider is refused in layer 8, not the adapter | `uv run pytest tests/fitness/test_approver_authorisation.py` | every edit |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -127,7 +131,7 @@ landed.
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 34 | must not fall |
+| Fitness test count | 35 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

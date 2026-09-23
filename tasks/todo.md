@@ -493,12 +493,25 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
     authentic-but-unintelligible and forged are different problems, and collapsing them
     loses the distinction in the audit trail.
 
-- [ ] **T16 — Approver authorisation** · layer 8 · *S*
+- [x] **T16 — Approver authorisation** · layer 8 · *S*
   - Acceptance: approver-group membership checked in policy, scoped to the acting
     tenant. Tenant A's rollout is not approvable by tenant B's people.
   - Verify: criterion 25 — a correctly-signed interaction from an outside user is
-    refused in layer 8, not in the adapter.
+    refused in layer 8, not in the adapter. 16 tests.
   - Depends: T15. Files: ~3.
+  - **The load-bearing detail is where the tenant comes from.** It is resolved from the
+    run the approval is bound to, never from the interaction. "This is really from
+    Slack" and "this person is an approver" are both correct checks that compose into a
+    confused deputy if the attacker names the tenant they are checked against.
+    `ApprovalReply` carries no tenant at all, so there is nothing to be tempted by.
+  - Default deny is the **primary key's** doing — `(tenant, slack_user_id)` — not a
+    branch someone has to remember. Standing in two tenants takes two rows.
+  - `principal` is stored separately from the Slack id so "who approved this" stays
+    answerable after someone leaves and their id is recycled. Tested.
+  - The group records **who added each member**: a group nobody can be shown to have
+    changed is one that can change unnoticed.
+  - Two tests hold the layer boundary from both sides: the adapter does not import the
+    directory, and the directory contains no transport vocabulary.
 
 - [ ] **T17 — Approve → resume → roll out** · layers 3, 7 · *M*
   - Acceptance: a Slack approval grants an `ApprovalRecord` bound to

@@ -27,6 +27,7 @@ from agentstack.model.engine import EchoEngine
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import VersionStamp
 from agentstack.policy.approval import ApprovalStore
+from agentstack.policy.approvers import ApproverDirectory
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.runtime.graph import build_turn_graph
 from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
@@ -69,6 +70,8 @@ class Stack:
     # Transport-level deduplication for Slack callbacks. In Postgres, because a
     # replay landing on a different worker is the case it exists for.
     replay_guard: ReplayGuard
+    # Who may approve, per tenant. Consulted in layer 8, never in the adapter.
+    approver_directory: ApproverDirectory
     deps: TurnDeps
 
 
@@ -100,6 +103,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     registry_client = RegistryClient()
     notifier = RecordingNotifier()
     replay_guard = ReplayGuard(db=db)
+    approvers = ApproverDirectory(db=db)
 
     gateway = Gateway(
         surfaces={Surface.API: client, Surface.REGISTRY: registry_client},
@@ -155,6 +159,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
         registry_client=registry_client,
         notifier=notifier,
         replay_guard=replay_guard,
+        approver_directory=approvers,
         deps=deps,
     )
 
