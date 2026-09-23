@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from agentstack.interfaces.cli import main, walk_through
@@ -10,7 +12,7 @@ from agentstack.storage.database import Database
 
 
 def test_the_walkthrough_runs_and_commits_exactly_one_refund(
-    app_database: Database, capsys: pytest.CaptureFixture[str]
+    app_database: Database, checkpointer: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Driven against the test database, not `main()`.
 
@@ -18,7 +20,7 @@ def test_the_walkthrough_runs_and_commits_exactly_one_refund(
     database. A test that writes real sessions into it to prove a demo still runs is
     not a trade worth making.
     """
-    walk_through(build_stack(app_database))
+    walk_through(build_stack(app_database, checkpointer))
     out = capsys.readouterr().out
     assert "awaiting_approval" in out
     assert "surface commits : 1" in out

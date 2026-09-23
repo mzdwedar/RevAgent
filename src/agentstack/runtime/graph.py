@@ -19,12 +19,10 @@ Two things this deliberately does not do, both recorded in ADR-0006:
 
 from __future__ import annotations
 
-import functools
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 if TYPE_CHECKING:
@@ -96,17 +94,9 @@ def turn_thread(run_id: str, turn_id: str | None = None) -> dict[str, Any]:
     return {"configurable": {"thread_id": f"{run_id}:{turn_id or uuid.uuid4()}"}}
 
 
-@functools.cache
-def turn_graph() -> Any:
-    """The compiled turn, built once.
-
-    Lazy rather than a module constant because `build_turn_graph` imports the nodes and
-    the nodes import this module for their state and context types.
-    """
-    return build_turn_graph()
-
-
-def advance(config: dict[str, Any], start: TurnState, context: TurnContext) -> dict[str, Any]:
+def advance(
+    compiled: Any, config: dict[str, Any], start: TurnState, context: TurnContext
+) -> dict[str, Any]:
     """Run the turn, resuming it if a previous attempt left it unfinished.
 
     The distinction is LangGraph's and it is not guessable: `invoke(input, config)`
@@ -115,15 +105,23 @@ def advance(config: dict[str, Any], start: TurnState, context: TurnContext) -> d
     was restarted with input would call the model again - which is the cost this whole
     task exists to avoid.
     """
-    compiled = turn_graph()
     pending = compiled.get_state(config).next
     if pending:
         return dict(compiled.invoke(None, config, context=context, durability=DURABILITY))
     return dict(compiled.invoke(start, config, context=context, durability=DURABILITY))
 
 
-def build_turn_graph() -> Any:
-    """Compile the turn once. Nodes are imported lazily to keep layer 3 acyclic."""
+def build_turn_graph(checkpointer: Any) -> Any:
+    """Compile the turn against a checkpointer.
+
+    The checkpointer is passed in rather than chosen here: whether a turn survives
+    the process is a deployment decision, it is made once in the composition root,
+    and a module-level default would be the in-memory one - durable-looking code
+    silently backed by a dictionary.
+
+    Nodes are imported inside the function because they import this module back for
+    their state and context types.
+    """
     from agentstack.runtime import nodes
 
     graph: Any = StateGraph(TurnState, context_schema=TurnContext)
@@ -151,4 +149,4 @@ def build_turn_graph() -> Any:
         {END: END, "respond": "respond"},
     )
     graph.add_edge("respond", END)
-    return graph.compile(checkpointer=InMemorySaver())
+    return graph.compile(checkpointer=checkpointer)

@@ -10,10 +10,12 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from agentstack.storage import migrate
+from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import rebuild_database, truncate_all
@@ -55,3 +57,19 @@ def app_database(_migrated: Database) -> Database:
     """
     truncate_all(_migrated)
     return _migrated
+
+
+@pytest.fixture(scope="session")
+def checkpointer(app_database_url: str, _migrated: Database) -> Iterator[Any]:
+    """The Postgres checkpointer the whole suite runs against.
+
+    Session-scoped because `setup()` issues DDL and a pool per test would be a pool per
+    test. The threads are keyed by run id, which is a uuid, so tests cannot collide in
+    the checkpoint tables even though they share them.
+    """
+    # `_migrated` first: the `langgraph` schema is created by a migration.
+    pool, saver = open_checkpointer(app_database_url)
+    try:
+        yield saver
+    finally:
+        pool.close()

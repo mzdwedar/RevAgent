@@ -37,6 +37,8 @@ Stack-specific (from `STACK.md`):
 - No graph node advancing a run whose checkpoint names a different run
 - No checkpoint written asynchronously — durability that loses the last step is not
   durability
+- No vendor-owned tables in `public`: a library that migrates its own schema gets a
+  schema of its own, so one namespace never carries two migration ledgers
 - No declared containment dimension that `Sandbox.check()` does not read
 - No cohort column dropped without a recorded reason, and no `data_as_of` derived
   from a clock — a watermark that moves when nobody looked cannot identify a population
@@ -70,7 +72,7 @@ Stack-specific (from `STACK.md`):
 | Licence gate | A missing or invalid `TABPFN_TOKEN` is refused at startup | `uv run pytest tests/fitness/test_prediction_gate.py` | every edit |
 | Live model checks | Recorded scores still match the real model; scores separate churners; scoring is reproducible | `uv run pytest tests/live` (needs `TABPFN_TOKEN` and `--extra prediction`) | **locally, before a cohort is used in an experiment** |
 | Cohort reproducibility | Same snapshot + same model version → same cohort, same `experiment_version` | `uv run pytest tests/fitness/test_targeting.py` | every edit |
-| Turn checkpointing | Sync durability; a died turn resumes without re-calling the model | `uv run pytest tests/fitness/test_turn_graph.py` | every edit |
+| Turn checkpointing | Sync durability; a died turn resumes **from Postgres** without re-calling the model | `uv run pytest tests/fitness/test_turn_graph.py` | every edit |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |

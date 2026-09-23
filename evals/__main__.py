@@ -6,8 +6,10 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from agentstack.storage import migrate
+from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import rebuild_database
@@ -38,9 +40,15 @@ def main() -> int:
     url = rebuild_database(admin, "agentstack_evals")
 
     failed = 0
+    # Migrate first: the checkpointer writes into a schema that migrations create,
+    # so it is the one piece of infrastructure that comes after them, not before.
     with open_pool(url, min_size=1, max_size=4) as pool:
         migrate.apply(pool, Path(__file__).resolve().parents[1] / "migrations")
-        failed = _run(cases, Database(pool=pool))
+        checkpoints, saver = open_checkpointer(url)
+        try:
+            failed = _run(cases, Database(pool=pool), saver)
+        finally:
+            checkpoints.close()
 
     print(f"\n{len(cases) - failed}/{len(cases)} gate cases pass")
     if failed:
@@ -48,10 +56,10 @@ def main() -> int:
     return 1 if failed else 0
 
 
-def _run(cases: list, db: Database) -> int:
+def _run(cases: list, db: Database, checkpointer: Any) -> int:
     failed = 0
     for case in cases:
-        outcome = run_case(case, db)
+        outcome = run_case(case, db, checkpointer)
         mark = "pass" if outcome.passed else "FAIL"
         print(f"{mark}  P{case.part}  {case.id}  ({outcome.seconds * 1000:.0f}ms)")
         for failure in outcome.failures:

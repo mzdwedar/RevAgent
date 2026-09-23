@@ -15,12 +15,13 @@ from typing import Any
 import pytest
 
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.wiring import Stack, envelope_for, handle
+from agentstack.interfaces.wiring import Stack, build_stack, envelope_for, handle
 from agentstack.runtime import graph, nodes
 from agentstack.runtime.graph import TurnContext, TurnState
 from agentstack.runtime.loop import run_turn
 from agentstack.runtime.nodes import WrongRun
 from agentstack.runtime.run import Run, new_run
+from agentstack.storage.database import Database
 from agentstack.tools.spec import Surface
 
 from .conftest import SCOPES
@@ -205,7 +206,7 @@ def test_the_checkpointed_state_holds_no_live_objects(stack: Stack, run: Run) ->
         turn_id="serialisable",
     )
 
-    snapshot = graph.turn_graph().get_state(graph.turn_thread(run.run_id, "serialisable"))
+    snapshot = stack.deps.graph.get_state(graph.turn_thread(run.run_id, "serialisable"))
 
     json.dumps(snapshot.values)  # raises if anything in state is not plain data
 
@@ -221,3 +222,116 @@ def test_the_context_carries_the_dependencies_not_the_state() -> None:
     }
     assert "gateway" not in TurnState.__annotations__
     assert "tracer" not in TurnState.__annotations__
+
+
+# --- T8b: the checkpoint is a row, not a dictionary ---
+
+
+def test_checkpoints_are_written_to_postgres(
+    stack: Stack, run: Run, app_database: Database
+) -> None:
+    """The claim `InMemorySaver` could not make."""
+    view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
+    run_turn(
+        run=run,
+        envelope=envelope_for(view, scopes=SCOPES),
+        message="lookup_subscription tenant=acme customer_id=c-42",
+        deps=stack.deps,
+        turn_id="stored",
+    )
+
+    rows = app_database.fetch_all(
+        "SELECT count(*) FROM langgraph.checkpoints WHERE thread_id = %s",
+        (f"{run.run_id}:stored",),
+    )
+
+    assert rows[0][0] > 0, "the turn ran but left no checkpoint in Postgres"
+
+
+def test_a_turn_resumes_from_storage_in_a_stack_that_never_saw_it(
+    stack: Stack, run: Run, app_database: Database, app_database_url: str
+) -> None:
+    """The acceptance: resumed from storage, not from memory.
+
+    The replacement stack gets its **own** checkpointer - a separate pool and a separate
+    saver object - so the only thing the two share is the database. Reusing the session
+    checkpointer would have passed with an in-memory saver too, which is how this test
+    was wrong the first time: it proved the object was shared, not that anything was
+    stored.
+    """
+    from agentstack.storage.checkpoints import open_checkpointer
+
+    engine = CountingEngine(stack.deps.engine)
+    stack.deps.engine = engine
+    surface = RefusingClient(stack.client)
+    stack.deps.gateway.surfaces[Surface.API] = surface
+    view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
+    envelope = envelope_for(view, scopes=SCOPES)
+    message = "lookup_subscription tenant=acme customer_id=c-42"
+
+    with pytest.raises(RuntimeError, match="the process died here"):
+        run_turn(run=run, envelope=envelope, message=message, deps=stack.deps, turn_id="t2")
+    assert engine.calls == 1
+
+    pool, fresh_saver = open_checkpointer(app_database_url)
+    try:
+        restarted = build_stack(app_database, fresh_saver, tenant=run.tenant)
+        second = CountingEngine(restarted.deps.engine)
+        restarted.deps.engine = second
+
+        result = run_turn(
+            run=run, envelope=envelope, message=message, deps=restarted.deps, turn_id="t2"
+        )
+    finally:
+        pool.close()
+
+    assert result.status == "complete"
+    assert second.calls == 0, (
+        "the replacement process called the model again; it resumed from nothing"
+    )
+
+
+def test_the_checkpoint_tables_are_not_in_our_schema(app_database: Database) -> None:
+    """LangGraph creates and versions its own tables, in a schema of its own.
+
+    Left in `public` they sit beside our tables with a second migration ledger
+    (`checkpoint_migrations`) that our runner knows nothing about, and
+    `migrate down --to 0` leaves four tables nobody can account for.
+    """
+    rows = app_database.fetch_all(
+        "SELECT schemaname, tablename FROM pg_tables"
+        " WHERE schemaname IN ('public', 'langgraph') ORDER BY tablename"
+    )
+    placed = {table: schema for schema, table in rows}
+
+    for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations"):
+        assert placed.get(table) == "langgraph", f"{table} escaped into {placed.get(table)}"
+    for table in ("runs", "waits", "approvals", "schema_migrations"):
+        assert placed.get(table) == "public"
+
+
+def test_the_checkpoint_pool_commits_as_it_goes() -> None:
+    """A checkpoint still inside an open transaction when the process dies is not a
+    checkpoint. `setup()` also needs it: CREATE INDEX CONCURRENTLY is refused inside a
+    transaction block, which is how this was found."""
+    from agentstack.storage import checkpoints
+
+    source = inspect.getsource(checkpoints.open_checkpointer)
+
+    assert '"autocommit": True' in source
+    assert '"row_factory": dict_row' in source
+    assert checkpoints.CHECKPOINT_SCHEMA == "langgraph"
+    assert "search_path=langgraph" in checkpoints.checkpoint_url("postgresql://h/d")
+
+
+def test_opening_a_checkpointer_before_migrating_says_so(app_database_url: str) -> None:
+    """Postgres answers "no schema has been selected to create in", which names neither
+    the schema nor the migration that makes it. The checkpointer looks like
+    infrastructure that comes before migrations and is the one piece that comes after."""
+    from agentstack.storage import checkpoints
+    from agentstack.storage.provision import rebuild_database
+
+    url = rebuild_database(app_database_url, "checkpoint_order_test")
+
+    with pytest.raises(checkpoints.CheckpointSchemaMissing, match="agentstack-migrate up"):
+        checkpoints.open_checkpointer(url)

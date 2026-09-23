@@ -37,6 +37,8 @@ class TurnDeps:
     steps: StepLedger
     waits: WaitStore
     versions: VersionStamp
+    # The compiled turn, with whatever checkpointer the composition root chose.
+    graph: Any
 
 
 @dataclass(slots=True)
@@ -81,6 +83,7 @@ def run_turn(
         carried={"tracer": tracer},
     )
     final = advance(
+        deps.graph,
         turn_thread(run.run_id, turn_id),
         {"run_id": run.run_id, "message": message, "status": "starting"},
         context,

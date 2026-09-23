@@ -15,6 +15,7 @@ from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.runtime.loop import TurnResult
 from agentstack.runtime.run import new_run
 from agentstack.runtime.waits import ResumeEvent, resume
+from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import open_pool
 
@@ -39,8 +40,12 @@ def _report(label: str, result: TurnResult) -> None:
 
 
 def main() -> None:
-    with open_pool(min_size=1, max_size=4) as pool:
-        walk_through(build_stack(Database(pool=pool)))
+    checkpoints, saver = open_checkpointer()
+    try:
+        with open_pool(min_size=1, max_size=4) as pool:
+            walk_through(build_stack(Database(pool=pool), saver))
+    finally:
+        checkpoints.close()
 
 
 def walk_through(stack: Stack) -> None:

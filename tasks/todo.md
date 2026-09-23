@@ -241,12 +241,30 @@ criteria are met.
   - `interrupt()` is **not** adopted. Wait semantics are unchanged, per the acceptance;
     T17 decides it under constraint 2 above.
 
-- [ ] **T8b — Postgres checkpointer** · layer 3 · *M*
+- [x] **T8b — Postgres checkpointer** · layer 3 · *M*
   - Acceptance: checkpoints round-trip through Postgres; a graph resumed from storage
     behaves identically to one that never stopped.
-  - Verify: `test_wait_gates_the_run.py` through the graph, resumed from storage rather
-    than from memory.
+  - Verify: `test_wait_gates_the_run.py` through the graph, resumed from storage.
   - Depends: T8a. Files: ~3.
+  - **Done.** `PostgresSaver` has no schema parameter, so `migrations/0004` creates a
+    `langgraph` schema and the saver gets a pool pinned to it. Otherwise its four tables
+    and its own ledger (`checkpoint_migrations`) sit in `public` beside ours, and
+    `migrate down --to 0` leaves four tables nobody can account for.
+  - Three pool settings that are requirements, not preferences: **autocommit** (`setup()`
+    uses `CREATE INDEX CONCURRENTLY`, refused in a transaction — and a write inside an
+    open transaction when the process dies is not a write), **`row_factory=dict_row`**
+    (the saver reads mappings; a tuple-row pool type-checks and fails at first read),
+    **`prepare_threshold=0`**.
+  - The checkpointer is the one piece of infrastructure that comes *after* migrations.
+    Postgres says "no schema has been selected to create in"; `open_checkpointer` now
+    names the schema and the command instead.
+  - `build_stack` requires a checkpointer, like `db`. The only sensible default is the
+    in-memory one, and a durable-looking runtime backed by a dictionary is exactly what
+    this phase exists to remove.
+  - **My first version of the resume test was wrong**: both stacks shared one saver
+    object, so it passed with an in-memory checkpointer too — it proved the object was
+    shared, not that anything was stored. The replacement stack now opens its own pool
+    and saver, and sabotage confirms the assertion fails without shared storage.
 
 - [ ] **T9 — Trigger ingress** · layers 1, 3 · *M*
   - Acceptance: an endpoint accepting a trigger with `kind` and `data_as_of`; the

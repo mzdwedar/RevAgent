@@ -8,6 +8,7 @@ makes the boundary real.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -23,8 +24,8 @@ REFUND_MESSAGE = "issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amoun
 
 
 @pytest.fixture
-def stack(app_database: Database) -> Iterator[Stack]:
-    yield build_stack(app_database, tenant=TENANT)
+def stack(app_database: Database, checkpointer: Any) -> Iterator[Stack]:
+    yield build_stack(app_database, checkpointer, tenant=TENANT)
 
 
 @pytest.fixture

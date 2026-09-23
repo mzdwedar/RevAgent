@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from agentstack.context.items import Scope, Trust
 from agentstack.context.memory import MaintenanceQueue, MemoryStore
@@ -25,6 +26,7 @@ from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import VersionStamp
 from agentstack.policy.approval import ApprovalStore
 from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.runtime.graph import build_turn_graph
 from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
 from agentstack.runtime.run import Run, RunStore, new_run
 from agentstack.runtime.steps import StepLedger
@@ -60,12 +62,15 @@ class Stack:
     deps: TurnDeps
 
 
-def build_stack(db: Database, *, tenant: str = "acme") -> Stack:
+def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Stack:
     """Assemble the stack against a migrated database.
 
-    `db` is required rather than defaulted. A default would open a pool as a side
-    effect of importing convenience, and the first thing to go wrong would be a test
-    quietly writing to the dev database.
+    `db` and `checkpointer` are required rather than defaulted. A default would open a
+    pool as a side effect of importing convenience, and the first thing to go wrong
+    would be a test quietly writing to the dev database. The checkpointer is the same
+    argument: the only sensible default is the in-memory one, and a durable-looking
+    runtime silently backed by a dictionary is the failure this whole phase exists to
+    remove.
     """
     sessions = SessionStore(db=db)
     transcripts = TranscriptStore(db=db)
@@ -118,6 +123,7 @@ def build_stack(db: Database, *, tenant: str = "acme") -> Stack:
         steps=steps,
         waits=waits,
         versions=VERSIONS,
+        graph=build_turn_graph(checkpointer),
     )
     return Stack(
         resolver=resolver,

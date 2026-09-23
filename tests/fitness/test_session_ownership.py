@@ -7,6 +7,7 @@ here are about what survives, and an in-memory store cannot fail the test that a
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -86,13 +87,13 @@ def test_the_runtime_receives_a_bounded_view_not_the_record(stack: Stack) -> Non
 
 
 def test_a_session_outlives_the_process_that_started_it(
-    stack: Stack, app_database: Database
+    stack: Stack, app_database: Database, checkpointer: Any
 ) -> None:
     """The point of T2. A second stack shares nothing with the first but the database."""
     session = stack.resolver.start(user_id="u-1", tenant=TENANT)
     stack.transcripts.append(session_id=session.session_id, kind="user", body="first")
 
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
     view = restarted.resolver.resolve(session_id=session.session_id, user_id="u-1", tenant=TENANT)
 
     assert view.session_id == session.session_id
@@ -120,14 +121,14 @@ def test_the_turn_index_counts_the_persisted_transcript(stack: Stack) -> None:
 
 
 def test_working_state_round_trips_and_the_latest_write_wins(
-    stack: Stack, app_database: Database
+    stack: Stack, app_database: Database, checkpointer: Any
 ) -> None:
     session = stack.resolver.start(user_id="u-1", tenant=TENANT)
     stack.working_state.put(session.session_id, "draft", {"amount_cents": 1999})
     stack.working_state.put(session.session_id, "draft", {"amount_cents": 2500})
     stack.working_state.put(session.session_id, "step", "prepared")
 
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
 
     assert restarted.working_state.get(session.session_id) == {
         "draft": {"amount_cents": 2500},

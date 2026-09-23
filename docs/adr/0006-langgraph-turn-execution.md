@@ -80,3 +80,34 @@ process to prove.
 human returns `awaiting_approval` and the wait lives in Postgres; adopting in-graph
 pausing changes the control flow, and T8a's acceptance says wait semantics are
 unchanged. T17 decides it, with finding 2 above as the constraint it has to satisfy.
+
+## T8b: where the checkpoints live
+
+`PostgresSaver` has no schema parameter. It creates `checkpoints`, `checkpoint_blobs`,
+`checkpoint_writes` and `checkpoint_migrations` wherever the connection's search_path
+points, and tracks its own DDL in `checkpoint_migrations`.
+
+Left at the default that is `public`: two migration ledgers in one namespace, neither
+aware of the other, and `agentstack-migrate down --to 0` leaving four tables nobody can
+account for. Copying the library's DDL into `migrations/` is worse - it couples this
+repository to a vendor's internals and gives one set of tables two histories that can
+disagree.
+
+So `migrations/0004` creates a `langgraph` schema and the saver gets a pool of its own
+with `search_path=langgraph`. We own the boundary; the library owns what is inside it.
+
+Three properties of that pool are requirements rather than preferences:
+
+- **autocommit** - `setup()` issues `CREATE INDEX CONCURRENTLY`, which Postgres refuses
+  inside a transaction block. It also means a checkpoint write has landed when the call
+  returns, which is what `durability="sync"` is for.
+- **`row_factory=dict_row`** - the saver reads its rows as mappings. A tuple-row pool
+  type-checks as a pool and fails at the first read.
+- **`prepare_threshold=0`** - pooled connections are handed round, and server-side
+  prepared statements bound to one of them are a known way to get "prepared statement
+  does not exist" behind a pooler.
+
+**Ordering.** The checkpointer looks like infrastructure that comes before migrations
+and is the one piece that comes after: its schema is created by one. Postgres reports
+this as "no schema has been selected to create in", which names neither the schema nor
+the migration, so `open_checkpointer` checks first and says which command fixes it.

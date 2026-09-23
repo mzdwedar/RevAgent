@@ -8,6 +8,7 @@ settled by the database rather than by whichever caller read the row last.
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 import pytest
 
@@ -52,12 +53,12 @@ def test_a_wait_cannot_be_satisfied_twice(stack: Stack, run: Run) -> None:
 
 
 def test_a_wait_outlives_the_process_that_parked_it(
-    stack: Stack, run: Run, app_database: Database
+    stack: Stack, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """The property the word "persisted" was claiming before T3."""
     wait = stack.waits.park(run_id=run.run_id, kind="human_approval", state_snapshot="fp-1")
 
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
     pending = restarted.waits.pending_for(run.run_id)
 
     assert [w.wait_id for w in pending] == [wait.wait_id]
@@ -66,7 +67,7 @@ def test_a_wait_outlives_the_process_that_parked_it(
 
 
 def test_what_satisfied_the_wait_is_readable_afterwards(
-    stack: Stack, run: Run, app_database: Database
+    stack: Stack, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """The resume payload is the audit trail of why the run continued."""
     wait = stack.waits.park(run_id=run.run_id, kind="human_approval", state_snapshot="fp-1")
@@ -75,7 +76,7 @@ def test_what_satisfied_the_wait_is_readable_afterwards(
         ResumeEvent(run.run_id, wait.wait_id, "fp-1", {"approved_by": "finance-oncall"}),
     )
 
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
     satisfied = restarted.waits.satisfied_for(run.run_id)
 
     assert [w.payload["approved_by"] for w in satisfied] == ["finance-oncall"]

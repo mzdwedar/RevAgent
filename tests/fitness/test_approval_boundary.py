@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from agentstack.interfaces.inbound import InboundEvent
@@ -150,7 +152,7 @@ def test_an_approval_with_nothing_shown_to_the_approver_is_refused(stack: Stack,
 
 
 def test_an_approval_outlives_the_process_that_recorded_it(
-    stack: Stack, run: Run, app_database: Database
+    stack: Stack, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """An approval that dies with the process is a human asked twice for one decision."""
     request = _refund(ARGS)
@@ -162,7 +164,7 @@ def test_an_approval_outlives_the_process_that_recorded_it(
         summary="refund 19.99 on ch-7",
     )
 
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
     found = restarted.approvals.find(
         run_id=run.run_id,
         action_fingerprint=request.fingerprint(),

@@ -61,12 +61,12 @@ class Outcome:
     seconds: float
 
 
-def _stack_for(case: Case, db: Database) -> Stack:
+def _stack_for(case: Case, db: Database, checkpointer: Any) -> Stack:
     # Each case starts from an empty substrate. Idempotency keys are stable across
     # runs by design, so two cases refunding the same charge would otherwise share
     # one - and the second would deduplicate against the first.
     truncate_all(db)
-    stack = build_stack(db, tenant=TENANT)
+    stack = build_stack(db, checkpointer, tenant=TENANT)
     if case.corpus:
         stack.deps.retriever = StaticRetriever(
             corpus=[
@@ -84,10 +84,10 @@ def _stack_for(case: Case, db: Database) -> Stack:
     return stack
 
 
-def run_case(case: Case, db: Database) -> Outcome:
+def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
     started = time.perf_counter()
     failures: list[str] = []
-    stack = _stack_for(case, db)
+    stack = _stack_for(case, db, checkpointer)
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
     run = new_run(session_id=session.session_id, tenant=TENANT, user=USER, channel="eval")
     event = InboundEvent(

@@ -13,6 +13,8 @@ The action fingerprint is already computed for exactly this purpose.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from agentstack.interfaces.inbound import InboundEvent
@@ -113,14 +115,14 @@ def test_a_repeat_of_the_same_action_is_still_one_step(stack: Stack, run: Run) -
 
 
 def test_a_completed_step_is_skipped_by_a_process_that_did_not_run_it(
-    stack: Stack, run: Run, app_database: Database
+    stack: Stack, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """The reason step records are durable: replay happens in a new process."""
     stack.deps.engine = TwoRefundsEngine()
     drive_to_completion(stack, _event(run), run)
     assert len(stack.client.calls) == 2
 
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
     restarted.deps.engine = TwoRefundsEngine()
     result = drive_to_completion(restarted, _event(run), run)
 
@@ -179,10 +181,10 @@ def test_a_step_for_a_run_that_does_not_exist_is_refused(stack: Stack) -> None:
 
 
 def test_the_run_itself_is_readable_by_a_process_that_did_not_start_it(
-    run: Run, app_database: Database
+    run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """Part 4's anchor. A step or a wait keyed on a run nothing recorded is an orphan."""
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
 
     found = restarted.runs.get(run.run_id)
 

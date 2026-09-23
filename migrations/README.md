@@ -19,4 +19,5 @@ Rules the migrator enforces, so they are not conventions anyone has to remember:
 `0001` is the control plane (T2): sessions, transcript events and working state —
 three tables, because they are three stores. `0002` is the runtime (T3): runs,
 step records and waits. `0003` is approvals, the idempotency ledger and the audit
-trail — the last in a schema of its own.
+trail — the last in a schema of its own. `0004` creates the `langgraph` schema, whose
+tables are created and versioned by `PostgresSaver.setup()` rather than from here.

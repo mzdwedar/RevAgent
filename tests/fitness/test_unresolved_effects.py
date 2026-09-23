@@ -17,6 +17,7 @@ never as "not yet done".
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 import pytest
 
@@ -121,7 +122,7 @@ def test_reconciliation_settles_the_key_and_the_retry_deduplicates(
 
 
 def test_an_unresolved_claim_survives_the_process_that_made_it(
-    stack: Stack, event: InboundEvent, run: Run, app_database: Database
+    stack: Stack, event: InboundEvent, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """The state the whole two-phase design exists for.
 
@@ -133,7 +134,7 @@ def test_an_unresolved_claim_survives_the_process_that_made_it(
     with pytest.raises(UnresolvedEffect):
         handle(stack, event, scopes=SCOPES, run=run)
 
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
 
     assert restarted.ledger.unresolved_keys() == stack.ledger.unresolved_keys()
     key = restarted.ledger.unresolved_keys()[0]
@@ -142,7 +143,7 @@ def test_an_unresolved_claim_survives_the_process_that_made_it(
 
 
 def test_a_restarted_process_refuses_to_retry_the_unresolved_effect(
-    stack: Stack, event: InboundEvent, run: Run, app_database: Database
+    stack: Stack, event: InboundEvent, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """A fresh process is the most dangerous retrier: it remembers nothing."""
     _approved_run(stack, event, run)
@@ -150,7 +151,7 @@ def test_a_restarted_process_refuses_to_retry_the_unresolved_effect(
     with pytest.raises(UnresolvedEffect):
         handle(stack, event, scopes=SCOPES, run=run)
 
-    restarted = build_stack(app_database, tenant=TENANT)
+    restarted = build_stack(app_database, checkpointer, tenant=TENANT)
     with pytest.raises(UnresolvedEffect, match="(?i)reconcile"):
         handle(restarted, event, scopes=SCOPES, run=run)
 

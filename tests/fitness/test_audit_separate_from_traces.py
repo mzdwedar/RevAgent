@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 
 import pytest
 
@@ -151,12 +152,12 @@ def test_deleting_the_run_does_not_delete_what_it_was_accountable_for(
 
 
 def test_audit_records_outlive_the_process_that_wrote_them(
-    stack: Stack, event: InboundEvent, run: Run, app_database: Database
+    stack: Stack, event: InboundEvent, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     first = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, first, run)
     handle(stack, event, scopes=SCOPES, run=run)
 
-    restarted = build_stack(app_database, tenant=run.tenant)
+    restarted = build_stack(app_database, checkpointer, tenant=run.tenant)
 
     assert restarted.audit.for_run(run.run_id) == stack.audit.for_run(run.run_id)
