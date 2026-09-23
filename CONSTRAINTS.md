@@ -26,6 +26,10 @@ Stack-specific (from `STACK.md`):
 - No tool registers without complete capability metadata
 - No side-effecting tool without an idempotency policy and an approval tier
 - No rollout prepared without the cohort predicate it was approved against
+- No approval asked as a bare percentage: the prompt names how many real customers
+  are affected, and an ask cannot be built without that number
+- No notification failure swallowed — a run parked on a question nobody received
+  waits forever, and looks exactly like waiting patiently
 - No tool exposed on a stage it does not belong to: drafting and rolling out are
   never on the same menu
 - No `ALWAYS` action satisfied by a policy grant — a rule does not authorise an
@@ -91,6 +95,7 @@ Stack-specific (from `STACK.md`):
 | Model contract | The adapter reports what the model said; `num_ctx` and `think` are set explicitly | `uv run pytest tests/fitness/test_ollama_contract.py` | every edit |
 | Live model checks | The real model still emits a well-formed tool call, deterministically | `uv run pytest tests/live/test_ollama.py` (needs Ollama + `qwen3:8b`) | **locally, before trusting a drafted candidate** |
 | Candidate validation | A malformed, over-specified or unexposed proposal is refused before the registry is touched | `uv run pytest tests/fitness/test_experiment_tools.py` | every edit |
+| Approval legibility | The prompt names a headcount, not a percentage | `uv run pytest tests/fitness/test_slack_outbound.py` | every edit |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -118,7 +123,7 @@ landed.
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 32 | must not fall |
+| Fitness test count | 33 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

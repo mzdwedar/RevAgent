@@ -21,6 +21,7 @@ from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import RecordingClient, RegistryClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
+from agentstack.interfaces.slack import Notifier, RecordingNotifier
 from agentstack.model.engine import EchoEngine
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import VersionStamp
@@ -60,6 +61,10 @@ class Stack:
     waits: WaitStore
     client: RecordingClient
     registry_client: RegistryClient
+    # Where an approval question goes. A recorder by default: a stack built in a
+    # test must not post to a real channel, and one built for the walkthrough has
+    # no workspace to post to.
+    notifier: Notifier
     deps: TurnDeps
 
 
@@ -89,6 +94,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     runs = RunStore(db=db)
     client = RecordingClient()
     registry_client = RegistryClient()
+    notifier = RecordingNotifier()
 
     gateway = Gateway(
         surfaces={Surface.API: client, Surface.REGISTRY: registry_client},
@@ -142,6 +148,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
         waits=waits,
         client=client,
         registry_client=registry_client,
+        notifier=notifier,
         deps=deps,
     )
 

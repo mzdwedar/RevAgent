@@ -439,12 +439,31 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
 
 ## Phase 5 — Approval through Slack
 
-- [ ] **T14 — Slack outbound** · layer 1 · *M*
+- [x] **T14 — Slack outbound** · layer 1 · *M*
   - Acceptance: post the rendered `ApprovalPrompt` as an interactive message with the
     headcount and dollar figure.
   - Verify: criterion 15 — the message names estimated customers affected, not a bare
-    percentage.
+    percentage. 29 tests.
   - Depends: T13. Files: ~3.
+  - **Criterion 15 is structural, not a formatting convention.** `ApprovalAsk` cannot
+    be constructed without `estimated_customers`, so a later edit cannot quietly drop
+    it. The headcount is in the *headline* and in the notification fallback text,
+    because the headline is what a phone shows and what someone decides from without
+    opening the app.
+  - An ask reaching **zero** customers is refused: waking someone for nothing teaches
+    them the asks do not matter.
+  - **A failed notification is loud.** A run parked on a question nobody received waits
+    forever and looks exactly like one waiting patiently. Slack accepting without
+    returning a message id counts as failure too — accepted-but-invisible is worse than
+    refused.
+  - The buttons carry `(run_id, wait_id, experiment_version, data_as_of)`, so T15's
+    reply comes back bound to the exact action and frozen cohort rather than to
+    whoever clicked.
+  - Slack is a **channel, not an execution surface**: it carries a question out and
+    changes no business state, and routing the approval request through the approval
+    gateway would be circular. Uses `slack_sdk`, same reasoning as the Ollama client.
+  - **Coverage caught dead code:** `_message_id` was defined and never called — a
+    `ruff format` reflow had made my edit miss, leaving the inline version in place.
 
 - [ ] **T15 — Slack inbound and transport authentication** · layer 1 · *M*
   - Acceptance: signature over the raw body, timestamp freshness, replay rejection. The
