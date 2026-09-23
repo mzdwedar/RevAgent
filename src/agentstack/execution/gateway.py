@@ -21,7 +21,7 @@ the point: the executor, not the model, owns the boundary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from agentstack.execution.idempotency import ClaimState, IdempotencyLedger
@@ -41,6 +41,7 @@ from agentstack.policy.approval import (
 )
 from agentstack.policy.decisions import PolicyDenied, decide
 from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.policy.precommit import PreCommitPolicy
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.spec import Surface, ToolSpec
 
@@ -75,6 +76,10 @@ class Gateway:
     approvals: ApprovalStore
     audit: AuditSink
     sandbox: Sandbox
+    # The rule PRE_COMMIT actions are judged against. Defaulted rather than
+    # required, because its own default is to refuse - a gateway constructed
+    # without one grants nothing, which is the safe direction to be wrong in.
+    pre_commit: PreCommitPolicy = field(default_factory=PreCommitPolicy)
 
     def read(
         self,
@@ -135,7 +140,15 @@ class Gateway:
         if claim.state is ClaimState.COMMITTED:
             with tracer.span("execution.commit", tool=spec.name, deduplicated=True):
                 pass
-            self._audit(request, spec, envelope, run_id, "allow", approval_id, "deduplicated")
+            self._audit(
+                request,
+                spec,
+                envelope,
+                run_id,
+                self._granting_rule(approval),
+                approval_id,
+                "deduplicated",
+            )
             return ExecutionResult(
                 receipt=str(claim.receipt), deduplicated=True, approval_id=approval_id
             )
@@ -180,7 +193,15 @@ class Gateway:
             deduplicated=False,
         ):
             pass
-        self._audit(request, spec, envelope, run_id, "allow", approval_id, "committed")
+        self._audit(
+            request,
+            spec,
+            envelope,
+            run_id,
+            self._granting_rule(approval),
+            approval_id,
+            "committed",
+        )
         return ExecutionResult(receipt=receipt, deduplicated=False, approval_id=approval_id)
 
     def _authorize(
@@ -212,6 +233,8 @@ class Gateway:
                     request=request,
                     run_id=run_id,
                     state_snapshot=state_snapshot,
+                    envelope=envelope,
+                    policy=self.pre_commit,
                 )
             except (ApprovalRequired, ApprovalStale) as exc:
                 rule = (
@@ -234,7 +257,19 @@ class Gateway:
                     "contained",
                 )
                 raise
+        if approval is not None and not approval.by_a_human:
+            # Criterion 20: the audit record names the rule that granted it. Reachable
+            # through `approval_id` either way, but an accountability record that makes
+            # you follow a join to find out nobody was asked is not doing its job.
+            with tracer.span("approval.policy", tool=spec.name, rule=approval.rule):
+                pass
         return approval
+
+    def _granting_rule(self, approval: ApprovalRecord | None) -> str:
+        """What the audit trail records as the authorisation for this act."""
+        if approval is not None and not approval.by_a_human:
+            return f"approval.policy:{approval.rule}"
+        return "allow"
 
     def _audit(
         self,

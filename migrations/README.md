@@ -22,3 +22,4 @@ step records and waits. `0003` is approvals, the idempotency ledger and the audi
 trail — the last in a schema of its own. `0004` creates the `langgraph` schema, whose
 tables are created and versioned by `PostgresSaver.setup()` rather than from here.
 `0005` is the trigger cycle ledger: one evaluation per (experiment, watermark, kind).
+`0006` records whether an approval came from a person or from a rule, and which rule.

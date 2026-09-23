@@ -25,6 +25,10 @@ Stack-specific (from `STACK.md`):
 - No migration is edited after it has been applied, and no version gap is tolerated
 - No tool registers without complete capability metadata
 - No side-effecting tool without an idempotency policy and an approval tier
+- No `ALWAYS` action satisfied by a policy grant — a rule does not authorise an
+  irreversible act by minting the record the tier demands
+- No approval tier that behaves like another: `PRE_COMMIT` grants on a named rule
+  and records it, `ALWAYS` wakes a person
 - No write to the memory store outside `agentstack.context.memory.write()`
 - No span type removed from `observability.spans.REQUIRED_SPANS`
 - No context item without scope, provenance, freshness, reason and trust
@@ -80,6 +84,7 @@ Stack-specific (from `STACK.md`):
 | Cohort reproducibility | Same snapshot + same model version → same cohort, same `experiment_version` | `uv run pytest tests/fitness/test_targeting.py` | every edit |
 | Turn checkpointing | Sync durability; a died turn resumes **from Postgres** without re-calling the model | `uv run pytest tests/fitness/test_turn_graph.py` | every edit |
 | Process death | A killed process's run resumes in a fresh one without re-calling the model | `uv run pytest tests/durability` | task end, CI |
+| Approval tiers | Three tiers, three behaviours; a policy grant never satisfies `ALWAYS` | `uv run pytest tests/fitness/test_approval_tiers.py` | every edit |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -107,7 +112,7 @@ ratchet says what is true today, not what was convenient at the time.
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 99% | must not fall (tolerance 0.5%) |
-| Fitness test count | 28 | must not fall |
+| Fitness test count | 29 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

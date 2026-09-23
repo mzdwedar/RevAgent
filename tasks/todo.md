@@ -345,19 +345,34 @@ criteria are met.
 
 Neither blocks Phase 4 — T11 (`PRE_COMMIT`) and T12 (Ollama) depend on neither, and
 T13 is the natural place for the wiring since it is the first task that needs a cohort
-to draft *from*. But the checkpoint should not be ticked as written, and the decision —
-add a wiring task, fold it into T13, or restate the checkpoint — is a human one.
+to draft *from*. **Decided: the wiring folds into T13**, which is the first task that needs a cohort to
+draft *from*. Checkpoint C's first line stays open until then, deliberately.
 
 ---
 
 ## Phase 4 — The model drafts, the registry records
 
-- [ ] **T11 — Give `PRE_COMMIT` real semantics** · layer 8 · *S*
+- [x] **T11 — Give `PRE_COMMIT` real semantics** · layer 8 · *S*
   - Acceptance: `PRE_COMMIT` grants a policy approval — audited with the rule that
-    granted it, no human woken. `ALWAYS` still requires a human. Closes the
-    three-tiers-two-behaviours defect the spec surfaced.
-  - Verify: new `tests/fitness/test_approval_tiers.py` — criterion 20.
+    granted it, no human woken. `ALWAYS` still requires a human.
+  - Verify: new `tests/fitness/test_approval_tiers.py` — criterion 20. 15 tests.
   - Depends: none. Files: ~3.
+  - **Done.** The defect was three tiers with two behaviours: `PRE_COMMIT` and `ALWAYS`
+    both demanded a human-granted record, so the middle tier was a comment.
+  - **The invariant that mattered most runs the other way:** a policy grant must never
+    satisfy `ALWAYS`. The record it mints matches the run, the fingerprint and the state
+    snapshot — every check the old code made — so without an explicit source check a
+    rule could authorise an irreversible act, and the strongest tier would become the
+    easiest to satisfy. Sabotage-verified.
+  - `PreCommitPolicy` **defaults to refuse** and its checks are conjunctive. A policy
+    that can only say yes is a tier with a nicer name, which is what this was. An empty
+    check set permits nothing rather than everything.
+  - `migrations/0006` puts `granted_by` and `rule` on the record, with a CHECK that a
+    policy grant names its rule and a human grant does not — a human approval carrying a
+    rule name is a policy grant wearing a person's name.
+  - **A bug the tests caught:** Postgres returns `granted_by` as a plain string, and
+    `granted_by is GrantedBy.HUMAN` is False for one however equal it compares. Every
+    stored human approval would have read as a policy grant. `ApprovalRecord.of` coerces.
 
 - [ ] **T12 — Ollama model engine adapter** · layer 4 · *M*
   - Acceptance: a `ModelEngine` implementation over a local Ollama model, emitting tool
@@ -367,6 +382,9 @@ add a wiring task, fold it into T13, or restate the checkpoint — is a human on
   - Depends: none. Files: ~3.
 
 - [ ] **T13 — Candidate drafting tool and registry surface** · layers 6, 7 · *M*
+  - **Also carries the Checkpoint C wiring** (decided after C): connect trigger → score
+    → target → draft, filling the evaluator seam `runtime.cycles.evaluate` takes. T13 is
+    where it belongs because it is the first task that needs a cohort to draft from.
   - Acceptance: replace the placeholder catalog with `create_experiment_draft`
     (side-effecting, reversible, `PRE_COMMIT`) and `roll_out_variant_to_percentage`
     (irreversible, `ALWAYS`, carrying the cohort predicate). Registry client lives in
