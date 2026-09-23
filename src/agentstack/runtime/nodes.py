@@ -14,7 +14,7 @@ from langgraph.runtime import Runtime
 
 from agentstack.context.assemble import assemble as assemble_context
 from agentstack.context.items import ContextItem, Scope, Trust
-from agentstack.model.contract import ModelRequest
+from agentstack.model.contract import ExposedTool, ModelRequest
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.graph import TurnContext, TurnState
@@ -140,7 +140,14 @@ def call_model(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any
         ModelRequest(
             instructions=ctx.instructions,
             rendered_context=bundle.render(),
-            exposed_tools=tuple(s.name for s in exposed),
+            exposed_tools=tuple(
+                ExposedTool(
+                    name=spec.name,
+                    description=spec.description,
+                    parameters=spec.input_schema,
+                )
+                for spec in exposed
+            ),
             max_output_tokens=ctx.deps.engine.asset.max_output_tokens,
         )
     )

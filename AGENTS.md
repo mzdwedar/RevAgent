@@ -19,6 +19,8 @@ loosening the floor to accommodate it is the move `stack_guard` exists to catch.
 ```
 bash scripts/dev_up.sh                   # compose up + migrate, one command
 uv run python scripts/fetch_datasets.py  # the cohort datasets (needs ~/.kaggle)
+brew install ollama && brew services start ollama
+ollama pull qwen3:8b                     # the dev model engine
 ```
 
 The datasets are third-party and gitignored; `data/manifest.json` is committed, so a

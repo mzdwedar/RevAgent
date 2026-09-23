@@ -38,7 +38,7 @@ class TwoRefundsEngine:
     def generate(self, request: ModelRequest) -> ModelResponse:
         # Propose only what this run was actually offered - a fake that ignores the
         # exposure filter would make the wrong tests pass.
-        if "issue_refund" not in request.exposed_tools:
+        if "issue_refund" not in request.tool_names:
             return ModelResponse(text="nothing I can do here")
         return ModelResponse(
             text="refunding both charges",

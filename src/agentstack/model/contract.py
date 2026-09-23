@@ -33,11 +33,31 @@ class ToolCallProposal:
 
 
 @dataclass(frozen=True, slots=True)
+class ExposedTool:
+    """One tool as the model is shown it: a name, a description, a parameter schema.
+
+    Plain data, not a `ToolSpec`. Layer 6 sits above layer 4, so the model package
+    cannot import the registry - and it should not want to. What a model needs is the
+    menu; what a `ToolSpec` carries beyond that is the scope, the surface, the approval
+    tier and the idempotency policy, none of which the model gets a say in. Handing it
+    the whole spec would be handing it the authority metadata to reason about.
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class ModelRequest:
     instructions: str
     rendered_context: str
-    exposed_tools: tuple[str, ...]
+    exposed_tools: tuple[ExposedTool, ...]
     max_output_tokens: int
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return tuple(tool.name for tool in self.exposed_tools)
 
 
 @dataclass(frozen=True, slots=True)

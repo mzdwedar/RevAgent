@@ -52,6 +52,15 @@ bash scripts/dev_up.sh        # Postgres via docker compose, then migrations
 uv run agentstack
 ```
 
+The walkthrough above needs only Postgres. The full workflow also wants a model engine
+and the cohort data:
+
+```bash
+brew install ollama && brew services start ollama
+ollama pull qwen3:8b                      # dev only; production runs on a cloud GPU
+uv run python scripts/fetch_datasets.py   # needs ~/.kaggle/kaggle.json
+```
+
 One refund walks the whole stack: context assembled and fingerprinted, tools exposed
 for this run only, a policy decision, a run parked on a human approval bound to that
 exact action, a resume against the same run id, the commit — and then two retries that
@@ -82,7 +91,7 @@ failure, so the loop fails closed whether or not anyone remembers to run them.
 | `src/agentstack/` | 11 packages across the ten layers, dependency direction enforced by five `.importlinter` contracts |
 | `migrations/` | versioned SQL; an applied migration is immutable, a version gap is refused |
 | `experiments/` | targeting thresholds, versioned — change a number here, not in code |
-| `tests/fitness/` | 29 tests, one per collapsed-boundary failure mode |
+| `tests/fitness/` | 30 tests, one per collapsed-boundary failure mode |
 | `tests/live/` | checks needing real datasets or the model; excluded from CI, declared in `CONSTRAINTS.md` |
 | `tests/durability/` | spawns a real process, kills it with SIGKILL, and resumes the run from Postgres |
 | `evals/` | 13 release gates that judge the path, not just the answer |

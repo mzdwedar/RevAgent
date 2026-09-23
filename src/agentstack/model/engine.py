@@ -37,7 +37,7 @@ class EchoEngine:
             if "=" in token
         }
         proposals: tuple[ToolCallProposal, ...] = ()
-        for tool in request.exposed_tools:
+        for tool in request.tool_names:
             if tool in request.rendered_context:
                 proposals = (ToolCallProposal(tool=tool, arguments=arguments),)
                 break

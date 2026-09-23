@@ -374,12 +374,35 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
     `granted_by is GrantedBy.HUMAN` is False for one however equal it compares. Every
     stored human approval would have read as a policy grant. `ApprovalRecord.of` coerces.
 
-- [ ] **T12 — Ollama model engine adapter** · layer 4 · *M*
-  - Acceptance: a `ModelEngine` implementation over a local Ollama model, emitting tool
-    proposals. `num_ctx` explicit and recorded in Foundation Assumptions.
+- [x] **T12 — Ollama model engine adapter** · layer 4 · *M*
+  - Acceptance: a `ModelEngine` over a local Ollama model, emitting tool proposals.
+    `num_ctx` explicit and recorded in Foundation Assumptions.
   - Verify: new `tests/fitness/test_ollama_contract.py` — a malformed proposal still
-    produces `tool.reject` and an answered turn, now from a real model.
+    produces `tool.reject` and an answered turn. 18 tests, plus 5 in `tests/live`.
   - Depends: none. Files: ~3.
+  - **Done.** `qwen3:8b` on Ollama 0.34.3, installed and verified emitting a correctly
+    typed tool call before any code was written — `amount_cents` came back as an int,
+    which matters because the schema validator refuses a string and every refund would
+    otherwise take the reject path.
+  - **The contract had to change:** `ModelRequest.exposed_tools` carried only names, so
+    native tool calling had nothing to send. It now carries `ExposedTool` — name,
+    description, parameter schema — and *not* the scope, surface, approval tier or
+    idempotency policy. Layer 6 sits above layer 4, so the model package cannot import
+    the registry, and it should not want to: handing over a `ToolSpec` would hand the
+    model the authority metadata to reason about.
+  - Three settings are decisions, not defaults: `num_ctx=8192` (Ollama's default is
+    smaller than people assume), `think=False` (qwen3's monologue would land in the text
+    a human is shown), `temperature=0` (criterion 17 wants the same inputs to give the
+    same experiment).
+  - The adapter **filters nothing**. A tool that was never offered and arguments of the
+    wrong type are both reported faithfully; the exposure filter and the schema
+    validator refuse them a layer up, where the refusal leaves evidence.
+  - **Found a hole in `stack_guard` while doing this:** `git diff HEAD` says nothing
+    about untracked files, so a brand-new module full of suppressions passed the loop's
+    own gate. CI compares commits and would have caught it, but the hook had already
+    said yes. The guard now scans untracked files; proven with a probe file.
+  - Ratchets: fitness tests 29 → 30; project coverage 99% → 98% (two lines constructing
+    the real Ollama client, exercised in `tests/live`).
 
 - [ ] **T13 — Candidate drafting tool and registry surface** · layers 6, 7 · *M*
   - **Also carries the Checkpoint C wiring** (decided after C): connect trigger → score

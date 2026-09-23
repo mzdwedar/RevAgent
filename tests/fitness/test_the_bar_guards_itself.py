@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import importlib.util
+import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -161,3 +162,24 @@ def test_constraints_is_still_checked_for_the_things_that_matter() -> None:
     source = (ROOT / "scripts/stack_guard.py").read_text()
     for check in ("Enforced with numbers", "Exceptions", "_floor_bullets"):
         assert check in source
+
+
+def test_a_brand_new_file_is_scanned() -> None:
+    """`git diff HEAD` says nothing about untracked files.
+
+    Until T12 that meant a whole new module of suppressions passed the loop's own gate.
+    CI compared commits and would have caught it, but the hook had already said yes.
+    """
+    guard = _guard()
+
+    assert "_untracked" in inspect.getsource(guard.main)
+    assert "ls-files" in inspect.getsource(guard._untracked)
+    assert ".py" in guard.SCANNED_SUFFIXES
+
+
+def test_the_new_file_scan_skips_what_it_cannot_read_usefully() -> None:
+    """A lockfile would drown the scan; a PNG has no suppressions in it."""
+    guard = _guard()
+
+    assert ".lock" not in guard.SCANNED_SUFFIXES
+    assert ".png" not in guard.SCANNED_SUFFIXES

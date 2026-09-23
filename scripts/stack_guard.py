@@ -65,6 +65,30 @@ def _has_commits() -> bool:
     return bool(_git("rev-parse", "--verify", "HEAD").strip())
 
 
+# Which new files are worth reading. A new PNG has no suppressions in it, and a
+# lockfile would drown the scan in noise.
+SCANNED_SUFFIXES = frozenset({".py", ".md", ".sh", ".sql", ".toml", ".yml", ".yaml", ".json"})
+
+
+def _untracked() -> dict[str, tuple[list[str], list[str]]]:
+    """New files, as if every line of them were an addition.
+
+    `git diff HEAD` does not mention untracked files, so until a change was staged the
+    guard could not see it at all - a brand-new module full of suppressions passed the
+    loop's own gate, which is the gate that exists to catch exactly that. CI compared
+    commits and would have caught it later, but "later" is after the hook said yes.
+    """
+    per_file: dict[str, tuple[list[str], list[str]]] = {}
+    for path in _git("ls-files", "--others", "--exclude-standard").split("\n"):
+        name = path.strip()
+        if not name:
+            continue
+        target = ROOT / name
+        if target.is_file() and target.suffix in SCANNED_SUFFIXES:
+            per_file[name] = (target.read_text(errors="replace").splitlines(), [])
+    return per_file
+
+
 def _diff(base: str | None) -> str:
     if base:
         return _git("diff", f"{base}...", "--unified=0")
@@ -287,7 +311,11 @@ def main() -> int:
         print("stack_guard: not a git repository", file=sys.stderr)
         return 2
 
-    findings = diff_findings(_parse_diff(_diff(args.base))) + state_findings(args.base)
+    changed = _parse_diff(_diff(args.base))
+    # Untracked files are not in any diff, and a new file is where a new
+    # suppression is most likely to be.
+    changed.update(_untracked())
+    findings = diff_findings(changed) + state_findings(args.base)
 
     if not findings:
         print("stack_guard: the bar is intact")

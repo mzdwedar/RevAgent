@@ -85,6 +85,8 @@ Stack-specific (from `STACK.md`):
 | Turn checkpointing | Sync durability; a died turn resumes **from Postgres** without re-calling the model | `uv run pytest tests/fitness/test_turn_graph.py` | every edit |
 | Process death | A killed process's run resumes in a fresh one without re-calling the model | `uv run pytest tests/durability` | task end, CI |
 | Approval tiers | Three tiers, three behaviours; a policy grant never satisfies `ALWAYS` | `uv run pytest tests/fitness/test_approval_tiers.py` | every edit |
+| Model contract | The adapter reports what the model said; `num_ctx` and `think` are set explicitly | `uv run pytest tests/fitness/test_ollama_contract.py` | every edit |
+| Live model checks | The real model still emits a well-formed tool call, deterministically | `uv run pytest tests/live/test_ollama.py` (needs Ollama + `qwen3:8b`) | **locally, before trusting a drafted candidate** |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
@@ -97,22 +99,22 @@ Why these numbers:
   gradients. One violation is a collapsed layer.
 - **High and above** for dependencies: below that is mostly noise.
 
-**Three lines in `prediction/engine.py` cannot be covered in CI.** They construct and
-call `TabPFNClassifier`, and they do not execute anywhere the optional extra and the
-licence are absent — which is CI, by design. They are exercised by `tests/live`. The
-alternatives were a `pragma` (banned by the floor), installing torch in CI to raise a
-percentage, or pretending.
+**A few lines reaching a real serving system cannot be covered in CI.** Three in `prediction/engine.py` construct and
+call `TabPFNClassifier`; two in `model/ollama_engine.py` construct the Ollama client.
+None executes where the extra, the licence or a running model is absent — which is CI,
+by design. All five are exercised by `tests/live`, which is why that lane exists.
 
-This briefly took project coverage to 98% at T6; it is back at 99% because the
-checkpoint-pinning work that followed added more tests than uncovered lines. The
-ratchet says what is true today, not what was convenient at the time.
+The alternatives were a `pragma` (banned by the floor), installing torch and running a
+model in CI to raise a percentage, or pretending. The ratchet says what is true today,
+not what was convenient at the time: 99% at T11, 98% at T12 when the Ollama adapter
+landed.
 
 ## Measured, not yet enforced
 
 | Metric | Today | Direction |
 |---|---|---|
-| Project coverage | 99% | must not fall (tolerance 0.5%) |
-| Fitness test count | 29 | must not fall |
+| Project coverage | 98% | must not fall (tolerance 0.5%) |
+| Fitness test count | 30 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

@@ -495,14 +495,14 @@ The policy level is new and worth its own line: because `decide()` is a pure fun
 | Consistency | Postgres, read-committed | same |
 | Isolation / failure | single process, killed freely | rolling deploys mid-wait are expected, not exceptional |
 | Trigger source | injected by hand | open question — see below |
-| Model asset | TBD, shared with prod | same asset |
+| Model asset | `qwen3:8b` (5.2 GB, Apache-2.0) | same asset, on a GPU |
 | Serving system | Ollama on Apple silicon | cloud GPU; stack open |
-| Interaction contract | Ollama's tool-call format | must be verified equivalent, not assumed |
-| Context budget | whatever `num_ctx` is set to | measured against the production row |
+| Interaction contract | Ollama's native tool-call API; `think=False`, `temperature=0` | must be verified equivalent, not assumed |
+| Context budget | `num_ctx = 8192`, set explicitly in `model/ollama_engine.py` | measured against the production row; the dev number is a floor, not a target |
 | Latency budget | p95 per evaluation ≤ 60s | ≤ 60s; an event-driven run has no latency pressure, which is a luxury worth spending on evidence |
 | Cost budget | — | per evaluation, recorded before first deploy |
 
-Two things this table is designed to stop. **Compatible is not equivalent**: the same weights behind Ollama and behind a cloud serving stack are the same asset and a different system, and tool-call reliability is the property most likely to differ. **The context window is a working set**: `num_ctx` is a number we choose, and the evidence bundle must fit the production setting, not the laptop's.
+Two things this table is designed to stop. **Compatible is not equivalent**: the same weights behind Ollama and behind a cloud serving stack are the same asset and a different system, and tool-call reliability is the property most likely to differ. **The context window is a working set**: `num_ctx` is a number we choose, and the evidence bundle must fit the production setting, not the laptop's. Ollama's own default is smaller than most people assume, and a context window discovered by watching answers get worse is exactly the Part 2 confusion this table exists to prevent — a serving-system setting mistaken for a property of the model. `think=False` belongs here for the same reason: qwen3 is a reasoning model, and its thinking is a property of how it is served, not an answer a human should be shown.
 
 ---
 
