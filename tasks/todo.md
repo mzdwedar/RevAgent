@@ -213,14 +213,33 @@ criteria are met.
 
 ## Phase 3 — The durable runtime
 
-- [ ] **T8a — The turn as a LangGraph graph** · layer 3 · *M, verify first*
+- [x] **T8a — The turn as a LangGraph graph** · layer 3 · *M, verify first*
   - Acceptance: `run_turn`'s sequence becomes graph nodes with an in-process
     checkpointer. Run identity, step boundaries and wait semantics unchanged.
-  - **Before writing code:** `source-driven-development` against current LangGraph
-    docs. The API is assumed here, not known — and finding that out with an in-process
-    checkpointer is much cheaper than finding it out with Postgres underneath.
   - Verify: `test_run_identity.py` and `test_idempotency.py` pass through the graph.
   - Depends: T2, T3, T4. Files: ~4.
+  - **Done. Verifying first paid for itself four times** — every one of these was an
+    assumption that turned out wrong, and each would have been far more expensive to
+    discover with Postgres underneath ([ADR-0006](../docs/adr/0006-langgraph-turn-execution.md)):
+    1. `durability` defaults to `"async"`. Checkpoints are written without waiting, so
+       a process that dies may have none. Every invocation now passes `"sync"`.
+    2. Code before `interrupt()` runs **twice** on resume. Binds T17: a node that
+       interrupts must do nothing before it interrupts.
+    3. `checkpoint_ns` is the *subgraph* namespace. Using it to separate turns makes
+       `get_state` raise "Subgraph not found". Both ids go in `thread_id`.
+    4. `invoke(input, config)` restarts from the beginning whatever the checkpoint
+       says; only `invoke(None, config)` resumes. Getting this wrong costs a second
+       model call per recovery — exactly what the task exists to prevent.
+  - **The state/context split is what makes T8b tractable.** State is plain data;
+    the gateway, registry, engine and tracer travel in LangGraph's `context` and are
+    never checkpointed. Putting a live database handle in state would have surfaced at
+    T8b, at the most expensive moment to change it.
+  - Resuming skips completed nodes, so anything a later node needs must be in state or
+    recomputable. The model's answer is in state (it cannot be recomputed — asking again
+    could differ); the bundle and the exposure filter are recomputed (they are
+    deterministic). `act` keeps only the context *fingerprint*, which is all it ever used.
+  - `interrupt()` is **not** adopted. Wait semantics are unchanged, per the acceptance;
+    T17 decides it under constraint 2 above.
 
 - [ ] **T8b — Postgres checkpointer** · layer 3 · *M*
   - Acceptance: checkpoints round-trip through Postgres; a graph resumed from storage
