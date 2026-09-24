@@ -12,7 +12,7 @@ record.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -235,7 +235,9 @@ def test_a_wait_that_does_not_say_what_it_asks_grants_nothing(
     """Older waits predate the column. Binding an approval to a fingerprint nobody
     recorded would be approving something unnamed."""
     run, _ = parked
-    trigger_wait = stack.waits.park(run_id=run.run_id, kind="trigger", state_snapshot="as-shown")
+    trigger_wait = stack.waits.park(
+        run_id=run.run_id, kind="trigger", state_snapshot="as-shown", timeout=timedelta(days=7)
+    )
 
     with pytest.raises(ReplyNotApplicable, match="does not record what it was asking"):
         stack.coordinator.apply(reply(run, trigger_wait))

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from agentstack.storage.database import Database
@@ -19,6 +19,19 @@ from agentstack.storage.database import Database
 
 class ResumeRejected(RuntimeError):
     """The resume event does not match a pending wait, or the world moved."""
+
+
+class WaitWithoutDeadline(ValueError):
+    """A wait that can go unanswered forever was parked with no time it is due by."""
+
+
+TRIGGER = "trigger"
+HUMAN_APPROVAL = "human_approval"
+
+# How long a question sits unanswered before it is put again. A default, unlike a
+# trigger's deadline: how patiently to treat a person does not depend on the workflow,
+# whereas how long to wait for data depends entirely on how often the data arrives.
+APPROVAL_REASK_AFTER = timedelta(hours=24)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +52,10 @@ class Wait:
     # it never computed.
     action_fingerprint: str | None = None
     approval_summary: str | None = None
+    # When this wait should have been satisfied by. Past it, a trigger wait is stalled
+    # and an approval wait is asked again; neither is allowed to lapse quietly.
+    deadline: datetime | None = None
+    reasks: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +68,7 @@ class ResumeEvent:
 
 _COLUMNS = (
     "wait_id, run_id, kind, state_snapshot, created_at, satisfied, payload, "
-    "action_fingerprint, approval_summary"
+    "action_fingerprint, approval_summary, deadline, reasks"
 )
 
 
@@ -67,19 +84,37 @@ class WaitStore:
         state_snapshot: str,
         action_fingerprint: str | None = None,
         approval_summary: str | None = None,
+        timeout: timedelta | None = None,
     ) -> Wait:
+        """Persist a wait, due `timeout` from now.
+
+        A trigger wait has no default timeout. The right one is "a little longer than
+        the data normally takes to arrive", which only the caller knows, and a default
+        chosen here would be a guess that looks like a decision.
+        """
+        if timeout is None and kind == HUMAN_APPROVAL:
+            timeout = APPROVAL_REASK_AFTER
+        if timeout is None and kind == TRIGGER:
+            raise WaitWithoutDeadline(
+                "a trigger wait needs a deadline: a trigger that never fires must "
+                "surface as stalled, not leave the run asleep"
+            )
+        if timeout is not None and timeout <= timedelta(0):
+            raise WaitWithoutDeadline(f"a wait cannot be due {timeout} after it was parked")
+        now = datetime.now(UTC)
         row = self.db.fetch_one(
             "INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at,"
-            "  action_fingerprint, approval_summary)"
-            f" VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+            "  action_fingerprint, approval_summary, deadline)"
+            f" VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
             (
                 f"wait-{uuid.uuid4()}",
                 run_id,
                 kind,
                 state_snapshot,
-                datetime.now(UTC),
+                now,
                 action_fingerprint,
                 approval_summary,
+                None if timeout is None else now + timeout,
             ),
         )
         assert row is not None  # RETURNING on a successful insert always yields a row
@@ -103,6 +138,43 @@ class WaitStore:
             (run_id,),
         )
         return tuple(Wait(*row) for row in rows)
+
+    def stalled(self, *, now: datetime, older_than: timedelta = timedelta(0)) -> tuple[Wait, ...]:
+        """Trigger waits past their deadline, parked at least `older_than` before `now`.
+
+        The deadline is what makes a wait stalled; `older_than` only narrows the report.
+        `now` is an argument so that "a week later" is something a test can say.
+        """
+        rows = self.db.fetch_all(
+            f"SELECT {_COLUMNS} FROM waits"
+            " WHERE NOT satisfied AND kind = %s AND deadline <= %s AND created_at <= %s"
+            " ORDER BY deadline, created_at",
+            (TRIGGER, now, now - older_than),
+        )
+        return tuple(Wait(*row) for row in rows)
+
+    def due_for_reask(self, *, now: datetime) -> tuple[Wait, ...]:
+        rows = self.db.fetch_all(
+            f"SELECT {_COLUMNS} FROM waits"
+            " WHERE NOT satisfied AND kind = %s AND deadline <= %s"
+            " ORDER BY deadline, created_at",
+            (HUMAN_APPROVAL, now),
+        )
+        return tuple(Wait(*row) for row in rows)
+
+    def record_reask(self, wait: Wait, *, next_deadline: datetime) -> Wait | None:
+        """Move the deadline on after the question was put again.
+
+        Conditional on the deadline still being the one that was read, and on the wait
+        still pending. `None` means someone answered, or another timer got there first.
+        """
+        row = self.db.fetch_one(
+            "UPDATE waits SET deadline = %s, reasks = reasks + 1"
+            " WHERE wait_id = %s AND NOT satisfied AND deadline = %s"
+            f" RETURNING {_COLUMNS}",
+            (next_deadline, wait.wait_id, wait.deadline),
+        )
+        return None if row is None else Wait(*row)
 
     def _satisfy(self, wait: Wait, payload: dict[str, Any]) -> Wait:
         """Mark the wait satisfied, once, even if two resumes arrive together.

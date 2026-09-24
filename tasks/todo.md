@@ -549,11 +549,39 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
 
 ## Phase 6 — Production hardening
 
-- [ ] **T18 — Wait deadlines and stalled detection** · layer 3 · *M*
+- [x] **T18 — Wait deadlines and stalled detection** · layer 3 · *M*
   - Acceptance: every `trigger` wait carries a deadline; `operator stalled
     --older-than` reports runs past it; the approval re-ask timer fires.
-  - Verify: criterion 4.
+  - Verify: criterion 4 — `tests/fitness/test_stalled_waits.py`, 26 tests.
   - Depends: T17. Files: ~3.
+  - **Done.** `deadline` has one meaning for every kind: when the wait should have been
+    satisfied by. Past it the remedies differ — a trigger wait is *stalled* and
+    reported, an approval is *re-asked* — and neither may lapse. `migrations/0010`
+    holds it in the database too (`pending_waits_have_a_deadline`), and backfills any
+    pending wait parked before it as **due now**: a future deadline invented for a wait
+    nobody was watching would hide exactly the waits this is for.
+  - **A trigger wait has no default timeout.** The right one is "a little longer than
+    the data normally takes", which only the caller knows. An approval defaults to 24h:
+    how patiently to treat a person does not depend on the workflow. `park` refuses a
+    trigger wait without one, so T17's own test had to name one — the invariant caught
+    its first caller on the first run.
+  - `--older-than` **narrows, never widens**: the deadline decides what is stalled, age
+    only filters the report. The CLI exits 1 when anything is stalled, so a scheduler
+    alerts on the exit code rather than on someone reading output.
+  - **The re-ask asks first, then moves the deadline.** Dying between the two asks
+    twice; the other order loses the question for a whole interval. A duplicate is
+    harmless (the second answer is refused as already answered); a missing one is the
+    silent expiry. A failed ask is raised *after* the others are asked, with its
+    deadline left where it was. `record_reask` is conditional on the deadline it read,
+    so two timers can both ask but only one moves it — T21 territory.
+  - **Named gaps.** The asking is a seam (`fire_reasks(ask=...)`): runtime cannot
+    import the channel (contract 4), and nothing yet builds an `ApprovalAsk` *from a
+    wait* — the wait carries the summary and fingerprint, not the headcount, cohort and
+    dollar figure Slack needs. That is the same wiring as the *first* ask, which
+    Checkpoint E still owes. No production path parks a `trigger` wait yet either; the
+    store and the database refuse one without a deadline whenever one appears. The
+    command is `agentstack-operator`, not the spec's bare `operator`, matching
+    `agentstack-migrate`. Unsettled `trigger_cycles` are not reported yet.
 
 - [ ] **T19 — Checkpoint versioning and `needs_migration`** · layer 3 · *M*
   - Acceptance: every checkpoint carries a schema version; an incompatible one parks

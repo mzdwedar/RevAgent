@@ -24,6 +24,7 @@ prediction = [
 agentstack = "agentstack.interfaces.cli:main"
 agentstack-migrate = "agentstack.interfaces.migrate_cli:main"
 agentstack-preflight = "agentstack.interfaces.preflight_cli:main"
+agentstack-operator = "agentstack.interfaces.operator_cli:main"
 
 [dependency-groups]
 dev = [
