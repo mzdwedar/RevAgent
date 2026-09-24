@@ -29,6 +29,7 @@ from agentstack.execution.surfaces import (
     Sandbox,
     SandboxViolation,
     SurfaceClient,
+    SurfaceRefused,
 )
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import Tracer
@@ -172,6 +173,14 @@ class Gateway:
         client = self.surfaces[request.surface]
         try:
             receipt = client.commit(request.resource, request.payload)
+        except SurfaceRefused:
+            # The one failure the surface can prove did not apply. Release the key:
+            # nothing needs reconciling, and the call that comes once the precondition
+            # holds must not be blocked by this one. The ledger names this case as the
+            # only caller permitted to abandon a claim.
+            self.ledger.abandon(request.idempotency_key)
+            self._audit(request, spec, envelope, run_id, "surface.refused", approval_id, "refused")
+            raise
         except Exception as exc:
             # The claim deliberately stays. From here, "the surface refused" and "the
             # answer was lost" look identical, and only one of them is safe to retry.

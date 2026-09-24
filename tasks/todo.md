@@ -759,10 +759,19 @@ and the test that proves it.
     test database name — is now worth a task of its own.
 
 
-- [ ] **T24 — Surface refusal semantics** · layers 7, 3 · *S*
+- [x] **T24 — Surface refusal semantics** · layers 7, 3 · *S*
   - Acceptance: `SurfaceRefused` → gateway `abandon`s the claim and audits `refused`;
     the turn gets a tool refusal. A lost answer still leaves `IN_FLIGHT`.
   - Verify: `tests/fitness/test_unresolved_effects.py` (extended).
+  - **Done.** 5 tests in `test_unresolved_effects.py`: a refusal releases its claim,
+    is audited `refused` / `surface.refused` (never `unresolved`), is answered by the
+    turn as a `tool.reject`, re-raises to a caller without a turn, and leaves the key
+    free so the later legitimate call acts exactly once.
+  - `SurfaceRefused` is the only exception the gateway abandons a claim for, and its
+    docstring says who may raise it: a surface that can *prove* nothing applied. Every
+    other failure after dispatch still leaves the claim `IN_FLIGHT`.
+  - `RecordingClient.refuse_before_effect` mirrors `fail_after_effect`, so both halves
+    of the distinction are testable against the same client.
 
 - [ ] **T25 — `PostgresRegistryClient` for the two existing tools** · layer 7 · *M*
   - Acceptance: single-statement guarded writes via `Database`; the fake enforces the

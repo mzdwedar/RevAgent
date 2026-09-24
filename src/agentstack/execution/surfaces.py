@@ -25,6 +25,20 @@ class SurfaceTimeout(RuntimeError):
     """The surface did not answer. Whether the effect applied is unknown."""
 
 
+class SurfaceRefused(RuntimeError):
+    """The surface answered, and the answer is that nothing applied.
+
+    The opposite of `SurfaceTimeout`, and only a surface that can prove it may raise it:
+    a guarded write that matched no row, a precondition checked in the same statement
+    as the change. "The resource is not in the state this action needs" - a draft
+    already discarded, an experiment no longer live - is this, not an error.
+
+    The gateway releases the idempotency claim for it. Raising it for an effect that
+    *might* have applied would turn an unknown outcome into a free slot, which is the
+    double-refund the two-phase ledger exists to prevent.
+    """
+
+
 class SurfaceClient(Protocol):
     """A real thing you can ask about, and a real thing you can change.
 
@@ -50,12 +64,16 @@ class RecordingClient:
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     reads: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     fail_after_effect: bool = False
+    # Refuse before acting: the precondition did not hold, and nothing applied.
+    refuse_before_effect: bool = False
 
     def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
         self.reads.append((resource, dict(query)))
         return {"resource": resource, "read_index": len(self.reads)}
 
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
+        if self.refuse_before_effect:
+            raise SurfaceRefused(f"{resource}: refused, nothing applied")
         self.calls.append((resource, dict(payload)))
         if self.fail_after_effect:
             # The effect applied; the answer never came back. This is the failure the

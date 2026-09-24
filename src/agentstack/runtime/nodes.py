@@ -14,6 +14,7 @@ from langgraph.runtime import Runtime
 
 from agentstack.context.assemble import assemble as assemble_context
 from agentstack.context.items import ContextItem, Scope, Trust
+from agentstack.execution.surfaces import SurfaceRefused
 from agentstack.model.contract import ExposedTool, ModelRequest
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.prompt import ApprovalPrompt
@@ -223,6 +224,13 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                     slot[0] = result.receipt
                 receipts.append(str(slot[0]))
                 committed_against.setdefault(request.resource, []).append(str(slot[0]))
+        except SurfaceRefused as exc:
+            # The resource was not in the state this action needs, and nothing applied.
+            # An answer, not a crash - the same as a proposal refused before the surface.
+            with tracer.span("tool.reject", tool=spec.name, reason=str(exc)):
+                pass
+            refusals.append(str(exc))
+            continue
         except (ApprovalRequired, ApprovalStale) as exc:
             summary = ApprovalPrompt(
                 spec=spec,
