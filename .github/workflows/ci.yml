@@ -56,6 +56,13 @@ jobs:
         if: github.event_name == 'pull_request'
         run: uv run python scripts/stack_guard.py --base origin/${{ github.base_ref }}
 
+      # Criterion 22. On a PR the last release is the base branch; on a push to main it
+      # is the commit main was at before the push.
+      - name: Would this deploy strand live runs?
+        run: >-
+          uv run python scripts/checkpoint_guard.py --base
+          ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+
       - name: Secrets
         uses: gitleaks/gitleaks-action@v2
         env:

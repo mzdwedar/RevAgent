@@ -616,11 +616,37 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
     to compare. Two processes touching the same incompatible checkpoint at once can
     both park (check-then-insert); harmless, both block, and T21's.
 
-- [ ] **T20 — CI guard against a stranding deploy** · layer 10 · *S*
+- [x] **T20 — CI guard against a stranding deploy** · layer 10 · *S*
   - Acceptance: CI compares the checkpoint schema against the last release and fails an
     incompatible change that ships no migration note.
   - Verify: criterion 22 — a deliberate incompatible change fails the build.
+    `tests/fitness/test_checkpoint_guard.py`, 16 tests, plus a real edit to `TurnState`
+    run against the committed record (below).
   - Depends: T19. Files: ~2.
+  - **Done.** `graph.checkpoint_shape()` is the shape as data: `TurnState`'s keys with
+    their source-text types, and the graph's nodes. Edges are left out on purpose — a
+    checkpoint resumes at the node it names, so rewiring after it strands nothing.
+    `checkpoints/schema.json` records it; `scripts/checkpoint_guard.py` judges.
+  - **"The last release" had to be defined, because there are no tags.** It is the
+    record as it stands at `--base`: the PR's base branch in CI, the pre-push commit on a
+    push to `main`, `HEAD` locally, a tag once releases are tagged. Comparing against
+    the base rather than the worktree is what makes the check honest: a change that
+    rewrites the record to match itself still fails against the release it ships over.
+  - **Compatible vs not is decided mechanically.** Adding a key (`total=False`, reads as
+    absent) or a node passes. Removing or retyping a key, or removing or renaming a
+    node, fails unless the change bumps the version, **drops the old one from
+    `COMPATIBLE_SCHEMA_VERSIONS`** (otherwise T19 resumes those runs into the new shape
+    instead of parking them), and adds a non-empty `checkpoints/vN.md`.
+  - The record must also match the code, so the next release is compared against the
+    truth; `--write` regenerates it and never makes a breaking change pass. An unknown
+    `--base` exits 2 instead of reading as "nothing released, all clear" — a typo in
+    CI's ref must not be a pass.
+  - Wired into `check_task.sh`, CI and a new `CONSTRAINTS.md` row.
+  - **Named gaps.** Types are compared as source text, so `Optional[str]` →
+    `str | None` would read as a retype: a false alarm, never a miss. A change to what
+    a key *means* with the same name and type is invisible to any structural check;
+    that stays a reviewer's judgement, and the note in `checkpoints/README.md` says so
+    by listing what a migration note must contain.
 
 - [ ] **T21 — Concurrency** · layers 2, 3, 10 · *M*
   - **Observed once at T15, unexplained:** `tests/infra/test_migrations.py::

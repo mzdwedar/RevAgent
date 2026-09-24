@@ -23,4 +23,7 @@ uv run python scripts/changed_line_coverage.py --min 80 || fail=1
 echo "----- bar integrity"
 uv run python scripts/stack_guard.py || fail=1
 
+echo "----- checkpoint compatibility"
+uv run python scripts/checkpoint_guard.py || fail=1
+
 exit $fail

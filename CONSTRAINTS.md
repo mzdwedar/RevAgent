@@ -109,6 +109,7 @@ Stack-specific (from `STACK.md`):
 | Callback authenticity | Bad signature, stale timestamp and replay each refused before any policy | `uv run pytest tests/fitness/test_slack_inbound.py` | every edit |
 | Approver authorisation | A signed interaction from an outsider is refused in layer 8, not the adapter | `uv run pytest tests/fitness/test_approver_authorisation.py` | every edit |
 | Approve to rollout | A human's answer grants a bound approval, satisfies the wait, and the rollout commits once — across a process death | `uv run pytest tests/fitness/test_approve_resume_rollout.py tests/durability` | task end, CI |
+| Checkpoint compatibility | An incompatible checkpoint change ships a version bump, drops the old version, and a migration note — or fails the build | `uv run python scripts/checkpoint_guard.py --base main` | task end, CI |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |

@@ -40,6 +40,7 @@ uv run agentstack-operator stalled --older-than 7d   # trigger waits past their 
 uv run pytest tests/live                 # real cohorts + real model (needs data/, token)
 uv run agentstack-preflight              # licence gate, as a deploy would run it
 uv run python scripts/stack_guard.py --base main   # did the bar get weakened?
+uv run python scripts/checkpoint_guard.py --base main   # would this deploy strand live runs?
 ```
 
 ## Workflow

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "fields": {
+    "blocked_on": "list[str]",
+    "context_fingerprint": "str",
+    "exposed": "list[str]",
+    "message": "str",
+    "model_text": "str",
+    "observations": "list[dict[str, Any]]",
+    "proposals": "list[dict[str, Any]]",
+    "receipts": "list[str]",
+    "refusals": "list[str]",
+    "resumed_by": "str | None",
+    "run_id": "str",
+    "schema_version": "int",
+    "status": "str",
+    "text": "str",
+    "wait_id": "str | None"
+  },
+  "nodes": [
+    "act",
+    "assemble",
+    "call_model",
+    "check_waits",
+    "expose",
+    "respond"
+  ]
+}

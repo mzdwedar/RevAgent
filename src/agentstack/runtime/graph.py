@@ -171,6 +171,29 @@ def _require_compatible(snapshot: Any, config: dict[str, Any], context: TurnCont
     )
 
 
+def checkpoint_shape() -> dict[str, Any]:
+    """What a checkpoint written by this code looks like, as plain data.
+
+    The keys of `TurnState` with their declared types, and the nodes a pending
+    checkpoint can name as `next`. Edges are left out on purpose: a checkpoint resumes
+    at the node it names, so rewiring what comes after strands nothing. This is what
+    `scripts/checkpoint_guard.py` compares against the last release (criterion 22).
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    nodes = build_turn_graph(InMemorySaver()).get_graph().nodes
+    return {
+        "version": CHECKPOINT_SCHEMA_VERSION,
+        # Postponed annotations reach a TypedDict as ForwardRefs; the text written in
+        # the source is the stable thing to compare.
+        "fields": {
+            name: str(getattr(kind, "__forward_arg__", kind))
+            for name, kind in sorted(TurnState.__annotations__.items())
+        },
+        "nodes": sorted(n for n in nodes if not n.startswith("__")),
+    }
+
+
 def build_turn_graph(checkpointer: Any) -> Any:
     """Compile the turn against a checkpointer.
 
