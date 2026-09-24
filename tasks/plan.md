@@ -123,3 +123,44 @@ it is written where people look; it is not acceptable as a quiet marker.
 The honest limit: CI proves our code handles the model's output correctly. It does not
 prove the model still works. That is what nightly is for, and it is stated rather than
 implied.
+
+---
+
+## Phase 7 — Experiment registry and narrow registry tools
+
+Spec: `SPEC-registry.md` (approved 2026-09-24; open questions taken at their defaults,
+Q2 refined below). Tasks: `tasks/todo.md` § Phase 7.
+
+```
+T22 stage split ──┐
+T23 schema ───────┼──► T25 Postgres client ──► [G] ──► T26 reads ─┐
+T24 refusal ──────┘                                    T27 draft  ├──► [H] ──► T30 ──► T31
+                                                       T28 abstain│
+                                                       T29 halt  ─┘
+```
+
+T22–T24 are independent; T26–T29 are independent once T25 lands.
+
+**Design decisions from reading the code**
+
+- **One statement per write.** `Database` has no transaction scope, deliberately. Each
+  transition is `WITH moved AS (UPDATE experiments … WHERE status = … RETURNING …)
+  INSERT INTO registry_events SELECT … FROM moved`. Zero rows = precondition miss,
+  provably nothing applied.
+- **Refused is not unresolved.** A precondition miss raises `SurfaceRefused`; the
+  gateway calls `IdempotencyLedger.abandon` — the case its docstring already names — and
+  audits `refused`. This refines spec Q2 ("finalize as refused"): `abandon` is the
+  existing mechanism, and a refused key must stay free for a later legitimate call.
+- **Draft resource path unchanged**, so existing fingerprints and approvals stay valid.
+  All new resources sit under `{tenant}/experiments/`, the existing sandbox prefix; the
+  list read uses the trailing-slash path, so containment is not widened.
+- **Idempotency keys are business identity**: revise and abstention hash their text;
+  discard and halt are one per version.
+
+**Risks**
+
+| Risk | Mitigation |
+|---|---|
+| Stage rename trips `checkpoint_guard` | handle the version bump in T22, never loosen the guard |
+| `stack_guard` reads a new tool as an approval downgrade | every tool lands at its final tier in its first commit |
+| Fake and Postgres clients drift | one contract suite runs against both (T25) |

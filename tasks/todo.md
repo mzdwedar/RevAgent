@@ -715,3 +715,73 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
 - [ ] Fitness tests and gates green; ratchets held
 - [ ] `/stack-audit` run and its findings addressed
 - [ ] The two named debts still named: PII in traces, secrets in environment variables
+
+## Phase 7 — Experiment registry and narrow registry tools
+
+Spec: `SPEC-registry.md`. Plan: `tasks/plan.md` § Phase 7. Every task names its layers
+and the test that proves it.
+
+- [ ] **T22 — Split the experiment stage** · layers 6, 3 · *S*
+  - Acceptance: `EXPERIMENT_STAGE` replaced by `draft` / `evaluation` / `rollout`;
+    `DRAFT` on `draft`, `ROLLOUT` on `rollout`; `migrations/0011` remaps existing
+    `runs.stage='experiment'` rows to `draft`.
+  - Verify: new `tests/fitness/test_registry_tools.py` — a `draft` run is not shown
+    `roll_out_variant_to_percentage`; full fitness suite and `checkpoint_guard` green.
+  - Files: `tools/experiments.py`, `migrations/0011_*`, `test_experiment_tools.py`,
+    `test_approve_resume_rollout.py`, `tests/durability/park_worker.py`.
+
+- [ ] **T23 — Registry schema** · layer 10 · *S*
+  - Acceptance: `migrations/0012` — `experiments` (status CHECK over five states),
+    `experiment_versions`, `draft_revisions`, `registry_events` (unique
+    `idempotency_key`); history tables insert-only by trigger.
+  - Verify: `tests/infra/test_migrations.py` up/down/up; `tests/infra/test_registry_store.py`
+    refuses UPDATE/DELETE on history tables.
+
+- [ ] **T24 — Surface refusal semantics** · layers 7, 3 · *S*
+  - Acceptance: `SurfaceRefused` → gateway `abandon`s the claim and audits `refused`;
+    the turn gets a tool refusal. A lost answer still leaves `IN_FLIGHT`.
+  - Verify: `tests/fitness/test_unresolved_effects.py` (extended).
+
+- [ ] **T25 — `PostgresRegistryClient` for the two existing tools** · layer 7 · *M*
+  - Acceptance: single-statement guarded writes via `Database`; the fake enforces the
+    same preconditions; `wiring.py` uses the Postgres client.
+  - Verify: one contract suite over both clients (spec criterion 7);
+    `test_approve_resume_rollout.py` and `tests/durability` green.
+
+### ✅ Checkpoint G — real store, behaviour unchanged
+- [ ] `check_task.sh`, `tests/durability`, `lint-imports`, `stack_guard`, `checkpoint_guard` green
+- [ ] Human review
+
+- [ ] **T26 — Read tools** · layers 6, 7, 5 · *M*
+  - Acceptance: `get_experiment`, `list_experiments` (`limit` 1–50), `get_rollout_history`.
+  - Verify: matrix rows in `test_registry_tools.py`; `limit: 51` refused; read of
+    model-authored text enters context `UNTRUSTED` (`test_untrusted_content.py`);
+    `execution.read` spans (`test_trace_completeness.py`).
+
+- [ ] **T27 — Draft lifecycle** · layers 6, 7 · *M*
+  - Acceptance: `revise_draft_hypothesis`, `discard_experiment_draft`; revise appends a
+    revision, never a new `experiment_version`.
+  - Verify: store contract — refused from `discarded`, `live`, `halted`; lost answer → one row.
+
+- [ ] **T28 — `record_abstention`** · layers 6, 7 · *S*
+  - Acceptance: append-only, no status change, `evaluation` stage only.
+  - Verify: store contract — appends in every state, status unchanged.
+
+- [ ] **T29 — `halt_rollout` + `halt_only_zeroes`** · layers 6, 7, 8 · *M*
+  - Acceptance: `live → halted` only; no `percentage` argument; policy refuses a
+    non-zero halt payload before the surface.
+  - Verify: `test_approval_tiers.py` (spec criterion 6); store contract.
+
+### ✅ Checkpoint H — all nine registry tools
+- [ ] Exposure matrix exactly draft 5 / evaluation 5 / rollout 4 (spec criterion 2)
+- [ ] Human review
+
+- [ ] **T30 — Narrowness bar, concurrency, injection eval** · layers 6, 9 · *M*
+  - Verify: `test_registry_tools.py` narrowness rules; 20 concurrent halts → one
+    `halted`, one event (`tests/durability/test_concurrency.py`); injection case in
+    `evals/cases/`.
+
+- [ ] **T31 — Ledger and bar** · docs · *S*
+  - `CONSTRAINTS.md` gains "Registry narrowness" and "Registry preconditions" rows
+    (additions only); `STACK.md` rows 6/7; `SPEC-registry.md` migration numbers and
+    open-question answers; `SPEC.md` decisions table links the sub-spec.
