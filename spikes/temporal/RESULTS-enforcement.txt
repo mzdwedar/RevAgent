@@ -1,0 +1,21 @@
+  key=content            retry: 1x  reset: 1x  second workflow: 1x
+  key=workflow+activity  retry: 1x  reset: 1x  second workflow: 2x
+  key=run+activity       retry: 1x  reset: 2x  second workflow: 2x
+  key=attempt            retry: 2x  reset: 2x  second workflow: 2x
+E1 PASS: only the content-derived key lands once under retry, reset and redelivery
+[e1_key_derivation exit 0]
+  retryable:     5 attempts burnt, 1 commit, ends 'failed:UnresolvedEffect' - the ledger held, but nothing reconciles
+  non-retryable: 1 attempt, parked, reconciled, re-run deduplicated -> 'receipt-reconciled', 1 commit
+E2 PASS: UnresolvedEffect must be non-retryable and route to a reconcile wait
+[e2_unresolved_effect exit 0]
+  snapshot carried from the workflow, world moved: update='accepted' outcome='receipt-1' commits=1
+  snapshot read in the activity,     world moved: update='accepted' outcome='refused:ApprovalStale' commits=0
+  snapshot read in the activity,     world still: update='accepted' outcome='receipt-2' commits=1
+  unauthorised approver, update accepted       : update='accepted' outcome='refused:ApproverNotAuthorized' commits=0
+E3 PASS: staleness holds only if the activity reads the world at the act; the validator accepted an unauthorised approver and layer 8 refused it
+[e3_approval_at_the_act exit 0]
+  no interceptor:        ('receipt-1', 1)
+  GatewayOnly allowlist: ('refused:UndeclaredActivity', 0)
+  workflow module importing the gateway: 'ran'
+E4 PASS: an allowlist interceptor refuses undeclared activities; the sandbox lets a workflow import the gateway, so only an import contract can forbid it
+[e4_gateway_only exit 0]

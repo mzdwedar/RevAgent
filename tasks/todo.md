@@ -807,3 +807,184 @@ and the test that proves it.
   - `CONSTRAINTS.md` gains "Registry narrowness" and "Registry preconditions" rows
     (additions only); `STACK.md` rows 6/7; `SPEC-registry.md` migration numbers and
     open-question answers; `SPEC.md` decisions table links the sub-spec.
+
+## Phase 8 — Durable runtime on Temporal
+
+Spec: `SPEC-durable-runtime.md`. Plan: `tasks/plan.md` § Phase 8. **Depends on Phase 7
+being complete.** Every task names its layers and the test that proves it. Criteria
+numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold after every task.
+
+- [ ] **T32 — Temporal substrate, verified first** · layer 10 · *S*
+  - Acceptance: a `temporal` service in `docker-compose.yml` with its own database;
+    `dev_up.sh` waits for it; `temporalio` moves from the `spike` group to runtime
+    dependencies; a test fixture uses per-invocation task queues. **Verify first:**
+    coverage.py either sees sandboxed workflow code or the unsandboxed-runner fix is in
+    place.
+  - Verify: new `tests/infra/test_temporal_substrate.py`: Temporal down → the test
+    **fails** (C45); a one-line sandboxed workflow shows up in the coverage report.
+  - Files: `docker-compose.yml`, `scripts/dev_up.sh`, `pyproject.toml`, `tests/conftest.py`,
+    `tests/infra/test_temporal_substrate.py`.
+
+- [ ] **T33 — Workflow package skeleton + contract 6** · layer 3 · *S*
+  - Acceptance: `runtime/temporal/contracts.py` (ids-only dataclasses) and an empty
+    `ExperimentWorkflow`; `.importlinter` contract 6 exactly as in the spec.
+  - Verify: `lint-imports` green; new `tests/fitness/test_temporal_boundaries.py`:
+    contract 6 exists and names all six forbidden modules (C38); `stack_guard`
+    flags its removal.
+  - Files: `runtime/temporal/{__init__,contracts,workflows}.py`, `.importlinter`, test.
+
+- [ ] **T34 — Worker, entry point, run identity** · layer 3 · *M*
+  - Acceptance: `worker.py` + `agentstack-worker`; the workflow id is
+    `experiment-run:{run_id}`; an `ensure_run` activity upserts the `runs` row; the worker
+    runs preflight before polling and exits non-zero when Temporal is unreachable.
+  - Verify: `test_temporal_boundaries`: 5 concurrent starts → one workflow, one `runs`
+    row (C29); worker with no server exits non-zero (C45); `test_run_identity`,
+    `test_prediction_gate` green.
+  - Files: `runtime/temporal/{worker,activities}.py`, `interfaces/worker_cli.py`,
+    `pyproject.toml` (script), test.
+
+- [ ] **T35 — The one RetryPolicy + declared-activity interceptor** · layer 3 · *S*
+  - Acceptance: `retry.py`: refusals (`UnresolvedEffect`, `ApprovalStale`,
+    `ApprovalRequired`, `PolicyDenied`, `SandboxViolation`, `ApproverNotAuthorized`,
+    `SurfaceRefused`) are non-retryable; `interceptors.py` refuses undeclared activities.
+  - Verify: `test_temporal_boundaries`: each refusal type → exactly one attempt (C35);
+    an undeclared activity is refused non-retryably (C37).
+  - Files: `runtime/temporal/{retry,interceptors,worker}.py`, test.
+
+### ✅ Checkpoint I — foundation, nothing can act yet
+- [ ] `check_task.sh`, `lint-imports`, `stack_guard`, `tests/infra` green; coverage risk closed
+- [ ] No activity exists that can reach `gateway.execute`
+- [ ] Human review
+
+- [ ] **T36 — Trigger loop: an evaluation cycle as an activity** · layer 3 · *M*
+  - Acceptance: the workflow waits for a trigger signal and runs `evaluate_cycle`
+    (a thin wrapper over `cycles.evaluate` + `operator`); `metric_movement` still can't propose.
+  - Verify: `test_trigger_asymmetry`, `test_trigger_to_candidate` green through the
+    worker; the `evaluate_cycle` activity rerun after it wrote → one cycle.
+  - Files: `runtime/temporal/{workflows,activities,contracts}.py`, `tests/durability/test_trigger_cycle.py`.
+
+- [ ] **T37 — Ingress hands triggers to the workflow** · layer 1 · *S*
+  - Acceptance: `interfaces/triggers.py` calls `client.deliver_trigger` (signal-with-start)
+    and resolves nothing itself.
+  - Verify: redelivered trigger **after the workflow closed**, with id reuse allowed →
+    one evaluation, deduped on the Postgres claim (C30); `test_layer_boundaries` contract 4.
+  - Files: `interfaces/triggers.py`, `runtime/temporal/client.py`, test.
+
+- [ ] **T38 — Trigger waits and deadlines on durable timers** · layer 3 · *S*
+  - Acceptance: a trigger wait writes its `waits` row (deadline required, as today) and
+    the workflow's timer marks it due; `operator stalled` is unchanged.
+  - Verify: `test_stalled_waits` green; time-skipping test: a wait past its deadline is
+    reported by `operator stalled` (C43).
+  - Files: `runtime/temporal/{workflows,activities}.py`, `tests/durability/test_timers.py`.
+
+### ✅ Checkpoint J — orchestration without effects (before the first side effect)
+- [ ] A real trigger drives a real cycle through the worker, killed and resumed, with no effect wired
+- [ ] `tests/durability`, fitness, gates green
+- [ ] Human review
+
+- [ ] **T39 — Idempotency keys never derive from Temporal identity** · layer 6 · *XS*
+  - Acceptance: nothing in `agentstack.tools` imports `temporalio`.
+  - Verify: `test_idempotency.py` gains the import assertion (rule 1, part of C36).
+  - Files: `tests/fitness/test_idempotency.py`.
+
+- [ ] **T40 — The turn as one activity** · layer 3 · *M*
+  - Acceptance: `run_turn` activity runs the LangGraph graph (Postgres checkpointer,
+    `durability="sync"`), mints the envelope inside, and passes ids in and out; its
+    timeout is 120s, with a heartbeat. PRE_COMMIT registry writes go through the gateway from here.
+  - Verify: `test_turn_graph` green; worker SIGKILLed mid-turn → resumes without
+    re-calling the model (`tests/durability/test_process_death.py` re-pointed); retry,
+    reset and redelivery of the activity → the registry write lands once (C36).
+  - Files: `runtime/temporal/{activities,workflows}.py`, `tests/durability/{worker,test_process_death}.py`.
+
+### ✅ Checkpoint K — first side effect from inside an activity
+- [ ] A PRE_COMMIT write from the turn activity commits once, audited with its rule
+- [ ] No envelope or prompt in the recorded history (spot check; T48 makes it a test)
+- [ ] Human review
+
+- [ ] **T41 — Approval wait and re-ask on timers; retire `deadlines.py`** · layer 3 · *M*
+  - Acceptance: `park_wait` activity writes the wait row (fingerprint, summary,
+    snapshot) and asks; the workflow re-asks on a timer, never expiring silently.
+    `deadlines.py` is deleted once its tests pass against the timer loop.
+  - Verify: time-skipping: 72 simulated hours unanswered → asked at every interval
+    (C32); `test_stalled_waits` re-ask tests green; `park_wait` rerun → one wait row.
+  - Files: `runtime/temporal/{workflows,activities}.py`, `runtime/deadlines.py` (deleted), `tests/durability/test_timers.py`.
+
+- [ ] **T42 — The Slack answer notifies the workflow** · layer 1 · *S*
+  - Acceptance: `slack_callback.py` runs `ApprovalCoordinator.apply` as today, **then**
+    `client.notify_answer` (a signal). The signal carries ids only.
+  - Verify: `test_slack_inbound`, `test_approver_authorisation` green; an outsider's
+    answer writes no approval, and the commit refuses (C39).
+  - Files: `interfaces/slack_callback.py`, `runtime/temporal/client.py`, test.
+
+- [ ] **T43 — The commit activity: snapshot at the act** · layer 3 · *M*
+  - Acceptance: `commit(CommitIntent)` takes no snapshot argument; it reads the snapshot,
+    mints the envelope and calls `gateway.execute`. `UnresolvedEffect` parks a
+    reconcile wait. This is the irreversible act.
+  - Verify: `test_state_snapshot` extended: the world moves after approval →
+    `ApprovalStale`, one attempt, audited, no commit (C33); an unresolved rollout → one
+    attempt, parked, reconciled, deduped (C34); `test_approve_resume_rollout`,
+    `test_unresolved_effects` green.
+  - Files: `runtime/temporal/{activities,workflows,contracts}.py`, `tests/fitness/test_state_snapshot.py`.
+
+- [ ] **T44 — Death while parked, end to end** · layer 3 · *S*
+  - Acceptance: the SPEC.md criterion 23 path runs on Temporal.
+  - Verify: `tests/durability/test_approve_after_death.py` re-pointed: SIGKILL while
+    parked, fresh worker, real Slack path; prepare, ask and commit each happen once;
+    resume ≤15s (C31).
+  - Files: `tests/durability/{park_worker,test_approve_after_death}.py`.
+
+### ✅ Checkpoint L — the approval boundary under Temporal
+- [ ] Trigger → score → draft → Slack → approve → rollout, killed while parked, still correct
+- [ ] Stale approval refused at the act; unresolved effect not retried blind
+- [ ] `/stack-audit` on the diff so far
+- [ ] Human review
+
+- [ ] **T45 — Bounded fan-out; retire `fanout.py`** · layer 3 · *S*
+  - Acceptance: worker `max_concurrent_activities` bounds evaluations; `fanout.py` is
+    deleted once its tests pass.
+  - Verify: `tests/durability/test_concurrency.py` re-pointed: 100 triggers, peak ≤
+    the limit, each commits once (C42).
+  - Files: `runtime/temporal/worker.py`, `runtime/fanout.py` (deleted), `tests/durability/test_concurrency.py`.
+
+- [ ] **T46 — Continue-as-new** · layer 3 · *S*
+  - Acceptance: every 100 cycles, carrying `run_id` and the current wait id.
+  - Verify: time-skipping: 250 cycles → same `run_id`, same pending wait, one audit trail (C44).
+  - Files: `runtime/temporal/workflows.py`, `tests/durability/test_timers.py`.
+
+- [ ] **T47 — Replay guard** · layer 3 · *M*
+  - Acceptance: `scripts/replay_guard.py` replays `tests/fixtures/histories/*` (recorded
+    by the durability tests) against this code; it runs in `check_full.sh`.
+  - Verify: an unguarded change to `ExperimentWorkflow` fails the guard, and the same
+    change behind `workflow.patched()` passes (C41); `checkpoint_guard` unchanged.
+  - Files: `scripts/replay_guard.py`, `scripts/check_full.sh`, `tests/fixtures/histories/`, `tests/fitness/test_replay_guard.py`.
+
+- [ ] **T48 — Nothing secret in history** · layer 3 · *S*
+  - Acceptance: a test decodes every payload in every recorded history.
+  - Verify: no envelope, `credential_ref`, prompt or evidence field anywhere (C40).
+  - Files: `tests/fitness/test_temporal_boundaries.py`.
+
+- [ ] **T49 — Traces across workflow and activities** · layer 9 · *S*
+  - Acceptance: every activity's spans carry our `run_id` and `session_id`; Temporal
+    history is never read as audit.
+  - Verify: `test_trace_completeness`, `test_audit_separate_from_traces` green through
+    the worker.
+  - Files: `runtime/temporal/activities.py`, `tests/fitness/test_trace_completeness.py`.
+
+- [ ] **T50 — `operator status` joins position and record** · layers 3, 1 · *S*
+  - Acceptance: status shows the workflow's position (Temporal) beside the run's record
+    (Postgres); `stalled` still reads only `waits`.
+  - Verify: `test_stalled_waits` operator tests green; a new status test for a parked run.
+  - Files: `runtime/operator.py`, `interfaces/operator_cli.py`, test.
+
+- [ ] **T51 — Ledger and bar** · docs · *S*
+  - `STACK.md` rows 3 and 10 (Temporal owns position, Postgres the record); `CONSTRAINTS.md`
+    additions only: floor bullets "No identity envelope, credential or prompt in
+    workflow history", "No idempotency key derived from Temporal identity", "No gateway
+    refusal retried"; enforced rows for the replay guard and `test_temporal_boundaries`;
+    fitness count ratchet; README counts.
+
+### ✅ Checkpoint M — Phase 8 complete
+- [ ] Spec criteria C29–C45 met; SPEC.md criteria 1–28 still hold
+- [ ] `check_full.sh` green, including `replay_guard` and `checkpoint_guard`
+- [ ] `/stack-audit` run and its findings addressed
+- [ ] Human review

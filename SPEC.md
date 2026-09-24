@@ -328,7 +328,7 @@ and it will not say so.
 | Concern | Choice | Notes |
 |---|---|---|
 | Language | Python ≥3.11, uv | unchanged |
-| Durable execution | **LangGraph** | ADR-0002 resolves. Checkpointer for state across waits; `interrupt()` for approval. Exact API surface to be verified against current docs at implementation time, not from memory. |
+| Durable execution | **Temporal** (runs), **LangGraph** (the turn, inside one activity) | Superseded 2026-09-24 by `SPEC-durable-runtime.md` (ADR-0007). Was: LangGraph alone. The Postgres checkpointer stays for the turn graph. |
 | Checkpoint store | Postgres | must survive a deploy, so not in-process |
 | Prediction | TabPFN-3.5 classifier (iteration 1), regressor (iteration 2) | licence-gated weights; the classifier is the arm the sibling benchmark validated |
 | Model serving (dev) | Ollama on Apple silicon | `num_ctx` is a value we set, not the model's nominal window |
@@ -594,7 +594,7 @@ visible as a change rather than a discovery.
 | | Decision |
 |---|---|
 | Agent shape | one durable run per experiment, trigger-based |
-| Durable execution | LangGraph, Postgres checkpointer (ADR-0002) |
+| Durable execution | Temporal owns the run; LangGraph + Postgres checkpointer run the turn (`SPEC-durable-runtime.md`, ADR-0007; supersedes the LangGraph-only decision) |
 | Language model's role | drafting proposals and explaining abstentions; nothing else |
 | TabPFN's role | **both** targeting and adjustment |
 | Primary metric | Incremental Net Saved Value |

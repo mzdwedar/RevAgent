@@ -1,6 +1,6 @@
 # ADR-0007: Temporal as the durable-execution backend — spike findings
 
-- Status: **proposed — awaiting decision** (choosing the backend is an ask-first act)
+- Status: **accepted** 2026-09-24, hybrid shape as recommended below (`SPEC-durable-runtime.md`)
 - Date: 2026-09-24
 - Layer: 3 (runtime)
 - Follows: ADR-0002 (durable execution backend), ADR-0006 (LangGraph turn execution)

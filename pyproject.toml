@@ -39,6 +39,7 @@ dev = [
     "kaggle>=1.6",
 ]
 spike = [
+    "cedarpy>=4.12.1",
     "temporalio>=1.33.0",
 ]
 

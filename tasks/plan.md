@@ -164,3 +164,69 @@ T22–T24 are independent; T26–T29 are independent once T25 lands.
 | Stage rename trips `checkpoint_guard` | handle the version bump in T22, never loosen the guard |
 | `stack_guard` reads a new tool as an approval downgrade | every tool lands at its final tier in its first commit |
 | Fake and Postgres clients drift | one contract suite runs against both (T25) |
+
+## Phase 8 — Durable runtime on Temporal
+
+Spec: `SPEC-durable-runtime.md` (approved 2026-09-24). Evidence: ADR-0007, ADR-0008.
+Tasks: `tasks/todo.md` § Phase 8. **Starts after Phase 7 is complete.** T24's
+`SurfaceRefused` and T25's Postgres registry client are what the turn activity will
+be committing through, and rewriting the runtime under a phase that is still
+changing it is the collision T22 already warned about.
+
+```
+T32 substrate ─► T33 skeleton ─► T34 worker ─► T35 retry+interceptor ─► [I]
+[I] ─► T36 trigger loop ─► T37 ingress ─► T38 trigger waits ─► [J]
+[J] ─► T39 keys guard ─► T40 turn activity ─► [K]
+[K] ─► T41 approval wait ─► T42 answer notify ─► T43 commit activity ─► T44 death e2e ─► [L]
+[L] ─► T45 fan-out ─┐
+       T46 cont-as-new ├─► T48 history audit ─► T49 traces ─► T50 status ─► T51 ledger ─► [M]
+       T47 replay guard┘
+```
+
+T45–T47 are independent once [L] passes. Everything before [L] is one path, in order.
+
+**Why this order**
+
+- **Effects arrive last, one boundary at a time.** [I] has no activity that can touch a
+  surface. [J] runs a real trigger through a real cycle with still no effect. The first
+  gateway call from inside an activity is T40, and the first irreversible one is T43.
+  Each sits behind its own checkpoint, because those are the places a wrong turn is
+  expensive to undo.
+- **The retry policy and the interceptor (T35) land before any activity can commit.**
+  Rule 2 (refusals are never retried) and rule 5 (only declared activities run) are
+  cheaper to have from the start than to retrofit onto code that already works.
+- **Record stays, orchestration moves.** No task changes `runs`, `waits`, `run_steps`,
+  `approvals`, `idempotency_claims` or `audit`. The existing fitness tests on those
+  keep asserting the record. The durability tests move to asserting the
+  orchestration, against a real worker process.
+- **Retirements happen in the task that proves the replacement.** `deadlines.py` goes in
+  T41 and `fanout.py` in T45, each only once its old tests pass against the new
+  mechanism.
+
+**Design decisions from reading the code**
+
+- **"Re-point" means an extra driver, not a rewrite.** `test_run_identity`,
+  `test_waiting_is_state` and `test_idempotency` assert properties of the Postgres
+  record, which is unchanged, so they stay as they are and must stay green. What moves
+  is `tests/durability/*`: `worker.py` and `park_worker.py` become Temporal worker
+  processes, killed with SIGKILL as in probe P4.
+- **The Slack path authorises before it notifies** (spec Open Question 3, answered):
+  `ApprovalCoordinator.apply` runs in the callback process as today, then
+  `client.notify_answer` sends a **signal**. A signal is enough because the workflow
+  only needs waking. An Update would add a synchronous reply and no authority.
+- **Activities wrap existing functions and add no logic.** `evaluate_cycle` calls
+  `cycles.evaluate`, `run_turn` calls the graph, and `commit` calls `gateway.execute`.
+  If an activity grows a decision of its own, that decision is in the wrong layer.
+- **The dev namespace retention is 7 days** (spec Open Question 2). Nothing depends on it,
+  because criterion 30 dedupes on the Postgres claim.
+
+**Risks**
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| coverage.py cannot see sandboxed workflow code | High: the 98% ratchet would drop or be gamed | **T32 checks this first.** The fix is to measure through an unsandboxed runner in the coverage job, never to exclude the module |
+| Two suites sharing one Temporal namespace collide, as Postgres did at T22 | Med: spurious failures | per-invocation task-queue names from the start (T32 fixture) |
+| `start_time_skipping()` downloads a Java test server at runtime | Med: CI without network fails | pin and cache the binary in CI (T32); fail, don't skip, when absent |
+| Update validators tempt authority checks into the sandbox | High: rule 4 broken quietly | signals only (decision above). `test_temporal_boundaries` asserts no `@workflow.update` carries a validator that imports `policy` |
+| A dual write (row written, activity dies before completing) | Med: duplicate rows | every activity write is an upsert or a claim; T36 and T41 each test a rerun of their activity |
+| Replay guard fixtures go stale | Med: false confidence | T47 records fixtures from the durability tests themselves, and deleting one is ask-first (spec Boundaries) |

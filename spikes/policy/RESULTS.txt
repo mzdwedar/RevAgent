@@ -1,0 +1,20 @@
+  480 cases: cedar disagrees on 0, rego disagrees on 0
+  planted 'policy grant satisfies ALWAYS' in cedar: 2 disagreements
+C1 PASS: both engines agree with Python on all 480 inputs, and the test catches a planted bug
+[c1_differential exit 0]
+  463 refusals; both engines return the same full reason set for every one
+  refusals with more than one reason: 385 (python's audit names only the first) - {2: 146, 3: 142, 4: 75, 5: 20, 6: 2}
+  cedar reports policy ids (policy0..N); the rule name needs the @id annotation map
+C2 PASS: both give every reason; the first-reason ordering has to live outside Cedar
+[c2_audit_parity exit 0]
+  cedar policy reading context.model_output: validation passed=False
+  cedar request with context.model_output: allowed=False, errors=1
+  opa check without schema: exit 0; with input schema: exit 1
+  opa at runtime, input with model_output: answered=True, same verdict as without=True
+C3 PASS: cedar refuses the field in both policy and request; rego only at `opa check -s`, which CI would have to run
+[c3_untrusted_boundary exit 0]
+  python (in-process)            p50      3.0us   p99      7.4us
+  cedar  (cedarpy, in-process)   p50     91.7us   p99    103.8us
+  rego   (OPA sidecar, HTTP)     p50    237.5us   p99    491.2us
+C4 PASS: every engine decides well inside one gateway call's database round trip
+[c4_cost exit 0]
