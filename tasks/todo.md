@@ -740,12 +740,24 @@ and the test that proves it.
     ran `check_task.sh` concurrently and produced 20+ spurious failures; alone, the
     suite is green. Per-invocation test database names would fix it — not this task.
 
-- [ ] **T23 — Registry schema** · layer 10 · *S*
+- [x] **T23 — Registry schema** · layer 10 · *S*
   - Acceptance: `migrations/0012` — `experiments` (status CHECK over five states),
     `experiment_versions`, `draft_revisions`, `registry_events` (unique
     `idempotency_key`); history tables insert-only by trigger.
   - Verify: `tests/infra/test_migrations.py` up/down/up; `tests/infra/test_registry_store.py`
     refuses UPDATE/DELETE on history tables.
+  - **Done.** 15 tests in `tests/infra/test_registry_store.py`, straight at the schema:
+    closed lifecycle, versions that must exist, insert-only history (UPDATE and DELETE,
+    per table), one row per effect, tenant in every key. `0012` down/up is exercised
+    by the T22 migration test's rollback to 10.
+  - **Spec revised** (`SPEC-registry.md` § Store): four states, not five; no
+    `idempotency_key` column — the surface never receives the key, so the store holds
+    unique what the key is made of; no run/approval columns — that is the audit trail.
+  - **Test isolation, again.** Another session's suite dropped `agentstack_app_test`
+    mid-run (95 spurious failures). Verified instead against a throwaway Postgres on
+    port 5434 (`DATABASE_URL=…:5434/agentstack`): 570 passed. The fix — a per-invocation
+    test database name — is now worth a task of its own.
+
 
 - [ ] **T24 — Surface refusal semantics** · layers 7, 3 · *S*
   - Acceptance: `SurfaceRefused` → gateway `abandon`s the claim and audits `refused`;

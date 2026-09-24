@@ -105,7 +105,7 @@ model's good behaviour.
 | Tool | Arguments |
 |---|---|
 | `get_experiment` | `tenant`, `experiment_id` |
-| `list_experiments` | `tenant`, `status` (enum of the five states, optional), `limit` (integer, 1–50, default 20) |
+| `list_experiments` | `tenant`, `status` (enum of the four states, optional), `limit` (integer, 1–50, default 20) |
 | `get_rollout_history` | `tenant`, `experiment_id` |
 | `revise_draft_hypothesis` | `tenant`, `experiment_id`, `experiment_version`, `hypothesis` |
 | `discard_experiment_draft` | `tenant`, `experiment_id`, `experiment_version`, `reason` |
@@ -156,10 +156,27 @@ tests/infra/test_registry_store.py                  preconditions, atomicity, id
 
 | Table | Holds | Mutability |
 |---|---|---|
-| `experiments` | `(tenant, experiment_id)` PK, `status` CHECK in the five states, `current_version`, timestamps | status column only, via guarded `UPDATE` |
-| `experiment_versions` | frozen cohort: version, variant, `targeting_model_version`, `risk_threshold`, `data_as_of` | insert-only |
-| `draft_revisions` | hypothesis text per revision, `run_id`, `revision_no` | insert-only |
-| `registry_events` | rollouts, halts, discards, abstentions: kind, version, payload, `idempotency_key`, `approval_id`, `run_id` | insert-only; `get_rollout_history` reads here |
+| `experiments` | `(tenant, experiment_id)` PK, `status` CHECK in `draft`/`live`/`halted`/`discarded`, `current_version` (FK to its version), timestamps | status column only, via guarded `UPDATE` |
+| `experiment_versions` | the candidate a version names: version, variant | insert-only |
+| `draft_revisions` | hypothesis text per revision, `revision_no`; unique per wording | insert-only |
+| `registry_events` | rollouts, halts, discards, abstentions: kind, version, payload (the cohort predicate travels in a rollout's); unique per effect | insert-only; `get_rollout_history` reads here |
+
+**Revised in T23**, against what the code allows:
+
+- **Four states, not five.** `approved` is not a registry state (approval binds an
+  action, in `approvals`) and `concluded` is iteration 2.
+- **No `idempotency_key` column.** `SurfaceClient.commit(resource, payload)` never
+  receives the key. The store instead holds unique what the key is made of: kind +
+  payload per version (`one_row_per_effect`), wording per version
+  (`one_row_per_revision`).
+- **No `run_id` / `approval_id` columns.** Who did what, under which approval, is the
+  audit trail's record (`audit.records`); the registry is what exists. The registry is
+  also not hung off `sessions`, so an experiment customers saw outlives the session
+  that drafted it.
+- **The cohort predicate is not on the version row.** The draft tool never carries it;
+  the rollout does, and it is recorded in the rollout event's payload.
+- **Insert-only is a trigger** raising a named integrity violation
+  (`registry_history_is_insert_only`), so the storage seam translates it.
 
 The current exposure is derived from the latest rollout or halt event, never stored as
 a second truth.
