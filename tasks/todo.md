@@ -648,22 +648,66 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
     that stays a reviewer's judgement, and the note in `checkpoints/README.md` says so
     by listing what a migration note must contain.
 
-- [ ] **T21 — Concurrency** · layers 2, 3, 10 · *M*
-  - **Observed once at T15, unexplained:** `tests/infra/test_migrations.py::
-    test_two_migrators_do_not_race` failed during a `check_task.sh` run and has passed
-    six consecutive full-suite runs since, including four deliberate attempts to
-    reproduce. Not reproduced, so the cause is **not** established.
-  - What is known: it passes 6/6 in isolation; it failed under the coverage-instrumented
-    full run; the suite now opens many pools at once (app 8, checkpointer 4, infra,
-    evals, plus subprocess pools in `tests/durability`). Pool exhaustion under load is a
-    *plausible* explanation and nothing more — the assertion text was truncated in the
-    output and was not captured.
-  - T21 should reproduce it deliberately rather than tune numbers until it stops. If it
-    is pool sizing, that is exactly the number this task exists to establish.
+- [x] **T21 — Concurrency** · layers 2, 3, 10 · *M*
   - Acceptance: trigger fan-out without stampede, pooling sized for the target, 100
     concurrent runs verified. Record the number actually achieved.
-  - Verify: new `tests/durability/test_concurrency.py`.
+  - Verify: `tests/durability/test_concurrency.py` (7 tests) and a regression test in
+    `tests/infra/test_migrations.py`.
   - Depends: T17. Files: ~4.
+  - **The T15 flake is explained, reproduced every time, and fixed.** It was not pool
+    sizing. `migrate.apply` read its ledger and left that transaction open, so every
+    per-file `conn.transaction()` after it was a *savepoint*, and nothing committed
+    until `_exclusive.__exit__` — which unlocked **before** committing.
+    `pg_advisory_unlock` takes effect when it executes, so for one round trip the
+    second migrator held the lock, could not see the uncommitted `0001`, ran it again
+    and failed with "relation already exists". One round trip is why it needed a
+    loaded, coverage-traced suite to show. Sleeping 0.3s after the unlock reproduced
+    it every time (`DuplicateTable`); the fix commits the read and commits before
+    unlocking. The regression test drives the real `__exit__` through a connection
+    class that records the transaction state at unlock (`INTRANS` before, `IDLE`
+    after) and fails on the old code. "One transaction per file" is now true, not
+    approximately true.
+  - **Found by the load test: a raced step crashed its loser.** Two deliveries of one
+    run's resuming turn both passed `StepLedger.step`'s `completed` check. The effect
+    was still applied once (the idempotency ledger hands the loser the winner's
+    receipt), but the loser died on `run_steps_complete_once` — in 80 of 100 runs.
+    Now a complete-once conflict with the *same* receipt is "another worker finished
+    this step"; a *different* receipt raises `StepConflict` (two effects); any other
+    constraint still raises. `started_but_unfinished` no longer reports a step that
+    has completed just because the loser's `started` row came after the winner's
+    `completed`. All three step tests fail on the old ledger.
+  - **Fan-out:** `runtime/fanout.py` drains a batch through at most `max_in_flight`
+    workers (default 8, never above the pool). Duplicates are already settled by the
+    cycle claim; one failed evaluation is returned, not raised, and stays unsettled.
+    Verified: 100 experiments × 3 deliveries, shuffled → 100 evaluations, peak ≤ 8.
+  - **Numbers achieved** (laptop, Apple silicon, Postgres 16 in Docker, one process,
+    full refund → park → approve → resume → commit path, each resume delivered twice
+    at once, every run committing exactly once):
+
+    | Runs | App pool | Checkpointer pool | Wall | Peak server conns | Pool timeouts |
+    |---|---|---|---|---|---|
+    | 100 | 5 | 2 | 2.5s | 7 | 0 |
+    | 100 | 10 | 4 | 2.6s | 12 | 0 |
+    | 100 | 20 (default) | 4 (default) | 2.7s | 22 | 0 |
+    | 100 | 40 | 4 | 2.6s | 27 | 0 |
+    | 200 | 20 | 4 | 5.8s | 22 | 0 |
+    | 300 | 20 | 4 | 9.3s | 22 | 0 |
+
+    **Wall time does not move with pool size**: one process is bound by Python, not
+    Postgres, and the checkpointer never opened more than 2 connections. The defaults
+    stand and are sized with room; at 24 connections a process, `max_connections=200`
+    admits 8 worker processes. Scaling past one process is more processes, not a bigger
+    pool. The suite verifies 100 against its own smaller pools (app 8, checkpointer 4).
+  - **Open decision, not made here: a per-run lease.** A duplicate that reaches the
+    gateway while the winner's claim is still open is refused with `UnresolvedEffect`
+    and audited `effect.unresolved` — 8–33 per load run. Safe (never a second effect),
+    but *misleading*: the claim is live, not abandoned, and an operator would reconcile
+    something that needs nothing. The fix is to stop two turns of one run overlapping
+    at all (a lease row on `runs`), which forces a lease TTL: longer than any turn, and
+    it delays resume after a process death by up to that TTL — which `tests/durability`
+    would then have to model. That trade-off is the user's.
+  - The T18/T19 races noted earlier (two timers re-asking, two processes parking one
+    checkpoint) remain harmless by construction: both are idempotent in effect.
 
 ### ✅ Checkpoint F — iteration 1 complete
 - [ ] All 28 success criteria in `SPEC.md` met or explicitly deferred with a reason

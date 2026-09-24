@@ -15,7 +15,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
-from agentstack.storage.database import Database
+from agentstack.storage.database import Database, IntegrityViolation
+
+# The database's own statement that a step completes once (migrations/0002).
+COMPLETE_ONCE = "run_steps_complete_once"
+
+
+class StepConflict(RuntimeError):
+    """Two workers completed one step with different receipts: two effects, not one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +66,11 @@ class StepLedger:
             " AND NOT EXISTS ("
             "   SELECT 1 FROM run_steps done"
             "   WHERE done.run_id = s.run_id AND done.name = s.name"
-            "     AND done.status <> 'started' AND done.id > s.id)"
+            # A completed step is finished, whichever worker's `started` row came
+            # last: two deliveries racing one step leave the loser's `started` after
+            # the winner's `completed` (T21).
+            "     AND (done.status = 'completed'"
+            "          OR (done.status <> 'started' AND done.id > s.id)))"
             " ORDER BY s.id",
             (run_id,),
         )
@@ -80,6 +91,13 @@ class StepLedger:
 
         Yields a one-element list the body sets to the receipt. On replay the body is
         skipped entirely - that is what makes the boundary worth having.
+
+        Two deliveries of one turn can both pass the `completed` check before either
+        writes (T21). The effect is still applied once - the idempotency ledger hands
+        the loser the winner's receipt - and the database lets only one completion
+        land. The loser is told the step is done rather than crashing on the
+        constraint, provided it saw the same receipt; a different one is two effects,
+        and that is refused loudly.
         """
         already = self.completed(run_id, name)
         if already is not None:
@@ -92,4 +110,16 @@ class StepLedger:
         except Exception:
             self._write(run_id, name, "failed", None)
             raise
-        self._write(run_id, name, "completed", slot[0])
+        try:
+            self._write(run_id, name, "completed", slot[0])
+        except IntegrityViolation as exc:
+            if exc.constraint != COMPLETE_ONCE:
+                raise
+            winner = self.completed(run_id, name)
+            assert winner is not None  # the constraint only fires on an existing completion
+            if winner.receipt != slot[0]:
+                raise StepConflict(
+                    f"step {name!r} of {run_id} was completed concurrently with receipt "
+                    f"{winner.receipt!r}, and this worker's effect returned {slot[0]!r}: "
+                    "two effects where the step boundary promised one"
+                ) from exc

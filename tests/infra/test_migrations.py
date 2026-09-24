@@ -7,9 +7,12 @@ tasks claim is a claim about a schema nobody can reproduce.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
+from typing import Any, ClassVar
 
 import pytest
+from psycopg import Connection
 from psycopg_pool import ConnectionPool
 
 from agentstack.storage import migrate
@@ -161,6 +164,68 @@ def test_two_migrators_do_not_race(db: ConnectionPool, tmp_path: Path) -> None:
     assert not any(isinstance(r, Exception) for r in results), results
     assert sorted(len(r) for r in results if isinstance(r, tuple)) == [0, 1]
     assert [m.version for m in migrate.applied(db)] == [1]
+
+
+class SlowUnlock(Connection):
+    """Records what is uncommitted when the lock is released, then holds the gap open.
+
+    `pg_advisory_unlock` takes effect when it executes, not at commit. Sleeping right
+    after it is a loaded machine's slow round trip, made deliberate: it is how T15's
+    one-off failure was reproduced every time instead of once in a while (T21).
+    """
+
+    at_unlock: ClassVar[list[str]] = []
+
+    def execute(self, query: Any, params: Any = None, **kwargs: Any) -> Any:
+        unlocking = "pg_advisory_unlock" in str(query)
+        if unlocking:
+            SlowUnlock.at_unlock.append(self.info.transaction_status.name)
+        cursor = super().execute(query, params, **kwargs)
+        if unlocking:
+            time.sleep(0.3)
+        return cursor
+
+
+@pytest.mark.usefixtures("db")  # an empty schema; the test opens its own pool
+def test_the_lock_is_released_only_once_the_work_is_committed(
+    test_database: str, tmp_path: Path
+) -> None:
+    """The cause of the T15 flake. Before the fix the first migrator unlocked while its
+    migration was still uncommitted; the second took the lock, could not see the work,
+    ran `0001` again and failed with "relation already exists"."""
+    directory = tmp_path / "slow"
+    directory.mkdir()
+    write_migration(
+        directory,
+        1,
+        "slow",
+        up="SELECT pg_sleep(0.4); CREATE TABLE slow (id int)",
+        down="DROP TABLE slow",
+    )
+    SlowUnlock.at_unlock.clear()
+    results: list[object] = []
+    barrier = threading.Barrier(2)
+
+    with ConnectionPool(
+        test_database, min_size=1, max_size=4, connection_class=SlowUnlock, open=True
+    ) as slow:
+
+        def run() -> None:
+            barrier.wait()
+            try:
+                results.append(migrate.apply(slow, directory))
+            except Exception as exc:  # recorded, then asserted on below
+                results.append(exc)
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+    assert SlowUnlock.at_unlock == ["IDLE", "IDLE"], "the lock was released over uncommitted work"
+    assert not any(isinstance(r, Exception) for r in results), results
+    assert sorted(len(r) for r in results if isinstance(r, tuple)) == [0, 1]
 
 
 def test_the_repositorys_own_migration_directory_is_well_formed(db: ConnectionPool) -> None:

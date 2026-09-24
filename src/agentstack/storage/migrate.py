@@ -202,6 +202,10 @@ def _applied(conn: Connection) -> tuple[AppliedMigration, ...]:
     rows = conn.execute(
         "SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version"
     ).fetchall()
+    # End the read. Left open, every `conn.transaction()` after it is a savepoint inside
+    # this transaction rather than a transaction of its own - "one transaction per file"
+    # would be false, and nothing would commit until the lock was already gone.
+    conn.commit()
     return tuple(AppliedMigration(*row) for row in rows)
 
 
@@ -222,7 +226,15 @@ def _verify_history(discovered: tuple[Migration, ...], done: tuple[AppliedMigrat
 
 
 class _exclusive:
-    """Session-scoped advisory lock held across the whole migration run."""
+    """Session-scoped advisory lock held across the whole migration run.
+
+    **Commit, then unlock.** `pg_advisory_unlock` takes effect the moment it executes,
+    not at commit. Unlocking with work still uncommitted lets the next migrator in,
+    and under READ COMMITTED it cannot see that work: it runs `0001` again and fails
+    with "relation already exists". That was T15's unexplained flake (T21) - a window
+    one round trip wide, which is why it only opened under a loaded, coverage-traced
+    suite. The commit below makes it zero wide, whatever else changes above it.
+    """
 
     def __init__(self, conn: Connection) -> None:
         self._conn = conn
@@ -232,5 +244,6 @@ class _exclusive:
         self._conn.commit()
 
     def __exit__(self, *_: object) -> None:
+        self._conn.commit()
         self._conn.execute("SELECT pg_advisory_unlock(%s)", (LOCK_KEY,))
         self._conn.commit()
