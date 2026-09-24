@@ -814,7 +814,7 @@ Spec: `SPEC-durable-runtime.md`. Plan: `tasks/plan.md` § Phase 8. **Depends on 
 being complete.** Every task names its layers and the test that proves it. Criteria
 numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold after every task.
 
-- [ ] **T32 — Temporal substrate, verified first** · layer 10 · *S*
+- [x] **T32 — Temporal substrate, verified first** · layer 10 · *S*
   - Acceptance: a `temporal` service in `docker-compose.yml` with its own database;
     `dev_up.sh` waits for it; `temporalio` moves from the `spike` group to runtime
     dependencies; a test fixture uses per-invocation task queues. **Verify first:**
@@ -824,6 +824,29 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     **fails** (C45); a one-line sandboxed workflow shows up in the coverage report.
   - Files: `docker-compose.yml`, `scripts/dev_up.sh`, `pyproject.toml`, `tests/conftest.py`,
     `tests/infra/test_temporal_substrate.py`.
+  - **Done**, in a separate worktree (`feat/temporal-t32`) while Phase 7 is still being
+    built. 4 tests. **The risk is closed:** coverage.py records lines that run inside
+    the workflow sandbox. The test was also checked against a planted line that never
+    runs, and it fails on that one.
+  - **The spec's dev server was wrong.** `temporalio/auto-setup` stopped at server
+    1.29.7. The spike verified 1.32.0. The dev server is now the CLI image
+    `temporalio/temporal:1.9.1` (`server start-dev`, SQLite on a volume), and the spec's
+    Tech Stack row is amended to say so.
+  - The image runs as the unprivileged `temporal` user, so its volume mounts at
+    `/home/temporal`, the one directory it owns. A fresh named volume elsewhere comes
+    up root-owned, and the server dies with `unable to open database file`.
+  - `docker-compose.yml` now pins `name: revenuecat-agent`. From a second checkout,
+    compose would otherwise start a second project whose fixed container names
+    collide with the first.
+  - CI starts Temporal with `docker compose up -d --wait temporal`. It isn't a
+    service container because those can't pass `server start-dev`.
+  - No async test plugin: each test drives its own `asyncio.run`. Adding
+    `pytest-asyncio` is a dependency decision, and this task didn't need it.
+  - **Moved to T38:** pinning the time-skipping test server in CI. Nothing uses it
+    before T38.
+  - **Found, not fixed:** `.gitignore` ignores all of `data/`, so
+    `data/manifest.json` is **not** committed, despite CLAUDE.md saying it is. A fresh
+    checkout fails `test_data_snapshot` until the manifest is copied in.
 
 - [ ] **T33 — Workflow package skeleton + contract 6** · layer 3 · *S*
   - Acceptance: `runtime/temporal/contracts.py` (ids-only dataclasses) and an empty

@@ -11,6 +11,7 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3.1.2",
     "ollama>=0.6.2",
     "slack-sdk>=3.44.1",
+    "temporalio>=1.33.0",
 ]
 
 [project.optional-dependencies]
@@ -40,7 +41,6 @@ dev = [
 ]
 spike = [
     "cedarpy>=4.12.1",
-    "temporalio>=1.33.0",
 ]
 
 [build-system]

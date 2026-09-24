@@ -80,7 +80,7 @@ on" becomes answerable from one place.
 | Concern | Choice | Notes |
 |---|---|---|
 | Orchestration | **Temporal**, `temporalio` ≥1.33 (Python SDK) | verified at 1.33.0 (ADR-0007) |
-| Dev server | `temporalio/auto-setup` in `docker-compose.yml`, Postgres persistence, its **own database** | not `agentstack`: Temporal's schema is not ours to migrate |
+| Dev server | `temporalio/temporal:1.9.1` (CLI 1.9.1, **server 1.32.0**) running `server start-dev` in `docker-compose.yml`, SQLite on a named volume | the server version the spike verified. Amended at T32: `temporalio/auto-setup` had stopped at server 1.29.7, and dev and tests on different servers is "compatible is not equivalent". Nothing of Temporal's touches our Postgres. |
 | Prod server | **deferred**, see ADR-0009 | invariants fixed there |
 | Turn execution | LangGraph, unchanged (ADR-0006) | one activity per turn |
 | Record stores | Postgres, unchanged | `runs`, `waits`, `run_steps`, `approvals`, `idempotency_claims`, `audit` |

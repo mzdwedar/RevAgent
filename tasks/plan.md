@@ -226,7 +226,7 @@ T45–T47 are independent once [L] passes. Everything before [L] is one path, in
 |---|---|---|
 | coverage.py cannot see sandboxed workflow code | High: the 98% ratchet would drop or be gamed | **T32 checks this first.** The fix is to measure through an unsandboxed runner in the coverage job, never to exclude the module |
 | Two suites sharing one Temporal namespace collide, as Postgres did at T22 | Med: spurious failures | per-invocation task-queue names from the start (T32 fixture) |
-| `start_time_skipping()` downloads a Java test server at runtime | Med: CI without network fails | pin and cache the binary in CI (T32); fail, don't skip, when absent |
+| `start_time_skipping()` downloads a Java test server at runtime | Med: CI without network fails | pin and cache the binary in CI (T38, where it is first used); fail, don't skip, when absent |
 | Update validators tempt authority checks into the sandbox | High: rule 4 broken quietly | signals only (decision above). `test_temporal_boundaries` asserts no `@workflow.update` carries a validator that imports `policy` |
 | A dual write (row written, activity dies before completing) | Med: duplicate rows | every activity write is an upsert or a claim; T36 and T41 each test a rerun of their activity |
 | Replay guard fixtures go stale | Med: false confidence | T47 records fixtures from the durability tests themselves, and deleting one is ask-first (spec Boundaries) |
