@@ -21,8 +21,9 @@ from agentstack.policy.approval import ApprovalRequired
 from agentstack.runtime.run import Run, new_run
 from agentstack.tools.experiments import (
     DRAFT,
-    EXPERIMENT_STAGE,
+    DRAFT_STAGE,
     ROLLOUT,
+    ROLLOUT_STAGE,
     prepare_draft,
     prepare_rollout,
 )
@@ -51,8 +52,8 @@ GOOD_ROLLOUT = {
 }
 
 
-def exposed(stack: Stack) -> Any:
-    return stack.deps.registry.expose_for(tenant=TENANT, stage=EXPERIMENT_STAGE)
+def exposed(stack: Stack, stage: str = DRAFT_STAGE) -> Any:
+    return stack.deps.registry.expose_for(tenant=TENANT, stage=stage)
 
 
 # --- the tiers, declared ---
@@ -89,7 +90,7 @@ def test_a_refund_run_is_shown_neither_experiment_tool(stack: Stack) -> None:
 
 def test_an_experiment_run_is_shown_neither_refund_tool(stack: Stack) -> None:
     """Exposing every tool on every run is the cheapest way to hand an injection a menu."""
-    names = {s.name for s in exposed(stack)}
+    names = {s.name for stage in (DRAFT_STAGE, ROLLOUT_STAGE) for s in exposed(stack, stage)}
 
     assert names == {"create_experiment_draft", "roll_out_variant_to_percentage"}
 
@@ -111,7 +112,9 @@ def test_a_wrong_type_is_refused(stack: Stack) -> None:
     """The model wrote the percentage as prose. The schema says integer."""
     with pytest.raises(InvalidToolArguments):
         stack.deps.registry.prepare(
-            ROLLOUT.name, {**GOOD_ROLLOUT, "percentage": "ten"}, exposed=exposed(stack)
+            ROLLOUT.name,
+            {**GOOD_ROLLOUT, "percentage": "ten"},
+            exposed=exposed(stack, ROLLOUT_STAGE),
         )
 
     assert stack.registry_client.rollouts == []
@@ -158,7 +161,7 @@ def test_a_rollout_without_the_cohort_predicate_cannot_be_prepared(
     arguments = {k: v for k, v in GOOD_ROLLOUT.items() if k != field}
 
     with pytest.raises(InvalidToolArguments):
-        stack.deps.registry.prepare(ROLLOUT.name, arguments, exposed=exposed(stack))
+        stack.deps.registry.prepare(ROLLOUT.name, arguments, exposed=exposed(stack, ROLLOUT_STAGE))
 
 
 def test_the_cohort_predicate_travels_in_the_payload() -> None:
@@ -196,14 +199,14 @@ def test_a_draft_against_a_different_cohort_is_a_different_effect() -> None:
 # --- through the whole stack ---
 
 
-def experiment_run(stack: Stack) -> Run:
+def experiment_run(stack: Stack, stage: str = DRAFT_STAGE) -> Run:
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
     return stack.runs.ensure(
         new_run(
             session_id=session.session_id,
             tenant=TENANT,
             user=USER,
-            stage=EXPERIMENT_STAGE,
+            stage=stage,
             channel="test",
         )
     )
@@ -232,7 +235,7 @@ def test_a_draft_commits_on_a_policy_grant_with_no_human(stack: Stack) -> None:
 
 def test_a_rollout_refuses_without_a_human(stack: Stack) -> None:
     """ALWAYS, end to end: no policy rule reaches this one."""
-    run = experiment_run(stack)
+    run = experiment_run(stack, ROLLOUT_STAGE)
     view = stack.resolver.resolve(session_id=run.session_id, user_id=USER, tenant=TENANT)
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)
 

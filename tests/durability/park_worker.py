@@ -18,7 +18,7 @@ from agentstack.runtime.run import new_run
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import open_pool
-from agentstack.tools.experiments import EXPERIMENT_STAGE, ROLLOUT, prepare_rollout
+from agentstack.tools.experiments import ROLLOUT, ROLLOUT_STAGE, prepare_rollout
 from agentstack.tools.spec import ActsAs
 
 TENANT = "acme"
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
                 session_id=args.session_id,
                 tenant=TENANT,
                 user=USER,
-                stage=EXPERIMENT_STAGE,
+                stage=ROLLOUT_STAGE,
                 channel="durability",
             )
         )

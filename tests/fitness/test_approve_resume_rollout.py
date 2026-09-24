@@ -24,7 +24,7 @@ from agentstack.policy.approvers import ApprovalReply, ApproverNotAuthorized
 from agentstack.runtime.approvals import ReplyNotApplicable
 from agentstack.runtime.run import Run, new_run
 from agentstack.runtime.waits import Wait
-from agentstack.tools.experiments import EXPERIMENT_STAGE, ROLLOUT, prepare_rollout
+from agentstack.tools.experiments import ROLLOUT, ROLLOUT_STAGE, prepare_rollout
 
 from .conftest import TENANT, USER
 
@@ -48,7 +48,7 @@ def parked(stack: Stack) -> tuple[Run, Wait]:
             session_id=session.session_id,
             tenant=TENANT,
             user=USER,
-            stage=EXPERIMENT_STAGE,
+            stage=ROLLOUT_STAGE,
             channel="test",
         )
     )

@@ -721,7 +721,7 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
 Spec: `SPEC-registry.md`. Plan: `tasks/plan.md` § Phase 7. Every task names its layers
 and the test that proves it.
 
-- [ ] **T22 — Split the experiment stage** · layers 6, 3 · *S*
+- [x] **T22 — Split the experiment stage** · layers 6, 3 · *S*
   - Acceptance: `EXPERIMENT_STAGE` replaced by `draft` / `evaluation` / `rollout`;
     `DRAFT` on `draft`, `ROLLOUT` on `rollout`; `migrations/0011` remaps existing
     `runs.stage='experiment'` rows to `draft`.
@@ -729,6 +729,16 @@ and the test that proves it.
     `roll_out_variant_to_percentage`; full fitness suite and `checkpoint_guard` green.
   - Files: `tools/experiments.py`, `migrations/0011_*`, `test_experiment_tools.py`,
     `test_approve_resume_rollout.py`, `tests/durability/park_worker.py`.
+  - **Done.** 6 tests: the exact stage × tool matrix (`test_registry_tools.py`) and the
+    remap up and down (`tests/infra/test_experiment_stage_migration.py`). The down
+    migration is lossy by necessity — three stages fold back into one — and says so.
+  - The migration test clears `audit` and `langgraph` on the way in *and* out: the
+    shared infra fixture resets only `public`, so a real-migrations test that leaves
+    them behind fails the next one on `DuplicateSchema`.
+  - **Found, not fixed:** two suites sharing the dev Postgres corrupt each other's
+    fixtures (duplicate approver keys, sessions vanishing mid-test). A second session
+    ran `check_task.sh` concurrently and produced 20+ spurious failures; alone, the
+    suite is green. Per-invocation test database names would fix it — not this task.
 
 - [ ] **T23 — Registry schema** · layer 10 · *S*
   - Acceptance: `migrations/0012` — `experiments` (status CHECK over five states),

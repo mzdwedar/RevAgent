@@ -7,10 +7,11 @@ Two tools, and the difference between them is the whole design:
 * `roll_out_variant_to_percentage` puts a variant in front of real customers.
   Irreversible, so `ALWAYS`: a person, every time.
 
-They live on their own stage. A run drafting an experiment is never shown the rollout
+Each lives on its own stage. A run drafting an experiment is never shown the rollout
 tool, and a refund run is shown neither - which is the exposure filter doing its actual
 job rather than being a field nobody reads. Exposing both to every run would hand a
-prompt injection a menu with the irreversible item on it.
+prompt injection a menu with the irreversible item on it. (They once shared a single
+`experiment` stage, which is exactly that menu; `migrations/0011` moved those runs.)
 
 **The rollout carries the cohort predicate.** `targeting_model_version` and
 `risk_threshold` are required arguments, not context the tool looks up for itself: an
@@ -27,8 +28,12 @@ from typing import Any
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 
-# Their own stage, so the exposure filter separates drafting from rolling out.
-EXPERIMENT_STAGE = "experiment"
+# One stage per half of the lifecycle, so the exposure filter separates them. A drafting
+# turn sees drafting tools, an evaluation turn sees what may stop an experiment, and a
+# rollout turn - the one that follows a human's yes - sees the rollout and nothing else.
+DRAFT_STAGE = "draft"
+EVALUATION_STAGE = "evaluation"
+ROLLOUT_STAGE = "rollout"
 
 DRAFT = ToolSpec(
     name="create_experiment_draft",
@@ -60,7 +65,7 @@ DRAFT = ToolSpec(
     reversible=True,
     approval=Approval.PRE_COMMIT,
     idempotency=Idempotency.KEY,
-    stages=frozenset({EXPERIMENT_STAGE}),
+    stages=frozenset({DRAFT_STAGE}),
 )
 
 ROLLOUT = ToolSpec(
@@ -101,7 +106,7 @@ ROLLOUT = ToolSpec(
         "rolling the percentage back to zero, which stops future exposure and does "
         "not unsee the offer or refund what it cost"
     ),
-    stages=frozenset({EXPERIMENT_STAGE}),
+    stages=frozenset({ROLLOUT_STAGE}),
 )
 
 
