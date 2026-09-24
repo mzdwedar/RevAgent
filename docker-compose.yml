@@ -3,6 +3,11 @@
 # Port 5433, not 5432: a laptop usually already has a Postgres on the default port,
 # and silently connecting to the wrong database is a bad way to learn that.
 
+# One project name wherever this file is run from. A second checkout of the repo is a
+# separate directory, and compose would otherwise start a second project whose fixed
+# container names collide with the first.
+name: revenuecat-agent
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -27,5 +32,31 @@ services:
       - "-c"
       - "max_connections=200"
 
+  # The orchestrator (layer 10, serving 3). The CLI image's dev server is server 1.32.0,
+  # the version the spike verified; auto-setup stopped at 1.29 (SPEC-durable-runtime).
+  # SQLite on a volume: nothing of Temporal's lives in our Postgres. Production is
+  # not this service - see docs/adr/0009.
+  temporal:
+    image: temporalio/temporal:1.9.1
+    container_name: agentstack-temporal
+    command:
+      - "server"
+      - "start-dev"
+      - "--ip"
+      - "0.0.0.0"
+      - "--db-filename"
+      - "/home/temporal/temporal.db"
+    ports:
+      - "7233:7233"   # frontend (gRPC)
+      - "8233:8233"   # web UI
+    volumes:
+      - agentstack-temporaldata:/home/temporal
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "localhost:7233"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
 volumes:
   agentstack-pgdata:
+  agentstack-temporaldata:

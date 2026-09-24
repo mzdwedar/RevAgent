@@ -2620,6 +2620,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
     { name = "slack-sdk" },
+    { name = "temporalio" },
 ]
 
 [package.optional-dependencies]
@@ -2639,7 +2640,6 @@ dev = [
 ]
 spike = [
     { name = "cedarpy" },
-    { name = "temporalio" },
 ]
 
 [package.metadata]
@@ -2652,6 +2652,7 @@ requires-dist = [
     { name = "psycopg-pool", specifier = ">=3.2" },
     { name = "slack-sdk", specifier = ">=3.44.1" },
     { name = "tabpfn", marker = "extra == 'prediction'", specifier = ">=9.0.0" },
+    { name = "temporalio", specifier = ">=1.33.0" },
 ]
 provides-extras = ["prediction"]
 
@@ -2665,10 +2666,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.6" },
 ]
-spike = [
-    { name = "cedarpy", specifier = ">=4.12.1" },
-    { name = "temporalio", specifier = ">=1.33.0" },
-]
+spike = [{ name = "cedarpy", specifier = ">=4.12.1" }]
 
 [[package]]
 name = "rich"

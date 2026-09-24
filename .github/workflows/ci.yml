@@ -39,6 +39,12 @@ jobs:
 
       - run: uv sync --frozen
 
+      # tests/infra does not skip when Temporal is absent either. Not a service
+      # container: those cannot pass the image a command, and this one needs
+      # `server start-dev`. Compose keeps it the same definition as dev.
+      - name: Temporal
+        run: docker compose up -d --wait temporal
+
       - name: Lint, format, types, layer contracts
         run: bash scripts/check_fast.sh
 
