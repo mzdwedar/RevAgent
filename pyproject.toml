@@ -38,6 +38,9 @@ dev = [
     # it reaches the network, and only agentstack.execution may do that.
     "kaggle>=1.6",
 ]
+spike = [
+    "temporalio>=1.33.0",
+]
 
 [build-system]
 requires = ["hatchling"]

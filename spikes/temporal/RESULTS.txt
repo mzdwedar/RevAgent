@@ -1,0 +1,16 @@
+P1 PASS: 1 of 5 concurrent starts won; USE_EXISTING attaches; closed id rejects redelivery
+  idempotency key=False: external effect landed 2x
+  idempotency key=True: external effect landed 1x
+P2 PASS: without our key a retried activity double-charges; with it, once
+  stale answer refused: WorkflowUpdateFailedError
+  second answer refused: WorkflowUpdateFailedError
+P3 PASS: 3 asks, stale+duplicate answers refused by validator, 1 update in history
+  worker 1 SIGKILLed while parked on wait-1
+P4 PASS: a fresh process resumed the parked run; effects ['prepare', 'ask:wait-1', 'commit:yes'] each ran once
+  V2Unsafe refused: Workflow activation completion failed: Failure { failure: Some(Failure { message: "[TMPRL1100] Nondeterminism ...
+P5 PASS: Replayer rejects the unguarded change, accepts the patched() one - offline, in CI
+  effects: ['draft', 'before-interrupt', 'before-interrupt', 'commit:yes']
+  activities scheduled: ['turn.draft', 'turn.approve', 'turn.approve', 'turn.commit']
+P6 PASS: graph runs as activities, no Postgres checkpointer; code before interrupt() ran 2x
+P7 PASS: 10 scorings, peak concurrency 2 with max_concurrent_activities=2
+P8 PASS: 3 asks across 72 simulated hours in 0.3s wall-clock

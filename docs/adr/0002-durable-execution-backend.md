@@ -1,6 +1,6 @@
 # ADR-0002: Durable execution backend
 
-- Status: **proposed — decide during `/spec`**
+- Status: **proposed — decide during `/spec`** (spike findings: [ADR-0007](0007-temporal-spike-findings.md))
 - Date: 2026-09-21
 
 ## Context
