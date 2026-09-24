@@ -27,6 +27,9 @@ class WaitWithoutDeadline(ValueError):
 
 TRIGGER = "trigger"
 HUMAN_APPROVAL = "human_approval"
+# A run whose checkpoint this code cannot read. Not stalled - nothing is late, the code
+# moved - and satisfied by migrating the checkpoint, not by an event arriving.
+NEEDS_MIGRATION = "needs_migration"
 
 # How long a question sits unanswered before it is put again. A default, unlike a
 # trigger's deadline: how patiently to treat a person does not depend on the workflow,
@@ -140,16 +143,22 @@ class WaitStore:
         return tuple(Wait(*row) for row in rows)
 
     def stalled(self, *, now: datetime, older_than: timedelta = timedelta(0)) -> tuple[Wait, ...]:
-        """Trigger waits past their deadline, parked at least `older_than` before `now`.
+        """Runs that will not move on their own, parked at least `older_than` before `now`.
 
-        The deadline is what makes a wait stalled; `older_than` only narrows the report.
-        `now` is an argument so that "a week later" is something a test can say.
+        Two kinds, reported together and told apart by `kind` because the remedies
+        differ: a trigger wait past its deadline (find out why the data never came), and
+        a run in `needs_migration` (migrate its checkpoint) - which has no deadline,
+        since it was never going to resume by waiting.
+
+        The deadline is what makes a trigger wait stalled; `older_than` only narrows the
+        report. `now` is an argument so that "a week later" is something a test can say.
         """
         rows = self.db.fetch_all(
             f"SELECT {_COLUMNS} FROM waits"
-            " WHERE NOT satisfied AND kind = %s AND deadline <= %s AND created_at <= %s"
-            " ORDER BY deadline, created_at",
-            (TRIGGER, now, now - older_than),
+            " WHERE NOT satisfied AND created_at <= %s"
+            "   AND ((kind = %s AND deadline <= %s) OR kind = %s)"
+            " ORDER BY kind, deadline, created_at",
+            (now - older_than, TRIGGER, now, NEEDS_MIGRATION),
         )
         return tuple(Wait(*row) for row in rows)
 

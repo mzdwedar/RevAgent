@@ -129,7 +129,8 @@ def test_restarting_with_input_would_have_re_run_it() -> None:
     source = inspect.getsource(graph.advance)
 
     assert "compiled.invoke(None, config" in source
-    assert "get_state(config).next" in source
+    assert "snapshot = compiled.get_state(config)" in source
+    assert "pending = snapshot.next" in source
 
 
 def test_a_fresh_turn_does_run_the_model(stack: Stack, run: Run) -> None:

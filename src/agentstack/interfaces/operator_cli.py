@@ -4,7 +4,8 @@
 
 `stalled` exists because trigger-based waiting fails silently: a run whose trigger
 never came looks exactly like one waiting patiently, unless something asks. This is
-the thing that asks.
+the thing that asks. It also lists runs parked in `needs_migration` (criterion 21),
+labelled separately: nothing is late there, the code moved under them.
 
 Exits 1 when anything is stalled, so a scheduler running it can alert on the exit code
 rather than on someone reading the output.
@@ -18,7 +19,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 
 from agentstack.runtime.run import RunStore
-from agentstack.runtime.waits import WaitStore
+from agentstack.runtime.waits import NEEDS_MIGRATION, WaitStore
 from agentstack.storage.database import Database
 from agentstack.storage.pool import database_url, open_pool, redacted
 
@@ -37,7 +38,9 @@ def duration(text: str) -> timedelta:
 def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
     parser = argparse.ArgumentParser(description="Report runs that are waiting too long.")
     commands = parser.add_subparsers(dest="command", required=True)
-    stalled = commands.add_parser("stalled", help="trigger waits past their deadline")
+    stalled = commands.add_parser(
+        "stalled", help="trigger waits past their deadline, and runs in needs_migration"
+    )
     stalled.add_argument(
         "--older-than",
         type=duration,
@@ -56,15 +59,23 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
         waits = WaitStore(db=db).stalled(now=now, older_than=args.older_than)
         runs = RunStore(db=db)
         for wait in waits:
-            assert wait.deadline is not None  # the query only returns waits that have one
             run = runs.get(wait.run_id)
             assert run is not None  # waits.run_id is a foreign key onto runs
+            where = f"{wait.wait_id}  run {wait.run_id}  tenant {run.tenant}"
+            if wait.kind == NEEDS_MIGRATION:
+                print(
+                    f"  {NEEDS_MIGRATION}  {where}  parked {_ago(now - wait.created_at)} ago  "
+                    f"checkpoint {wait.state_snapshot}"
+                )
+                continue
+            assert wait.deadline is not None  # a stalled trigger wait is one past its deadline
             print(
-                f"  stalled  {wait.wait_id}  run {wait.run_id}  tenant {run.tenant}  "
-                f"due {wait.deadline:%Y-%m-%d %H:%M%z}  overdue {_ago(now - wait.deadline)}"
+                f"  stalled  {where}  due {wait.deadline:%Y-%m-%d %H:%M%z}  "
+                f"overdue {_ago(now - wait.deadline)}"
             )
 
-    print(f"{len(waits)} stalled")
+    migrations = sum(1 for w in waits if w.kind == NEEDS_MIGRATION)
+    print(f"{len(waits) - migrations} stalled, {migrations} {NEEDS_MIGRATION}")
     return 1 if waits else 0
 
 

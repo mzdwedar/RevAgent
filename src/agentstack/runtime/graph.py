@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agentstack.runtime.waits import NEEDS_MIGRATION
+
 if TYPE_CHECKING:
     from agentstack.policy.envelope import IdentityEnvelope
     from agentstack.runtime.loop import TurnDeps
@@ -34,6 +36,25 @@ if TYPE_CHECKING:
 # waiting for them to land. Every durability claim here is about a process that dies,
 # and a checkpoint still being written when the process died is not a checkpoint.
 DURABILITY = "sync"
+
+# The shape of a checkpointed turn: the keys of `TurnState` and the nodes a pending
+# checkpoint can name as `next`. Bump it when a change means an older checkpoint would
+# be misread - a key renamed or retyped, a node renamed or removed - and say in
+# COMPATIBLE_SCHEMA_VERSIONS which older shapes this code can still resume.
+#
+# A checkpoint with no version is not assumed to be version 1. It is noticed, never
+# guessed (ADR-0005): the whole failure this exists for is code confidently resuming a
+# shape it only thinks it recognises.
+CHECKPOINT_SCHEMA_VERSION = 1
+COMPATIBLE_SCHEMA_VERSIONS = frozenset({1})
+
+
+class NeedsMigration(RuntimeError):
+    """This turn's checkpoint was written in a shape this code does not understand.
+
+    Raised after the run has been parked, never instead of parking it: the exception is
+    this process failing loudly, the wait is what the next process and the operator see.
+    """
 
 
 class TurnState(TypedDict, total=False):
@@ -47,6 +68,9 @@ class TurnState(TypedDict, total=False):
     """
 
     run_id: str
+    # Which shape this checkpoint was written in. Set when the turn starts, so every
+    # checkpoint the turn writes carries it.
+    schema_version: int
     message: str
     status: str
     text: str
@@ -105,10 +129,46 @@ def advance(
     was restarted with input would call the model again - which is the cost this whole
     task exists to avoid.
     """
-    pending = compiled.get_state(config).next
+    snapshot = compiled.get_state(config)
+    if snapshot.values:
+        _require_compatible(snapshot, config, context)
+    pending = snapshot.next
     if pending:
         return dict(compiled.invoke(None, config, context=context, durability=DURABILITY))
+    start = {**start, "schema_version": CHECKPOINT_SCHEMA_VERSION}
     return dict(compiled.invoke(start, config, context=context, durability=DURABILITY))
+
+
+def _require_compatible(snapshot: Any, config: dict[str, Any], context: TurnContext) -> None:
+    """Refuse to touch a checkpoint written in a shape this code does not understand.
+
+    Checked for any existing checkpoint, not only an unfinished one: invoking a finished
+    thread with new input merges it into the old values, so an old shape leaks into the
+    new turn just as surely as by resuming it.
+
+    The run is parked on a `needs_migration` wait, which blocks every other turn of the
+    run through the ordinary wait gate and is what `operator stalled` reports. Its state
+    snapshot names the checkpoint, so resuming it has to identify what was migrated.
+    """
+    found = snapshot.values.get("schema_version")
+    if found in COMPATIBLE_SCHEMA_VERSIONS:
+        return
+    run_id = context.run.run_id
+    thread = config["configurable"]["thread_id"]
+    checkpoint = snapshot.config["configurable"].get("checkpoint_id", "?")
+    parked_against = f"{thread}@{checkpoint}: schema v{found}"
+    waits = context.deps.waits
+    if not any(
+        w.kind == NEEDS_MIGRATION and w.state_snapshot == parked_against
+        for w in waits.pending_for(run_id)
+    ):
+        waits.park(run_id=run_id, kind=NEEDS_MIGRATION, state_snapshot=parked_against)
+    readable = ", ".join(f"v{v}" for v in sorted(COMPATIBLE_SCHEMA_VERSIONS))
+    raise NeedsMigration(
+        f"run {run_id} stopped at a checkpoint written in schema v{found}; this code "
+        f"resumes {readable}. The run is parked in {NEEDS_MIGRATION} rather than resumed "
+        "into a shape it does not understand: migrate the checkpoint, then satisfy the wait."
+    )
 
 
 def build_turn_graph(checkpointer: Any) -> Any:

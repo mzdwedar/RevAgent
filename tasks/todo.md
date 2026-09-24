@@ -583,12 +583,38 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
     command is `agentstack-operator`, not the spec's bare `operator`, matching
     `agentstack-migrate`. Unsettled `trigger_cycles` are not reported yet.
 
-- [ ] **T19 — Checkpoint versioning and `needs_migration`** · layer 3 · *M*
+- [x] **T19 — Checkpoint versioning and `needs_migration`** · layer 3 · *M*
   - Acceptance: every checkpoint carries a schema version; an incompatible one parks
     the run in `needs_migration`, distinct from `stalled`, and never resumes into a
     shape it does not understand.
-  - Verify: criterion 21.
+  - Verify: criterion 21 — `tests/fitness/test_checkpoint_versioning.py`, 12 tests.
   - Depends: T8b. Files: ~3.
+  - **Done.** `schema_version` is a key of `TurnState`, stamped when a turn starts, so
+    every checkpoint holding state carries it (LangGraph's first, pre-input checkpoint
+    holds nothing). `CHECKPOINT_SCHEMA_VERSION` and `COMPATIBLE_SCHEMA_VERSIONS` in
+    `runtime/graph.py` say what this code writes and what it can still resume.
+  - **The check is in `advance`, before LangGraph is invoked**, so nothing - not
+    `check_waits`, not the model - runs against a misread state. It applies to *any*
+    existing checkpoint, not only an unfinished one: invoking a finished thread with
+    new input merges into the old values, which leaks the old shape just as surely.
+  - **An unversioned checkpoint is incompatible, not "probably v1".** Pre-T19
+    checkpoints of unfinished turns park on first touch. ADR-0005's rule: noticed,
+    never guessed.
+  - **`needs_migration` is a wait kind**, not a new table. Waiting is state (Part 4),
+    and a parked run is waiting for a migration: the wait blocks *every* turn of the
+    run through the existing gate, survives the process, and is released by the
+    existing, audited resume. Its state snapshot names `thread@checkpoint: schema vN`,
+    so a resume has to identify what was migrated. Parking is idempotent per
+    checkpoint. `NeedsMigration` is raised *after* parking — the exception is this
+    process failing loudly (criterion 2), the wait is what everyone else sees.
+  - `operator stalled` reports it on its own line and in its own count, with no
+    deadline: it was never going to resume by waiting.
+  - **Named gaps.** No checkpoint migrations exist yet; the remedy is proven in a test
+    by rewriting the version with `update_state`, which is what a real migration would
+    do plus reshaping the values. Nothing yet checks that `TurnState` or the node set
+    changed *without* a bump — that is T20's CI guard, and it needs a shape fingerprint
+    to compare. Two processes touching the same incompatible checkpoint at once can
+    both park (check-then-insert); harmless, both block, and T21's.
 
 - [ ] **T20 — CI guard against a stranding deploy** · layer 10 · *S*
   - Acceptance: CI compares the checkpoint schema against the last release and fails an
