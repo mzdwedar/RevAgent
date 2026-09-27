@@ -31,12 +31,23 @@ REFUSALS = (
     "ApproverNotAuthorized",
 )
 
+# Not refusals: failures that the same state reproduces every time. A store that expects a
+# conflict catches `IntegrityViolation` itself (steps.py, surfaces.py), and every activity
+# write is an upsert or a claim, so one that reaches the activity boundary is a bug. Retrying
+# it only hides it: T34's missing session spun silently at one attempt a minute.
+# Postgres's transient failures (deadlock, serialization, a dropped connection) are other
+# classes, and they still retry.
+DETERMINISTIC = ("IntegrityViolation",)
+
 # Raised by `interceptors.DeclaredActivitiesOnly`, before the activity body runs.
 UNDECLARED = "UndeclaredActivity"
 
+# No attempt cap, deliberately. A cap can't tell an outage from a bug, and a run parked for
+# weeks on an approval must not die because Postgres was down for twenty minutes. What's
+# still retried indefinitely is surfaced by `operator status` instead (T50).
 RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=1),
-    non_retryable_error_types=[*REFUSALS, UNDECLARED],
+    non_retryable_error_types=[*REFUSALS, *DETERMINISTIC, UNDECLARED],
 )

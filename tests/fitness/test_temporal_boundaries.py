@@ -16,7 +16,7 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -38,9 +38,9 @@ from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import RunEnd, RunStart, workflow_id
 from agentstack.runtime.temporal.interceptors import DECLARED, DeclaredActivitiesOnly
-from agentstack.runtime.temporal.retry import REFUSALS, RETRY, UNDECLARED
+from agentstack.runtime.temporal.retry import DETERMINISTIC, REFUSALS, RETRY, UNDECLARED
 from agentstack.runtime.temporal.worker import build_worker
-from agentstack.storage.database import Database
+from agentstack.storage.database import Database, IntegrityViolation
 from tests.conftest import connect_temporal
 
 from .conftest import TENANT, USER
@@ -233,9 +233,19 @@ REFUSAL_TYPES: dict[str, type[Exception]] = {
 }
 
 
+# Everything the policy stops after one attempt, as the exception an activity would raise.
+FAILS_ONCE: dict[str, Callable[[str], Exception]] = {
+    **REFUSAL_TYPES,
+    IntegrityViolation.__name__: lambda message: IntegrityViolation(
+        "runs_session_id_fkey", message
+    ),
+}
+
+
 def test_the_policy_names_every_refusal_and_only_real_ones() -> None:
     assert set(REFUSALS) == set(REFUSAL_TYPES)
-    assert set(RETRY.non_retryable_error_types or ()) == {*REFUSALS, UNDECLARED}
+    assert set(DETERMINISTIC) == {IntegrityViolation.__name__}
+    assert set(RETRY.non_retryable_error_types or ()) == {*FAILS_ONCE, UNDECLARED}
 
 
 def test_every_activity_the_workflow_runs_uses_the_one_policy() -> None:
@@ -254,17 +264,19 @@ def test_every_activity_the_workflow_runs_uses_the_one_policy() -> None:
         assert isinstance(policies[0], ast.Name) and policies[0].id == "RETRY", ast.unparse(call)
 
 
-def test_each_refusal_is_attempted_exactly_once(temporal_address: str, task_queue: str) -> None:
-    attempts: dict[str, int] = dict.fromkeys(REFUSAL_TYPES, 0)
+def test_each_refusal_and_each_deterministic_failure_is_attempted_exactly_once(
+    temporal_address: str, task_queue: str
+) -> None:
+    attempts: dict[str, int] = dict.fromkeys(FAILS_ONCE, 0)
 
     @activity.defn(name="refuse")
     def refuse(name: str) -> None:
         attempts[name] += 1
-        raise REFUSAL_TYPES[name](f"probe: {name}")
+        raise FAILS_ONCE[name](f"probe: {name}")
 
     async def run_all() -> list[str]:
         client = await connect_temporal(temporal_address)
-        with ThreadPoolExecutor(max_workers=len(REFUSAL_TYPES)) as executor:
+        with ThreadPoolExecutor(max_workers=len(FAILS_ONCE)) as executor:
             async with Worker(
                 client,
                 task_queue=task_queue,
@@ -280,15 +292,15 @@ def test_each_refusal_is_attempted_exactly_once(temporal_address: str, task_queu
                             id=f"refusal-{name}-{uuid.uuid4()}",
                             task_queue=task_queue,
                         )
-                        for name in REFUSAL_TYPES
+                        for name in FAILS_ONCE
                     )
                 )
                 return await asyncio.wait_for(outcomes, RESULT_TIMEOUT_S)
 
     outcomes = asyncio.run(run_all())
 
-    assert [o.split(":")[0] for o in outcomes] == list(REFUSAL_TYPES)
-    assert attempts == dict.fromkeys(REFUSAL_TYPES, 1)
+    assert [o.split(":")[0] for o in outcomes] == list(FAILS_ONCE)
+    assert attempts == dict.fromkeys(FAILS_ONCE, 1)
 
 
 # --- rule 5: registered is not declared (criterion 37) ---

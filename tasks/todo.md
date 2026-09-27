@@ -935,23 +935,29 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     registers `rogue_rollout` on a worker with the guard: `UndeclaredActivity`,
     non-retryable, body never ran. Another asserts the production worker installs the
     guard and declares everything it registers.
-  - **Open, for Checkpoint I:** (a) `OutcomeNotAuthorized` (`policy/triggers.py`) is
-    a refusal too, and it belongs on the list when T36 makes `evaluate_cycle` an
-    activity. (b) Attempts are unbounded for everything that *isn't* a refusal. That's
-    right for an outage, and it's how the T34 foreign-key bug spun silently. It needs
-    a decision.
+  - **Decided at Checkpoint I (human, 2026-09-27):**
+    (a) `OutcomeNotAuthorized` goes on the list in T36. Left retryable, the second
+    attempt finds the cycle already claimed and returns it unsettled. The activity
+    then *succeeds*, and the refusal only survives in Temporal's history.
+    (b) **No attempt cap.** A cap can't tell an outage from a bug, and it would kill a
+    weeks-long parked run over a short Postgres outage. Instead, `IntegrityViolation`
+    is non-retryable (`retry.DETERMINISTIC`): stores that expect a conflict catch it
+    themselves, so one reaching an activity is a bug. Anything else still retried
+    indefinitely gets surfaced by `operator status` (T50).
 
 ### ✅ Checkpoint I — foundation, nothing can act yet
 - [x] `check_task.sh`, `lint-imports`, `stack_guard`, `tests/infra` green; coverage risk closed
 - [x] No activity exists that can reach `gateway.execute` (grimp: no import chain from
   `activities`, `worker` or `interceptors` to `execution.gateway`)
-- [ ] Human review
+- [x] Human review (2026-09-27: both open questions decided, see T35)
 
 - [ ] **T36 — Trigger loop: an evaluation cycle as an activity** · layer 3 · *M*
   - Acceptance: the workflow waits for a trigger signal and runs `evaluate_cycle`
     (a thin wrapper over `cycles.evaluate` + `operator`); `metric_movement` still can't propose.
   - Verify: `test_trigger_asymmetry`, `test_trigger_to_candidate` green through the
     worker; the `evaluate_cycle` activity rerun after it wrote → one cycle.
+    `OutcomeNotAuthorized` is non-retryable: exactly one attempt, and the workflow sees
+    the refusal (decided at Checkpoint I).
   - Files: `runtime/temporal/{workflows,activities,contracts}.py`, `tests/durability/test_trigger_cycle.py`.
 
 - [ ] **T37 — Ingress hands triggers to the workflow** · layer 1 · *S*
@@ -1065,6 +1071,8 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - Acceptance: status shows the workflow's position (Temporal) beside the run's record
     (Postgres); `stalled` still reads only `waits`.
   - Verify: `test_stalled_waits` operator tests green; a new status test for a parked run.
+    Status flags a pending activity past 10 attempts, with its last failure, because
+    the retry policy has no cap by design (decided at Checkpoint I).
   - Files: `runtime/operator.py`, `interfaces/operator_cli.py`, test.
 
 - [ ] **T51 — Ledger and bar** · docs · *S*
