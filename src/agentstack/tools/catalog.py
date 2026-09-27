@@ -18,6 +18,7 @@ from typing import Any
 
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.experiments import (
+    ABSTAIN,
     DISCARD,
     DRAFT,
     GET,
@@ -25,6 +26,7 @@ from agentstack.tools.experiments import (
     LIST,
     REVISE,
     ROLLOUT,
+    prepare_abstain,
     prepare_discard,
     prepare_draft,
     prepare_get,
@@ -128,4 +130,5 @@ def build_registry() -> Registry:
     registry.register(HISTORY, prepare_history)
     registry.register(REVISE, prepare_revise)
     registry.register(DISCARD, prepare_discard)
+    registry.register(ABSTAIN, prepare_abstain)
     return registry

@@ -856,9 +856,23 @@ and the test that proves it.
     check. The statement fails whole, so nothing applied, but it would have surfaced as
     an unresolved effect and stranded the claim. It is now a refusal on both clients.
 
-- [ ] **T28 — `record_abstention`** · layers 6, 7 · *S*
+- [x] **T28 — `record_abstention`** · layers 6, 7 · *S*
   - Acceptance: append-only, no status change, `evaluation` stage only.
   - Verify: store contract — appends in every state, status unchanged.
+  - **Done.** `PRE_COMMIT` on `experiments:annotate`, its own scope, so a grant to add a
+    note never implies a grant to stop anything. On the evaluation stage only.
+    - The key hashes the explanation: a retry is one record, and a later cycle with a
+      different reason is a second.
+    - Postgres writes it as one `INSERT … SELECT FROM experiment_versions`, with no
+      status predicate and no `UPDATE`. An unknown version matches no row, so it is a
+      refusal.
+    - Contract, both clients: it appends in `draft`, `live` and `discarded` (`halted`
+      joins in T29), leaves every read unchanged, and is not rollout history. The
+      same explanation twice is refused.
+    - Added to the lost-answer retry cases.
+  - **Spec Q3 answered by construction:** the tool is on `evaluation`, and nothing ties
+    a stage to a trigger kind. Whichever trigger woke an evaluation run, it can record
+    an abstention.
 
 - [ ] **T29 — `halt_rollout` + `halt_only_zeroes`** · layers 6, 7, 8 · *M*
   - Acceptance: `live → halted` only; no `percentage` argument; policy refuses a

@@ -541,3 +541,63 @@ def test_a_discarded_experiment_cannot_be_rolled_out(client: Any) -> None:
         client.commit(ROLLOUT_AT, rollout_payload())
 
     assert client.rollouts == []
+
+
+# --- the abstention record (T28) ---
+
+ABSTENTION_AT = f"{DRAFT_AT}/abstention"
+
+# Every state the lifecycle can reach so far. `halted` joins with the halt (T29).
+EVERY_STATE = ["draft", "live", "discarded"]
+
+
+def abstention_payload(
+    explanation: str = "the guardrail metric is inside its noise band", version: str = VERSION
+) -> dict[str, object]:
+    return {"experiment_version": version, "explanation": explanation}
+
+
+def abstentions(client: Any, app_database: Database) -> int:
+    """How many abstentions reached the store, asked of the store for either client."""
+    if isinstance(client, RegistryClient):
+        return sum(1 for _, kind, _ in client.events if kind == "abstention")
+    row = app_database.fetch_one("SELECT count(*) FROM registry_events WHERE kind = 'abstention'")
+    assert row is not None
+    return int(row[0])
+
+
+@pytest.mark.parametrize("state", EVERY_STATE)
+def test_an_abstention_is_recorded_in_every_state_and_moves_none(
+    client: Any, app_database: Database, state: str
+) -> None:
+    """Assumption 7: a record, not a transition. The run stops because the policy said
+    abstain, not because a row was written - so writing one changes nothing it could see."""
+    bring_to(client, state)
+    before = observed(client)
+
+    client.commit(ABSTENTION_AT, abstention_payload())
+
+    assert abstentions(client, app_database) == 1
+    assert observed(client) == before, "an abstention is not rollout history and moves no status"
+
+
+def test_the_same_abstention_twice_is_recorded_once(client: Any, app_database: Database) -> None:
+    bring_to(client, "live")
+    client.commit(ABSTENTION_AT, abstention_payload())
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(ABSTENTION_AT, abstention_payload())
+
+    client.commit(ABSTENTION_AT, abstention_payload("a later cycle, a different reason"))
+    assert abstentions(client, app_database) == 2
+
+
+def test_an_abstention_on_a_version_that_does_not_exist_is_refused(
+    client: Any, app_database: Database
+) -> None:
+    bring_to(client, "live")
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(ABSTENTION_AT, abstention_payload(version="exp:other"))
+
+    assert abstentions(client, app_database) == 0

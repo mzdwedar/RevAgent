@@ -239,6 +239,53 @@ DISCARD = ToolSpec(
 )
 
 
+# --- the evaluation record ---
+
+ABSTAIN = ToolSpec(
+    name="record_abstention",
+    description=(
+        "Record why this evaluation took no action on an experiment. Changes no status "
+        "and exposes nothing."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            "explanation": {"type": "string"},
+        },
+        "required": ["tenant", "experiment_id", "experiment_version", "explanation"],
+    },
+    acts_as=ActsAs.DELEGATED,
+    # Its own scope: appending a note is a smaller blast radius than halting, and a
+    # grant to annotate must not imply a grant to stop anything.
+    scope="experiments:annotate",
+    surface=Surface.REGISTRY,
+    side_effecting=True,
+    reversible=True,
+    approval=Approval.PRE_COMMIT,
+    idempotency=Idempotency.KEY,
+    stages=frozenset({EVALUATION_STAGE}),
+)
+
+
+def prepare_abstain(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    version = arguments["experiment_version"]
+    explanation = arguments["explanation"]
+    return ActionRequest(
+        tool=ABSTAIN.name,
+        surface=ABSTAIN.surface,
+        resource=f"{tenant}/experiments/{experiment}/abstention",
+        payload={"experiment_version": version, "explanation": explanation},
+        # One cycle abstaining twice for the same reason is a retry; a later cycle with
+        # a different explanation is a second record.
+        idempotency_key=f"abstain:{tenant}:{experiment}:{version}:{_digest(explanation)}",
+    )
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 

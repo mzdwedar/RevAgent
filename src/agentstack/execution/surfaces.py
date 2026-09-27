@@ -125,6 +125,7 @@ class Sandbox:
 #   {tenant}/experiments/{id}/rollout   commit  expose the current version to a percentage
 #   {tenant}/experiments/{id}/revision  commit  reword a draft's hypothesis
 #   {tenant}/experiments/{id}/discard   commit  a draft becomes discarded
+#   {tenant}/experiments/{id}/abstention commit record why nothing was done; no status moves
 #
 # Both clients below hold the same preconditions, and `tests/infra/test_registry_store.py`
 # runs one contract suite over both. A precondition that does not hold is
@@ -145,7 +146,12 @@ _COMMITS: dict[str | None, str] = {
     "rollout": "rollout",
     "revision": "revise",
     "discard": "discard",
+    "abstention": "abstention",
 }
+
+# Every state an experiment can be in. An abstention is a record, not a transition
+# (assumption 7), so it may be appended in any of them and moves none.
+_ANY_STATE = ("draft", "live", "halted", "discarded")
 
 # Each status change: the states it may start from, and the state it leaves. A rollout
 # may widen a live experiment or launch a draft; only a draft may be discarded. From any
@@ -279,6 +285,12 @@ class RegistryClient:
                 raise SurfaceRefused(f"{base}: this wording is already a revision")
             self.revisions[base].append(payload["hypothesis"])
             receipt = f"revision-{len(self.revisions[base])}"
+        elif action == "abstention":
+            self._current(base, payload, _ANY_STATE)
+            if (base, action, payload) in self.events:
+                raise SurfaceRefused(f"{resource}: this abstention is already recorded")
+            self.events.append((base, action, dict(payload)))
+            receipt = f"abstention-{len(self.events)}"
         else:
             allowed, becomes = _TRANSITIONS[action]
             self._current(base, payload, allowed)
@@ -404,7 +416,35 @@ class PostgresRegistryClient:
             return self._draft(tenant, experiment, payload)
         if action == "revise":
             return self._revise(tenant, experiment, payload)
+        if action == "abstention":
+            return self._abstain(tenant, experiment, payload)
         return self._transition(tenant, experiment, action, payload)
+
+    def _abstain(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
+        """Append the explanation to the named version, whatever its state. No `UPDATE`:
+        a run stops because the policy said abstain, not because a row was written."""
+        try:
+            row = self.db.fetch_one(
+                "INSERT INTO registry_events"
+                "  (tenant, experiment_id, experiment_version, kind, payload)"
+                " SELECT tenant, experiment_id, experiment_version, 'abstention', %s::jsonb"
+                " FROM experiment_versions"
+                " WHERE tenant = %s AND experiment_id = %s AND experiment_version = %s"
+                " RETURNING id",
+                (json.dumps(payload), tenant, experiment, payload["experiment_version"]),
+            )
+        except IntegrityViolation as exc:
+            if exc.constraint != "one_row_per_effect":
+                raise
+            raise SurfaceRefused(
+                f"{tenant}/experiments/{experiment}: this abstention is already recorded"
+            ) from exc
+        if row is None:
+            raise SurfaceRefused(
+                f"{tenant}/experiments/{experiment} has no version "
+                f"{payload['experiment_version']}; nothing was recorded"
+            )
+        return f"abstention-{row[0]}"
 
     def _draft(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
         # `ON CONFLICT DO NOTHING` on the experiment, and the version and revision are
