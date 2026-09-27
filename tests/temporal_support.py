@@ -14,16 +14,19 @@ from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from temporalio.client import Client, WorkflowHandle
 from temporalio.testing import WorkflowEnvironment
 
 from agentstack.context.targeting import TargetingRule
+from agentstack.interfaces.wiring import ExperimentTurns, Stack
+from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
-from agentstack.runtime.temporal.activities import RunActivities
+from agentstack.runtime.temporal.activities import RunActivities, TurnHost
 from agentstack.runtime.temporal.contracts import RunProgress
 from agentstack.runtime.temporal.worker import build_worker
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
@@ -35,6 +38,42 @@ WAIT_S = 30.0
 # Long enough that no test on the real server ever sees a trigger wait go overdue by
 # accident. The tests that are about deadlines set their own, under time-skipping.
 DEFAULT_TRIGGER_DEADLINE = timedelta(days=1)
+
+
+class DraftingEngine:
+    """Stands in for the model on a drafting turn, and does what the instruction asks.
+
+    Takes tenant, experiment and version from the rendered context, exactly as told, and
+    writes its own hypothesis and variant. If the draft tool isn't exposed it proposes
+    nothing, as a model shown no such tool could not call it. Every call is recorded
+    to `calls`, a file when the count must survive a killed process.
+    """
+
+    asset = ModelAsset(name="drafting-stub", context_window=8192, max_output_tokens=512)
+
+    def __init__(self, calls: Path | None = None) -> None:
+        self.calls_file = calls
+        self.calls = 0
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.calls += 1
+        if self.calls_file is not None:
+            with self.calls_file.open("a") as handle:
+                handle.write(f"{os.getpid()}\n")
+        told = dict(
+            token.split("=", 1) for token in request.rendered_context.split() if "=" in token
+        )
+        if "create_experiment_draft" not in request.tool_names:
+            return ModelResponse(text="nothing I was shown can draft this")
+        arguments = {key: told[key] for key in ("tenant", "experiment_id", "experiment_version")}
+        arguments |= {
+            "hypothesis": "a discount retains the customers most at risk",
+            "variant": "20-percent-off",
+        }
+        return ModelResponse(
+            text="drafted the experiment",
+            proposals=(ToolCallProposal(tool="create_experiment_draft", arguments=arguments),),
+        )
 
 
 class NoScoring:
@@ -52,6 +91,7 @@ def activities_for(
     scorer: Any = None,
     rule: TargetingRule | None = None,
     trigger_deadline: timedelta = DEFAULT_TRIGGER_DEADLINE,
+    turns: TurnHost | None = None,
 ) -> RunActivities:
     return RunActivities(
         runs=RunStore(db=db),
@@ -60,7 +100,14 @@ def activities_for(
         scorer=scorer or NoScoring(),
         trigger_deadline=trigger_deadline,
         rule=rule,
+        turns=turns,
     )
+
+
+def turns_for(stack: Stack, engine: Any) -> ExperimentTurns:
+    """The production turn host, over a test stack, with a test engine."""
+    stack.deps.engine = engine
+    return ExperimentTurns(stack)
 
 
 @asynccontextmanager

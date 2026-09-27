@@ -12,6 +12,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
+from agentstack.context.assemble import ContextBundle
 from agentstack.context.assemble import assemble as assemble_context
 from agentstack.context.items import ContextItem, Scope, Trust
 from agentstack.execution.surfaces import SurfaceRefused
@@ -92,6 +93,17 @@ def check_waits(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, An
 def assemble(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
     ctx = runtime.context
     _same_run(state, ctx)
+    bundle = _assembled(state, ctx)
+    return {"context_fingerprint": bundle.fingerprint()}
+
+
+def _assembled(state: TurnState, ctx: TurnContext) -> ContextBundle:
+    """Assemble the turn's context and keep it on this process's view of the turn.
+
+    The bundle is never checkpointed, only its fingerprint. So a process that resumes a
+    turn past `assemble` (after the one that assembled it died) builds it again here,
+    from the checkpointed message and the stores.
+    """
     run = ctx.run
     tracer = ctx.carried["tracer"]
     scope = Scope(tenant=run.tenant, user=run.user, session=run.session_id)
@@ -120,7 +132,7 @@ def assemble(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
     ):
         pass
     ctx.carried["bundle"] = bundle
-    return {"context_fingerprint": bundle.fingerprint()}
+    return bundle
 
 
 def expose(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
@@ -135,7 +147,10 @@ def expose(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
 def call_model(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
     ctx = runtime.context
     _same_run(state, ctx)
-    bundle = ctx.carried["bundle"]
+    # Resumed here by a process that never assembled this turn: the one that did died
+    # during the model call. Assemble again, and record what this call actually saw.
+    rebuilt = "bundle" not in ctx.carried
+    bundle = _assembled(state, ctx) if rebuilt else ctx.carried["bundle"]
     exposed = _exposed(ctx)
     response = ctx.deps.engine.generate(
         ModelRequest(
@@ -154,10 +169,13 @@ def call_model(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any
     )
     with ctx.carried["tracer"].span("model.call", proposals=[p.tool for p in response.proposals]):
         pass
-    return {
+    update: dict[str, Any] = {
         "proposals": [{"tool": p.tool, "arguments": dict(p.arguments)} for p in response.proposals],
         "model_text": response.text,
     }
+    if rebuilt:
+        update["context_fingerprint"] = bundle.fingerprint()
+    return update
 
 
 def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:

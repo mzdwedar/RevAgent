@@ -1080,7 +1080,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     pass by building a graph without external packages. Mutation-checked: a planted
     import in `tools/spec.py` fails with the chain named.
 
-- [ ] **T40 — The turn as one activity** · layer 3 · *M*
+- [x] **T40 — The turn as one activity** · layer 3 · *M*
   - Acceptance: `run_turn` activity runs the LangGraph graph (Postgres checkpointer,
     `durability="sync"`), mints the envelope inside, and passes ids in and out; its
     timeout is 120s, with a heartbeat. PRE_COMMIT registry writes go through the gateway from here.
@@ -1088,10 +1088,52 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     re-calling the model (`tests/durability/test_process_death.py` re-pointed); retry,
     reset and redelivery of the activity → the registry write lands once (C36).
   - Files: `runtime/temporal/{activities,workflows}.py`, `tests/durability/{worker,test_process_death}.py`.
+  - **Done, with the input decided at T40 (human, 2026-09-27): ids now, evidence later.**
+    After a `propose` cycle the workflow takes a `draft` turn. `runtime/drafting.py`
+    builds the instruction from the cycle's record (tenant, experiment, version,
+    watermark) inside the activity, so no prompt enters history. Feeding the cohort's
+    evidence (size, threshold, value at risk) is its own layer-5 task: it isn't stored
+    when a cycle settles.
+  - **Turn identity comes from the cycle, not from Temporal:**
+    `{stage}:{experiment}:{watermark}:{kind}`. Every attempt and every later execution
+    is the same LangGraph thread. `graph.finished_turn` makes a finished turn its own
+    answer, since `advance` would start a finished thread over.
+  - **Session work stays above the runtime.** `TurnHost` (runtime) is implemented by
+    `wiring.ExperimentTurns` (interfaces): it resolves the session, mints the envelope
+    inside the activity, and writes the transcript, as `handle()` does. Least privilege
+    per stage: a `draft` turn's envelope carries only `experiments:write`.
+  - The stage is the workflow's choice (position), passed in the intent. Exposure
+    follows it, and approval tiers still gate commits. `contracts.DRAFT` is held equal
+    to `tools.experiments.DRAFT_STAGE` by a test.
+  - The heartbeat is a thread in a copy of the activity's context: 5s beats, 15s
+    timeout. It's verified by a 20s turn that completes in one attempt, and
+    mutation-checked: without beats that turn never completes.
+  - 13 tests: `test_turn_activity.py` has 7 (drafted once and audited with
+    `approval.policy:`; no instruction or envelope in history; transcript; a rerun, a
+    redelivery after close and a **workflow reset** each leave one model call and one
+    draft; the heartbeat). `test_worker_death.py` gains the mid-turn SIGKILL: the model
+    answered, the gateway not yet called, and a fresh process finishes in ~16s without
+    asking again. `test_turn_graph.py` gains the resume-at-`call_model` test.
+  - **Found and fixed, pre-existing since T8a:** a turn resumed at `call_model` (its
+    process died *during* the model call, the likeliest death) raised
+    `KeyError: 'bundle'` on every retry, forever. The bundle was only ever built by
+    `assemble` in the dying process. `call_model` now reassembles it and records the
+    fingerprint it actually saw. The checkpoint shape is unchanged. The mutant heartbeat
+    run is what surfaced it.
+  - **Also fixed:** the `ModelEngine` protocol declared `asset` settable, and
+    `OllamaEngine` never matched it. Nothing writes `asset`, so the protocol now asks
+    for a readable one. A worker with no turn host fails a turn once, non-retryably
+    (`NoTurnHost`), and doesn't spin.
+  - `agentstack-worker` now builds the full stack with `OllamaEngine()` (qwen3:8b).
+  - `test_process_death.py` is kept as it is, since it still proves the LangGraph
+    checkpoint path directly, and the Temporal re-pointing is the new test beside it.
 
 ### ✅ Checkpoint K — first side effect from inside an activity
-- [ ] A PRE_COMMIT write from the turn activity commits once, audited with its rule
-- [ ] No envelope or prompt in the recorded history (spot check; T48 makes it a test)
+- [x] A PRE_COMMIT write from the turn activity commits once, audited with its rule
+  (`test_turn_activity`: one `committed` audit record whose decision is
+  `approval.policy:…`; also after SIGKILL, retry, redelivery and reset)
+- [x] No envelope or prompt in the recorded history (spot check on the real history JSON:
+  no instruction text, no `vault://` credential ref, no scope)
 - [ ] Human review
 
 - [ ] **T41 — Approval wait and re-ask on timers; retire `deadlines.py`** · layer 3 · *M*

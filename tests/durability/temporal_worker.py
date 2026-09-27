@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ import pytest
 
 from agentstack.context import datasets
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
+from agentstack.interfaces.wiring import build_stack
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
@@ -31,9 +33,11 @@ from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import connect
 from agentstack.runtime.temporal.worker import build_worker
 from agentstack.runtime.waits import WaitStore
+from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import open_pool
 from tests.fitness.test_trigger_to_candidate import RULE, StubScorer, snapshot
+from tests.temporal_support import DraftingEngine, turns_for
 
 # A stray worker must not outlive the test that started it.
 LIFETIME_S = 120.0
@@ -77,27 +81,62 @@ def _fixture_dataset() -> None:
     pytest.MonkeyPatch().setattr(datasets, "load", only_the_fixture)
 
 
+class HangingGateway:
+    """Reads pass through; the first commit announces itself and then never returns.
+
+    It hangs *before* the real gateway is called, so no idempotency claim exists yet:
+    the kill lands after the model call was checkpointed and before any effect began.
+    Killed inside the surface call instead, the retry would rightly meet an
+    `UnresolvedEffect`, and that is T43's case, not this one.
+    """
+
+    def __init__(self, inner: Any, reached: Path) -> None:
+        self.inner = inner
+        self.reached = reached
+
+    def read(self, **kwargs: Any) -> Any:
+        return self.inner.read(**kwargs)
+
+    def execute(self, **kwargs: Any) -> Any:
+        # Which tool got here, so the test knows the kill landed on the effect it meant.
+        self.reached.write_text(kwargs["request"].tool)
+        time.sleep(LIFETIME_S)
+        raise AssertionError("a hanging gateway outlived its test")
+
+
 async def serve(args: argparse.Namespace) -> None:
     client = await connect(args.address)
-    with (
-        open_pool(args.database_url, min_size=1, max_size=4) as pool,
-        ThreadPoolExecutor(max_workers=4) as executor,
-    ):
-        db = Database(pool=pool)
-        activities = RunActivities(
-            runs=RunStore(db=db),
-            cycles=CycleStore(db=db),
-            waits=WaitStore(db=db),
-            scorer=RecordingScorer(Path(args.scorer_calls)),
-            trigger_deadline=TriggerCadence.load().trigger_deadline,
-            rule=RULE,
-        )
-        worker = build_worker(
-            client, activities=activities, executor=executor, task_queue=args.task_queue
-        )
-        async with worker:
-            Path(args.ready).write_text(str(os.getpid()))
-            await asyncio.sleep(LIFETIME_S)
+    checkpoints, saver = open_checkpointer(args.database_url)
+    try:
+        with (
+            open_pool(args.database_url, min_size=1, max_size=4) as pool,
+            ThreadPoolExecutor(max_workers=4) as executor,
+        ):
+            db = Database(pool=pool)
+            stack = build_stack(db, saver)
+            model_calls = Path(args.model_calls or f"{args.ready}.model-calls")
+            turns = turns_for(stack, DraftingEngine(calls=model_calls))
+            if args.hang_before_gateway:
+                stack.deps.gateway = HangingGateway(
+                    stack.deps.gateway, Path(args.hang_before_gateway)
+                )
+            activities = RunActivities(
+                runs=RunStore(db=db),
+                cycles=CycleStore(db=db),
+                waits=WaitStore(db=db),
+                scorer=RecordingScorer(Path(args.scorer_calls)),
+                trigger_deadline=TriggerCadence.load().trigger_deadline,
+                rule=RULE,
+                turns=turns,
+            )
+            worker = build_worker(
+                client, activities=activities, executor=executor, task_queue=args.task_queue
+            )
+            async with worker:
+                Path(args.ready).write_text(str(os.getpid()))
+                await asyncio.sleep(LIFETIME_S)
+    finally:
+        checkpoints.close()
 
 
 def main() -> None:
@@ -107,6 +146,8 @@ def main() -> None:
     parser.add_argument("--database-url", required=True)
     parser.add_argument("--scorer-calls", required=True)
     parser.add_argument("--ready", required=True)
+    parser.add_argument("--model-calls", default=None)
+    parser.add_argument("--hang-before-gateway", default=None, metavar="REACHED_FILE")
     args = parser.parse_args()
     _fixture_dataset()
     asyncio.run(serve(args))

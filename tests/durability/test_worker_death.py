@@ -47,7 +47,12 @@ def stack(app_database: Database, checkpointer: Any) -> Stack:
 
 
 def start_worker(
-    address: str, queue: str, database_url: str, scorer_calls: Path, ready: Path
+    address: str,
+    queue: str,
+    database_url: str,
+    scorer_calls: Path,
+    ready: Path,
+    *extra: str,
 ) -> subprocess.Popen[bytes]:
     process = subprocess.Popen(
         [
@@ -64,6 +69,7 @@ def start_worker(
             str(scorer_calls),
             "--ready",
             str(ready),
+            *extra,
         ],
         cwd=ROOT,
         env={**os.environ, "PYTHONPATH": f"{ROOT / 'src'}{os.pathsep}{ROOT}"},
@@ -171,3 +177,87 @@ def test_a_run_survives_its_worker_being_killed_while_it_waits(
     assert pending.wait_id == resumed.waiting_on == f"wait-{run_id}-trigger-1"
     assert app_database.fetch_one("SELECT count(*) FROM trigger_cycles") == (2,)
     print(f"resumed in a fresh process {took:.1f}s after it started")
+
+
+# The turn heartbeats; its retry comes once HEARTBEAT_TIMEOUT (15s) passes unbeaten.
+TURN_RESUME_BOUND_S = 45.0
+
+
+def test_a_turn_killed_after_the_model_answered_is_finished_without_asking_again(
+    stack: Stack,
+    app_database_url: str,
+    temporal_address: str,
+    task_queue: str,
+    tmp_path: Path,
+) -> None:
+    """T40, re-pointing criterion 1 at Temporal: killed mid-turn, resumed, not re-asked.
+
+    The first worker is killed after the model's answer was checkpointed and before
+    the gateway was called, so no effect has begun. The activity's heartbeat stops, and
+    Temporal hands the turn to a fresh process. That process resumes the turn from its
+    checkpoint: it does not ask the model again, and it commits the draft once.
+    """
+    scorer_calls = tmp_path / "scorer-calls.txt"
+    model_calls = tmp_path / "model-calls.txt"
+    reached = tmp_path / "reached-the-gateway.txt"
+    queue = f"{task_queue}-{uuid.uuid4().hex[:6]}"
+    first = start_worker(
+        temporal_address,
+        queue,
+        app_database_url,
+        scorer_calls,
+        tmp_path / "first.ready",
+        "--model-calls",
+        str(model_calls),
+        "--hang-before-gateway",
+        str(reached),
+    )
+    second: subprocess.Popen[bytes] | None = None
+    try:
+
+        async def into_the_turn() -> str:
+            client = await connect_temporal(temporal_address)
+            return await deliver(stack, client, payload(WATERMARK), source="t", task_queue=queue)
+
+        run_id = asyncio.run(into_the_turn())
+        deadline = time.monotonic() + READY_TIMEOUT_S
+        while not reached.exists():
+            assert time.monotonic() < deadline, "the turn never reached the gateway"
+            time.sleep(0.1)
+        os.kill(first.pid, signal.SIGKILL)
+        first.wait(timeout=10)
+
+        began = time.monotonic()
+        second = start_worker(
+            temporal_address,
+            queue,
+            app_database_url,
+            scorer_calls,
+            tmp_path / "second.ready",
+            "--model-calls",
+            str(model_calls),
+        )
+
+        async def finished() -> RunProgress:
+            client = await connect_temporal(temporal_address)
+            handle = client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+            return await progress_until(
+                handle, lambda p: len(p.turns) == 1, timeout=TURN_RESUME_BOUND_S
+            )
+
+        progress = asyncio.run(finished())
+        took = time.monotonic() - began
+    finally:
+        for process in (first, second):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+    assert reached.read_text() == "create_experiment_draft", "killed at the draft's commit"
+    assert model_calls.read_text().split() == [str(first.pid)], "asked once, before the kill"
+    (turn,) = progress.turns
+    assert turn.refusal is None and turn.receipts == 1, turn
+    assert list(stack.registry_client.drafts) == ["acme/experiments/exp-7"]
+    committed = [r for r in stack.audit.for_run(run_id) if r.outcome == "committed"]
+    assert len(committed) == 1
+    print(f"turn finished by a fresh process {took:.1f}s after it started")

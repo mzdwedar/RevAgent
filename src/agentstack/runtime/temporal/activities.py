@@ -11,20 +11,33 @@ reads from Postgres itself.
 
 from __future__ import annotations
 
+import contextvars
+import dataclasses
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from agentstack.context.targeting import TargetingRule
+from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.triggers import TriggerEvent, TriggerKind
 from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
+from agentstack.runtime.drafting import draft_instruction
+from agentstack.runtime.graph import finished_turn, turn_thread
+from agentstack.runtime.loop import TurnDeps
+from agentstack.runtime.loop import run_turn as take_turn
 from agentstack.runtime.operator import evaluate_trigger
 from agentstack.runtime.run import Run, RunStore
 from agentstack.runtime.temporal.contracts import (
     ENSURE_RUN,
     EVALUATE_CYCLE,
     PARK_TRIGGER_WAIT,
+    RUN_TURN,
     SATISFY_TRIGGER_WAIT,
     CycleResult,
     ParkedWait,
@@ -32,8 +45,33 @@ from agentstack.runtime.temporal.contracts import (
     Trigger,
     TriggerArrived,
     TriggerWaitIntent,
+    TurnIntent,
+    TurnOutcome,
 )
 from agentstack.runtime.waits import TRIGGER, ResumeEvent, WaitStore, resume
+
+# A turn's p95 is 60s (SPEC.md), and the workflow gives it 120s. A heartbeat every few
+# seconds lets Temporal notice a dead worker in `HEARTBEAT_TIMEOUT` instead of waiting
+# out the full two minutes.
+HEARTBEAT_EVERY_S = 5.0
+
+NO_TURN_HOST = "NoTurnHost"
+
+
+class TurnHost(Protocol):
+    """What a turn needs from above the runtime: the composition root supplies it.
+
+    The runtime can't reach the control plane (contract 1), so session work comes in
+    through here, exactly as it does for `wiring.handle`. Both calls happen inside the
+    activity, at the turn: the envelope is minted for this act and never carried.
+    """
+
+    @property
+    def deps(self) -> TurnDeps: ...
+
+    def envelope(self, run: Run) -> IdentityEnvelope: ...
+
+    def record(self, run: Run, *, asked: str, answered: str) -> None: ...
 
 
 class RunActivities:
@@ -48,6 +86,7 @@ class RunActivities:
         scorer: ChurnScorer,
         trigger_deadline: timedelta,
         rule: TargetingRule | None = None,
+        turns: TurnHost | None = None,
     ) -> None:
         self._runs = runs
         self._cycles = cycles
@@ -55,6 +94,7 @@ class RunActivities:
         self._scorer = scorer
         self._trigger_deadline = trigger_deadline
         self._rule = rule
+        self._turns = turns
 
     @activity.defn(name=ENSURE_RUN)
     def ensure_run(self, start: RunStart) -> str:
@@ -140,3 +180,91 @@ class RunActivities:
                 ),
             )
         return arrived.wait_id
+
+    @activity.defn(name=RUN_TURN)
+    def run_turn(self, intent: TurnIntent) -> TurnOutcome:
+        """One turn of the LangGraph graph (ADR-0006), as one activity.
+
+        The turn's id comes from the cycle, not from Temporal, so every attempt of this
+        activity, and every later execution of this run's workflow, is the same turn:
+        a rerun resumes the turn's own checkpoint and doesn't call the model a second
+        time, and a turn that already finished is simply its own answer. Whatever the
+        turn commits goes through the gateway with the tool's content-derived key, so
+        it lands once (E1).
+        """
+        if self._turns is None:
+            # A configuration fault, the same on every attempt: fail once, visibly, as
+            # this turn's refusal, rather than spin and hold up every trigger behind it.
+            raise ApplicationError(
+                "this worker was built without a turn host, so it can't take turns",
+                type=NO_TURN_HOST,
+                non_retryable=True,
+            )
+        recorded = self._runs.get(intent.run_id)
+        assert recorded is not None  # ensure_run ran first in this workflow
+        # The stage decides which tools the turn is shown. It is the workflow's choice of
+        # what the run does next (position); what any tool may commit is still layer 8's.
+        run = dataclasses.replace(recorded, stage=intent.stage)
+        cycle = self._cycles.get(
+            TriggerEvent(
+                kind=TriggerKind(intent.kind),
+                experiment_id=intent.experiment_id,
+                data_as_of=intent.data_as_of,
+                tenant=run.tenant,
+            )
+        )
+        assert cycle is not None  # the turn follows the cycle that settled
+        turn_id = f"{intent.stage}:{intent.experiment_id}:{intent.data_as_of}:{intent.kind}"
+
+        done = finished_turn(self._turns.deps.graph, turn_thread(run.run_id, turn_id))
+        if done is not None:
+            return _outcome(done)
+
+        message = draft_instruction(tenant=run.tenant, cycle=cycle)
+        with _heartbeating():
+            result = take_turn(
+                run=run,
+                envelope=self._turns.envelope(run),
+                message=message,
+                deps=self._turns.deps,
+                turn_id=turn_id,
+            )
+        self._turns.record(run, asked=message, answered=result.text)
+        return TurnOutcome(
+            status=result.status, receipts=len(result.receipts), refusals=len(result.refusals)
+        )
+
+
+def _outcome(state: dict[str, object]) -> TurnOutcome:
+    receipts = state.get("receipts") or []
+    refusals = state.get("refusals") or []
+    assert isinstance(receipts, list) and isinstance(refusals, list)
+    return TurnOutcome(
+        status=str(state.get("status", "complete")),
+        receipts=len(receipts),
+        refusals=len(refusals),
+    )
+
+
+@contextmanager
+def _heartbeating() -> Iterator[None]:
+    """Tell Temporal this activity is alive while the turn runs.
+
+    The turn is one blocking call, so the beat comes from a thread. The thread runs in a
+    copy of this activity's context, which is how `activity.heartbeat` knows whose
+    heartbeat it is. Nothing is sent with the beat: progress is the checkpoint's job.
+    """
+    stop = threading.Event()
+    context = contextvars.copy_context()
+
+    def beat() -> None:
+        while not stop.wait(HEARTBEAT_EVERY_S):
+            context.run(activity.heartbeat)
+
+    beating = threading.Thread(target=beat, name="turn-heartbeat", daemon=True)
+    beating.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        beating.join()

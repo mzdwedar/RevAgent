@@ -16,6 +16,8 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from agentstack.interfaces import preflight_cli
+from agentstack.interfaces.wiring import ExperimentTurns, build_stack
+from agentstack.model.ollama_engine import OllamaEngine
 from agentstack.prediction.engine import TabPFNScorer
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
@@ -25,6 +27,7 @@ from agentstack.runtime.temporal.client import TemporalUnavailable, connect, tem
 from agentstack.runtime.temporal.contracts import TASK_QUEUE
 from agentstack.runtime.temporal.worker import build_worker
 from agentstack.runtime.waits import WaitStore
+from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import database_url, open_pool, redacted
 
@@ -59,23 +62,33 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
     url = url or database_url()
     print(f"temporal : {address}  queue {task_queue}")
     print(f"database : {redacted(url)}")
-    with (
-        open_pool(url, min_size=1, max_size=MAX_ACTIVITIES) as pool,
-        ThreadPoolExecutor(max_workers=MAX_ACTIVITIES, thread_name_prefix="activity") as executor,
-    ):
-        db = Database(pool=pool)
-        activities = RunActivities(
-            runs=RunStore(db=db),
-            cycles=CycleStore(db=db),
-            waits=WaitStore(db=db),
-            # The scorer preflight just proved can load its weights.
-            scorer=TabPFNScorer(),
-            trigger_deadline=TriggerCadence.load().trigger_deadline,
-        )
-        worker = build_worker(
-            client, activities=activities, executor=executor, task_queue=task_queue
-        )
-        await worker.run()
+    checkpoints, saver = open_checkpointer(url)
+    try:
+        with (
+            open_pool(url, min_size=1, max_size=MAX_ACTIVITIES) as pool,
+            ThreadPoolExecutor(
+                max_workers=MAX_ACTIVITIES, thread_name_prefix="activity"
+            ) as executor,
+        ):
+            db = Database(pool=pool)
+            stack = build_stack(db, saver)
+            # The model engine a turn drafts with (SPEC.md: qwen3:8b through Ollama).
+            stack.deps.engine = OllamaEngine()
+            activities = RunActivities(
+                runs=RunStore(db=db),
+                cycles=CycleStore(db=db),
+                waits=WaitStore(db=db),
+                # The scorer preflight just proved can load its weights.
+                scorer=TabPFNScorer(),
+                trigger_deadline=TriggerCadence.load().trigger_deadline,
+                turns=ExperimentTurns(stack),
+            )
+            worker = build_worker(
+                client, activities=activities, executor=executor, task_queue=task_queue
+            )
+            await worker.run()
+    finally:
+        checkpoints.close()
 
 
 if __name__ == "__main__":

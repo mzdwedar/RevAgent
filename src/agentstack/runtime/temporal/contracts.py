@@ -22,6 +22,12 @@ ENSURE_RUN = "ensure_run"
 EVALUATE_CYCLE = "evaluate_cycle"
 PARK_TRIGGER_WAIT = "park_trigger_wait"
 SATISFY_TRIGGER_WAIT = "satisfy_trigger_wait"
+RUN_TURN = "run_turn"
+
+# The stage a turn runs at, which decides the tools it is shown (T22). Named here
+# because workflow code may not import `agentstack.tools`, where the stages are defined;
+# `test_temporal_boundaries` holds this equal to `tools.experiments.DRAFT_STAGE`.
+DRAFT = "draft"
 
 
 def workflow_id(run_id: str) -> str:
@@ -108,6 +114,33 @@ class TriggerArrived:
 
 
 @dataclass(frozen=True, slots=True)
+class TurnIntent:
+    """Run one turn of this run, at this stage, about this cycle.
+
+    Ids only. The instruction the model reads is built inside the activity from the
+    cycle's record, and the envelope is minted there too: neither is ever history.
+    """
+
+    run_id: str
+    stage: str
+    experiment_id: str
+    data_as_of: str
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class TurnOutcome:
+    """How the turn ended, as counts. What the model said stays in the transcript and
+    the trace; receipts and refusals stay in the audit trail."""
+
+    status: str
+    receipts: int = 0
+    refusals: int = 0
+    # Set when the activity itself was refused (a gateway or layer-8 refusal type).
+    refusal: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RunProgress:
     """Where the run is, for whoever asks. Read by query, so it's never history."""
 
@@ -119,3 +152,4 @@ class RunProgress:
     # Overdue is position, not record: `operator stalled` reads the `waits` row.
     waiting_on: str | None = None
     overdue: bool = False
+    turns: tuple[TurnOutcome, ...] = ()

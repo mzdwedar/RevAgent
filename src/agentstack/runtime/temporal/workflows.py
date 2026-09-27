@@ -15,9 +15,11 @@ from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError
 
 from agentstack.runtime.temporal.contracts import (
+    DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
     PARK_TRIGGER_WAIT,
+    RUN_TURN,
     SATISFY_TRIGGER_WAIT,
     CycleResult,
     ParkedWait,
@@ -27,12 +29,18 @@ from agentstack.runtime.temporal.contracts import (
     Trigger,
     TriggerArrived,
     TriggerWaitIntent,
+    TurnIntent,
+    TurnOutcome,
 )
 from agentstack.runtime.temporal.retry import RETRY
 
 RECORD_TIMEOUT = timedelta(seconds=30)
 # Scoring is the expensive part of a cycle; SPEC.md budgets p95 evaluation at 60s.
 CYCLE_TIMEOUT = timedelta(seconds=120)
+# A turn's p95 is 60s too (SPEC.md). It heartbeats, so a dead worker is noticed in
+# HEARTBEAT_TIMEOUT rather than after the whole two minutes.
+TURN_TIMEOUT = timedelta(seconds=120)
+HEARTBEAT_TIMEOUT = timedelta(seconds=15)
 
 
 @workflow.defn
@@ -54,6 +62,7 @@ class ExperimentWorkflow:
         self._last_watermark = "none"
         self._waiting_on: str | None = None
         self._overdue = False
+        self._turns: list[TurnOutcome] = []
 
     @workflow.run
     async def run(self, start: RunStart) -> RunEnd:
@@ -68,8 +77,37 @@ class ExperimentWorkflow:
             if not self._pending:
                 await self._wait_for_trigger()
             trigger = self._pending.pop(0)
-            self._cycles.append(await self._evaluate(trigger))
+            cycle = await self._evaluate(trigger)
+            self._cycles.append(cycle)
             self._last_watermark = trigger.data_as_of
+            if cycle.outcome == "propose":
+                # A frozen cohort is worth an experiment. Drafting it is the model's job,
+                # in a turn; what the draft may commit is decided by policy (PRE_COMMIT).
+                self._turns.append(await self._take_turn(DRAFT, cycle))
+
+    async def _take_turn(self, stage: str, cycle: CycleResult) -> TurnOutcome:
+        intent = TurnIntent(
+            run_id=self._run_id,
+            stage=stage,
+            experiment_id=cycle.experiment_id,
+            data_as_of=cycle.data_as_of,
+            kind=cycle.kind,
+        )
+        try:
+            outcome: TurnOutcome = await workflow.execute_activity(
+                RUN_TURN,
+                intent,
+                result_type=TurnOutcome,
+                start_to_close_timeout=TURN_TIMEOUT,
+                heartbeat_timeout=HEARTBEAT_TIMEOUT,
+                retry_policy=RETRY,
+            )
+            return outcome
+        except ActivityError as exc:
+            # A refusal (non-retryable) is this turn's answer; the run goes on.
+            cause = exc.cause
+            refusal = cause.type if isinstance(cause, ApplicationError) else None
+            return TurnOutcome(status="refused", refusal=refusal or type(cause).__name__)
 
     async def _wait_for_trigger(self) -> None:
         """Waiting is state (Part 4). The `waits` row says what the run is waiting for
@@ -150,4 +188,5 @@ class ExperimentWorkflow:
             cycles=tuple(self._cycles),
             waiting_on=self._waiting_on,
             overdue=self._overdue,
+            turns=tuple(self._turns),
         )

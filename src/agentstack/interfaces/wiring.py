@@ -50,6 +50,7 @@ from agentstack.runtime.temporal.contracts import TASK_QUEUE, RunStart, Trigger
 from agentstack.runtime.waits import WaitStore
 from agentstack.storage.database import Database
 from agentstack.tools.catalog import build_registry
+from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT_STAGE
 from agentstack.tools.spec import ActsAs, Surface
 
 VERSIONS = VersionStamp(
@@ -314,3 +315,37 @@ async def deliver(
     )
     await deliver_trigger(client, start, trigger, task_queue=task_queue)
     return start.run_id
+
+
+# The one scope each stage's turn is given. A drafting turn can write a draft and cannot
+# roll anything out, whatever it is shown or asks for: least privilege per act.
+STAGE_SCOPES: dict[str, frozenset[str]] = {
+    DRAFT_STAGE: frozenset({"experiments:write"}),
+    ROLLOUT_STAGE: frozenset({"experiments:rollout"}),
+}
+
+
+@dataclass(slots=True)
+class ExperimentTurns:
+    """The turn host for an experiment run's worker (`runtime.temporal.TurnHost`).
+
+    Session work stays here, above the runtime, as it does in `handle`: the session is
+    resolved and the envelope minted inside the activity, for this turn, from the run's
+    own record. A stage with no scopes listed gets none.
+    """
+
+    stack: Stack
+
+    @property
+    def deps(self) -> TurnDeps:
+        return self.stack.deps
+
+    def envelope(self, run: Run) -> IdentityEnvelope:
+        view = self.stack.resolver.resolve(
+            session_id=run.session_id, user_id=run.user, tenant=run.tenant, stage=run.stage
+        )
+        return envelope_for(view, scopes=STAGE_SCOPES.get(run.stage, frozenset()))
+
+    def record(self, run: Run, *, asked: str, answered: str) -> None:
+        self.stack.transcripts.append(session_id=run.session_id, kind="user", body=asked)
+        self.stack.transcripts.append(session_id=run.session_id, kind="agent", body=answered)

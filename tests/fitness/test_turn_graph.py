@@ -119,6 +119,46 @@ def test_a_turn_that_died_resumes_without_re_running_what_it_finished(
     assert engine.calls == 1, "the resumed turn called the model again for an answer it had"
 
 
+class DyingOnceEngine:
+    """Dies during its first model call, as a process killed mid-call does, then answers."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.asset = inner.asset
+        self.calls = 0
+
+    def generate(self, request: Any) -> Any:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("the process died during the model call")
+        return self.inner.generate(request)
+
+
+def test_a_turn_that_died_during_the_model_call_resumes_there(stack: Stack, run: Run) -> None:
+    """Found at T40. The slowest step is the likeliest one to die in.
+
+    Its checkpoint names `call_model` as next, so the resumed turn starts there, in a
+    process that never ran `assemble`. The context bundle is not checkpointed (only its
+    fingerprint is), so the resumed call has to build it again. Before this it raised
+    `KeyError: 'bundle'`, on every retry, forever.
+    """
+    engine = DyingOnceEngine(stack.deps.engine)
+    stack.deps.engine = engine
+    view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
+    envelope = envelope_for(view, scopes=SCOPES)
+    message = "lookup_subscription tenant=acme customer_id=c-42"
+
+    with pytest.raises(RuntimeError, match="during the model call"):
+        run_turn(run=run, envelope=envelope, message=message, deps=stack.deps, turn_id="t1")
+    pending = stack.deps.graph.get_state(graph.turn_thread(run.run_id, "t1")).next
+    assert pending == ("call_model",)
+
+    result = run_turn(run=run, envelope=envelope, message=message, deps=stack.deps, turn_id="t1")
+
+    assert result.status == "complete"
+    assert engine.calls == 2, "asked again, because the first call never answered"
+
+
 def test_restarting_with_input_would_have_re_run_it() -> None:
     """Why `advance` checks for a pending node instead of always passing input.
 

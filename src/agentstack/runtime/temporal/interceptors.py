@@ -28,6 +28,7 @@ from agentstack.runtime.temporal.contracts import (
     ENSURE_RUN,
     EVALUATE_CYCLE,
     PARK_TRIGGER_WAIT,
+    RUN_TURN,
     SATISFY_TRIGGER_WAIT,
 )
 from agentstack.runtime.temporal.retry import UNDECLARED
@@ -38,6 +39,8 @@ DECLARED: Mapping[str, str] = {
     EVALUATE_CYCLE: "record",
     PARK_TRIGGER_WAIT: "record",
     SATISFY_TRIGGER_WAIT: "record",
+    # The turn: the only activity so far that commits, and only through gateway.execute.
+    RUN_TURN: "gateway",
 }
 
 
