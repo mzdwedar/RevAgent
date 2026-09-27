@@ -25,7 +25,7 @@ from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import PostgresRegistryClient, RecordingClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.slack import ApprovalAsk, Notifier, RecordingNotifier
-from agentstack.interfaces.slack_callback import ReplayGuard
+from agentstack.interfaces.slack_callback import ReplayGuard, accept
 from agentstack.interfaces.triggers import parse_trigger
 from agentstack.model.engine import EchoEngine
 from agentstack.observability.audit import AuditSink
@@ -34,7 +34,7 @@ from agentstack.policy.approval import ApprovalStore
 from agentstack.policy.approvers import ApproverDirectory
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.triggers import TriggerEvent
-from agentstack.runtime.approvals import ApprovalCoordinator
+from agentstack.runtime.approvals import ApprovalCoordinator, Resolution
 from agentstack.runtime.drafting import estimated_customers
 from agentstack.runtime.graph import build_turn_graph
 from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
@@ -47,7 +47,7 @@ from agentstack.runtime.run import (
     new_run_id,
 )
 from agentstack.runtime.steps import StepLedger
-from agentstack.runtime.temporal.client import deliver_trigger
+from agentstack.runtime.temporal.client import deliver_trigger, notify_answer
 from agentstack.runtime.temporal.contracts import TASK_QUEUE, RunStart, Trigger
 from agentstack.runtime.waits import Wait, WaitStore
 from agentstack.storage.database import Database
@@ -383,3 +383,34 @@ class ChannelAsker:
             ),
             channel=self.channel,
         )
+
+
+async def answer(
+    stack: Stack,
+    client: Client,
+    *,
+    raw_body: bytes,
+    sent_at: str,
+    signature: str,
+    secret: str | None = None,
+    now: float | None = None,
+) -> Resolution:
+    """Slack's answer -> authorised and recorded -> the run woken. In that order.
+
+    `accept` proves the request is Slack's, fresh, and the first of its kind (layer 1).
+    `coordinator.apply` decides whether this person may answer for the run's tenant, and
+    records the approval (or refusal) against the wait (layer 8, ADR-0008 rule 4). Only
+    then is the workflow told, by a signal that carries ids and grants nothing. Anyone
+    refused on the way is refused before the run hears anything.
+    """
+    reply = accept(
+        raw_body=raw_body,
+        sent_at=sent_at,
+        signature=signature,
+        guard=stack.replay_guard,
+        secret=secret,
+        now=now,
+    )
+    resolution = stack.coordinator.apply(reply)
+    await notify_answer(client, run_id=resolution.run_id, wait_id=resolution.wait_id)
+    return resolution

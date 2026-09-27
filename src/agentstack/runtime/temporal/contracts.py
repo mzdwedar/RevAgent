@@ -163,6 +163,19 @@ class AskIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class AskResult:
+    """Whether the wait had already been answered when the ask came round.
+
+    The answer normally arrives as a signal, sent by the callback after layer 8
+    recorded it. If that signal was lost, the next ask finds the wait satisfied and
+    says so here: the timer is the backstop, so a lost wake-up costs one interval,
+    not the run.
+    """
+
+    answered: bool
+
+
+@dataclass(frozen=True, slots=True)
 class RunProgress:
     """Where the run is, for whoever asks. Read by query, so it's never history."""
 

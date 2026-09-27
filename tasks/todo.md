@@ -1197,12 +1197,28 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     content and size, visible duplicates, nothing posted on failure or after an answer.
     It's intact now.
 
-- [ ] **T42 — The Slack answer notifies the workflow** · layer 1 · *S*
+- [x] **T42 — The Slack answer notifies the workflow** · layer 1 · *S*
   - Acceptance: `slack_callback.py` runs `ApprovalCoordinator.apply` as today, **then**
     `client.notify_answer` (a signal). The signal carries ids only.
   - Verify: `test_slack_inbound`, `test_approver_authorisation` green; an outsider's
     answer writes no approval, and the commit refuses (C39).
   - Files: `interfaces/slack_callback.py`, `runtime/temporal/client.py`, test.
+  - **Done.** `wiring.answer` is the composition root for the Slack answer, as `deliver` is
+    for triggers. It calls `slack_callback.accept` (signature, freshness, replay), then
+    `coordinator.apply` (authorised against the run's tenant, recorded against the wait),
+    then `client.notify_answer`, a signal carrying the wait id and nothing else.
+    `slack_callback.py` itself is unchanged: it proves the request and holds no stack.
+  - **Lost-signal backstop:** `ask_approval` now returns `AskResult(answered)`. If the
+    answer was recorded but its signal never arrived, the next re-ask finds the wait
+    satisfied and the workflow takes that as the answer. So a lost wake-up costs one
+    interval, not the run, and nothing is posted again.
+  - 4 tests in `test_slack_answer.py`, through signed Slack payloads: an approver's
+    answer is recorded, then wakes the run; **an outsider's answer changes nothing** (no
+    approval, the wait still pending, the run not woken: the first half of C39, the
+    commit refusal is T43's); a refusal is recorded and wakes the run; a lost signal is
+    found at the next ask.
+  - Counting approvals means counting *human* ones: the draft's PRE_COMMIT grant is a
+    policy row in the same table (migration 0006).
 
 - [ ] **T43 — The commit activity: snapshot at the act** · layer 3 · *M*
   - Acceptance: `commit(CommitIntent)` takes no snapshot argument; it reads the snapshot,

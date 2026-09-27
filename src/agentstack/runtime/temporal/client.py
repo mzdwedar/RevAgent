@@ -80,3 +80,15 @@ async def deliver_trigger(
         start_signal="trigger",
         start_signal_args=[trigger],
     )
+
+
+async def notify_answer(client: Client, *, run_id: str, wait_id: str) -> None:
+    """Wake the run: the answer to `wait_id` has been authorised and recorded.
+
+    Called only after layer 8 wrote it (ADR-0008 rule 4). The signal carries the wait's
+    id and nothing else, so it grants nothing: whether it was a yes, and who said so,
+    is read from the `approvals` row at the act. Lost, it costs one re-ask interval,
+    because the next ask finds the wait answered.
+    """
+    handle = client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+    await handle.signal(ExperimentWorkflow.answered, wait_id)

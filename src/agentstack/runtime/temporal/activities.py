@@ -43,6 +43,7 @@ from agentstack.runtime.temporal.contracts import (
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
     AskIntent,
+    AskResult,
     CycleResult,
     ParkedWait,
     RunStart,
@@ -291,7 +292,7 @@ class RunActivities:
         return cohort
 
     @activity.defn(name=ASK_APPROVAL)
-    def ask_approval(self, intent: AskIntent) -> str:
+    def ask_approval(self, intent: AskIntent) -> AskResult:
         """Put the question to a person, from the record, and note that it was put.
 
         The first ask and every re-ask go through here. Asking twice is harmless (the
@@ -310,21 +311,21 @@ class RunActivities:
         wait = self._waits.get(intent.wait_id)
         assert run is not None and wait is not None  # parked by this run's turn
         if wait.satisfied:
-            return intent.wait_id  # answered before it could be asked again
+            return AskResult(answered=True)  # answered before it could be asked again
         cohort = self._cohorts.get(
             tenant=run.tenant,
             experiment_id=intent.experiment_id,
             experiment_version=intent.experiment_version,
         )
         assert cohort is not None  # the rollout was proposed from it
-        message = self._asker.ask(run=run, wait=wait, cohort=cohort, percentage=ROLLOUT_PERCENTAGE)
+        self._asker.ask(run=run, wait=wait, cohort=cohort, percentage=ROLLOUT_PERCENTAGE)
         if intent.asked > 0:
             self._waits.record_asked(
                 intent.wait_id,
                 reasks=intent.asked,
                 next_deadline=datetime.now(UTC) + APPROVAL_REASK_AFTER,
             )
-        return message
+        return AskResult(answered=False)
 
 
 def _outcome(state: dict[str, object]) -> TurnOutcome:

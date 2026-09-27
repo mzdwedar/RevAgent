@@ -9,7 +9,6 @@ imported.
 
 from __future__ import annotations
 
-from contextlib import suppress
 from datetime import timedelta
 
 from temporalio import workflow
@@ -26,6 +25,7 @@ from agentstack.runtime.temporal.contracts import (
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
     AskIntent,
+    AskResult,
     CycleResult,
     ParkedWait,
     RunEnd,
@@ -136,13 +136,22 @@ class ExperimentWorkflow:
             experiment_version=experiment_version,
             asked=self._asks,
         )
-        # Only a refusal is suppressed (a worker that cannot ask at all). The wait stays
-        # pending and visible, and the next interval tries again.
-        with suppress(ActivityError):
-            await workflow.execute_activity(
-                ASK_APPROVAL, intent, start_to_close_timeout=RECORD_TIMEOUT, retry_policy=RETRY
+        try:
+            result: AskResult = await workflow.execute_activity(
+                ASK_APPROVAL,
+                intent,
+                result_type=AskResult,
+                start_to_close_timeout=RECORD_TIMEOUT,
+                retry_policy=RETRY,
             )
+        except ActivityError:
+            # Only a refusal gets here (a worker that cannot ask at all). The wait stays
+            # pending and visible, and the next interval tries again.
+            result = AskResult(answered=False)
         self._asks += 1
+        if result.answered and wait_id not in self._answered:
+            # The answer was recorded but its signal never came: the timer caught it.
+            self._answered.append(wait_id)
 
     @workflow.signal
     def answered(self, wait_id: str) -> None:
