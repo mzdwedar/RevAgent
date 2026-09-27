@@ -33,10 +33,8 @@ from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.approvers import ApproverNotAuthorized
 from agentstack.policy.decisions import PolicyDenied
 from agentstack.policy.triggers import OutcomeNotAuthorized
-from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal import client as temporal_client
-from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import RunProgress, RunStart, workflow_id
 from agentstack.runtime.temporal.interceptors import DECLARED, DeclaredActivitiesOnly
@@ -44,7 +42,7 @@ from agentstack.runtime.temporal.retry import DETERMINISTIC, REFUSALS, RETRY, UN
 from agentstack.runtime.temporal.worker import build_worker
 from agentstack.storage.database import Database, IntegrityViolation
 from tests.conftest import connect_temporal
-from tests.temporal_support import NoScoring, progress_until, running_worker
+from tests.temporal_support import activities_for, progress_until, running_worker
 
 from .conftest import TENANT, USER
 from .temporal_probes import CallOnce
@@ -370,9 +368,7 @@ def test_the_production_worker_installs_the_guard_and_declares_all_it_registers(
         client = await connect_temporal(temporal_address)
         with ThreadPoolExecutor(max_workers=1) as executor:
             db = Database.__new__(Database)  # never queried: this only reads the config
-            activities = RunActivities(
-                runs=RunStore(db=db), cycles=CycleStore(db=db), scorer=NoScoring()
-            )
+            activities = activities_for(db)
             worker = build_worker(client, activities=activities, executor=executor)
             return dict(worker.config())
 

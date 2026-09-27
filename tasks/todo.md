@@ -1011,12 +1011,38 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     per file, and the net count across files is unchanged. Against `--base main` it's
     clean, because the file is new since `main`.
 
-- [ ] **T38 — Trigger waits and deadlines on durable timers** · layer 3 · *S*
+- [x] **T38 — Trigger waits and deadlines on durable timers** · layer 3 · *S*
   - Acceptance: a trigger wait writes its `waits` row (deadline required, as today) and
     the workflow's timer marks it due; `operator stalled` is unchanged.
   - Verify: `test_stalled_waits` green; time-skipping test: a wait past its deadline is
     reported by `operator stalled` (C43).
   - Files: `runtime/temporal/{workflows,activities}.py`, `tests/durability/test_timers.py`.
+  - **Done, with the deadline's home decided at T38 (human, 2026-09-27):**
+    `experiments/cadence.toml` (`default` 36h, assuming daily batches; `dev` 7d), read by
+    `runtime/cadence.py` and passed to the activities, never read by the workflow. SPEC.md
+    leaves the production cadence open, so `default` is written down as an assumption.
+  - Whenever the run has no trigger to work on, it parks a `trigger` wait
+    (`park_trigger_wait`). The row holds the deadline, and `operator stalled` is
+    unchanged. The workflow's timer adds position only: `progress.overdue`. Nothing
+    expires. A late trigger settles the wait (`satisfy_trigger_wait`), and the run moves
+    on to its next one.
+  - Rerun-safe: wait ids are `wait-{run_id}-trigger-{n}`, where `n` is workflow state
+    that replay rebuilds (not a Temporal id, so E1 doesn't apply). `WaitStore.park`
+    gains an optional `wait_id`, and parking an existing id returns the first wait with
+    its first deadline. Satisfy checks before it resumes.
+  - 6 tests in `test_timers.py`, three on the time-skipping server: 37 simulated hours
+    make the run overdue, `operator stalled` reports its wait, a late trigger settles it
+    and the settled wait drops out of the report; 72 simulated hours later nothing
+    has expired. The other three cover the cadence file and the rerun of each activity.
+  - **Found writing the C43 test:** once a trigger settles a wait, the run immediately
+    parks its next one. `operator stalled` at "first deadline + 1 min" correctly
+    reports that next wait too, since its deadline is a few real seconds later. The
+    test now asserts the settled wait drops out, rather than asserting an empty report.
+  - **CI:** the test server is fetched at the version the SDK pins
+    (`temporal-test-server-sdk-python-1.33.0`), so `uv.lock` pins it, and the CI cache is
+    keyed on `uv.lock`. A failed download fails the tests. It never skips them.
+  - **For T46:** continue-as-new must carry the parked-wait count, or the next
+    execution would reuse wait id `…-trigger-0`.
 
 ### ✅ Checkpoint J — orchestration without effects (before the first side effect)
 - [ ] A real trigger drives a real cycle through the worker, killed and resumed, with no effect wired

@@ -24,13 +24,20 @@ from temporalio.worker import (
     Interceptor,
 )
 
-from agentstack.runtime.temporal.contracts import ENSURE_RUN, EVALUATE_CYCLE
+from agentstack.runtime.temporal.contracts import (
+    ENSURE_RUN,
+    EVALUATE_CYCLE,
+    PARK_TRIGGER_WAIT,
+    SATISFY_TRIGGER_WAIT,
+)
 from agentstack.runtime.temporal.retry import UNDECLARED
 
 DECLARED: Mapping[str, str] = {
     ENSURE_RUN: "record",
     # Scores and claims a cycle. Writes only `trigger_cycles`; acts on nothing.
     EVALUATE_CYCLE: "record",
+    PARK_TRIGGER_WAIT: "record",
+    SATISFY_TRIGGER_WAIT: "record",
 }
 
 

@@ -88,12 +88,17 @@ class WaitStore:
         action_fingerprint: str | None = None,
         approval_summary: str | None = None,
         timeout: timedelta | None = None,
+        wait_id: str | None = None,
     ) -> Wait:
         """Persist a wait, due `timeout` from now.
 
         A trigger wait has no default timeout. The right one is "a little longer than
         the data normally takes to arrive", which only the caller knows, and a default
         chosen here would be a guess that looks like a decision.
+
+        `wait_id` is for a caller that may park the same wait twice: an activity rerun
+        after its first attempt landed. Parking an id that's already there returns the
+        wait as it was first parked, deadline included, instead of a second one.
         """
         if timeout is None and kind == HUMAN_APPROVAL:
             timeout = APPROVAL_REASK_AFTER
@@ -105,12 +110,14 @@ class WaitStore:
         if timeout is not None and timeout <= timedelta(0):
             raise WaitWithoutDeadline(f"a wait cannot be due {timeout} after it was parked")
         now = datetime.now(UTC)
+        wait_id = wait_id or f"wait-{uuid.uuid4()}"
         row = self.db.fetch_one(
             "INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at,"
             "  action_fingerprint, approval_summary, deadline)"
-            f" VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            f" ON CONFLICT (wait_id) DO NOTHING RETURNING {_COLUMNS}",
             (
-                f"wait-{uuid.uuid4()}",
+                wait_id,
                 run_id,
                 kind,
                 state_snapshot,
@@ -120,7 +127,11 @@ class WaitStore:
                 None if timeout is None else now + timeout,
             ),
         )
-        assert row is not None  # RETURNING on a successful insert always yields a row
+        if row is None:
+            # Parked already, by an earlier attempt: that wait, as it was parked.
+            existing = self.get(wait_id)
+            assert existing is not None  # the conflict was on this id
+            return existing
         return Wait(*row)
 
     def get(self, wait_id: str) -> Wait | None:

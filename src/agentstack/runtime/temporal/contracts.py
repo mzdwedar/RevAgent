@@ -20,6 +20,8 @@ TASK_QUEUE = "experiment-runs"
 # driver into the sandbox, and the sandbox would not object (E4).
 ENSURE_RUN = "ensure_run"
 EVALUATE_CYCLE = "evaluate_cycle"
+PARK_TRIGGER_WAIT = "park_trigger_wait"
+SATISFY_TRIGGER_WAIT = "satisfy_trigger_wait"
 
 
 def workflow_id(run_id: str) -> str:
@@ -81,6 +83,31 @@ class CycleResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TriggerWaitIntent:
+    """Park the run's `sequence`-th trigger wait. The activity makes the id from these,
+    so a rerun parks the same wait: `sequence` is workflow state, and replay gives it
+    back unchanged. It is not a Temporal id (E1)."""
+
+    run_id: str
+    sequence: int
+    # The watermark the run last evaluated: what it's waiting *after*. The wait's snapshot.
+    after_data_as_of: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParkedWait:
+    wait_id: str
+    # Seconds until the deadline, as the record has it. Zero or less: already overdue.
+    due_in_s: float
+
+
+@dataclass(frozen=True, slots=True)
+class TriggerArrived:
+    wait_id: str
+    trigger: Trigger
+
+
+@dataclass(frozen=True, slots=True)
 class RunProgress:
     """Where the run is, for whoever asks. Read by query, so it's never history."""
 
@@ -88,3 +115,7 @@ class RunProgress:
     recorded: bool
     pending_triggers: int
     cycles: tuple[CycleResult, ...]
+    # The trigger wait the run is parked on, if any, and whether its deadline has passed.
+    # Overdue is position, not record: `operator stalled` reads the `waits` row.
+    waiting_on: str | None = None
+    overdue: bool = False

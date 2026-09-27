@@ -11,6 +11,8 @@ reads from Postgres itself.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from temporalio import activity
 
 from agentstack.context.targeting import TargetingRule
@@ -22,10 +24,16 @@ from agentstack.runtime.run import Run, RunStore
 from agentstack.runtime.temporal.contracts import (
     ENSURE_RUN,
     EVALUATE_CYCLE,
+    PARK_TRIGGER_WAIT,
+    SATISFY_TRIGGER_WAIT,
     CycleResult,
+    ParkedWait,
     RunStart,
     Trigger,
+    TriggerArrived,
+    TriggerWaitIntent,
 )
+from agentstack.runtime.waits import TRIGGER, ResumeEvent, WaitStore, resume
 
 
 class RunActivities:
@@ -36,12 +44,16 @@ class RunActivities:
         *,
         runs: RunStore,
         cycles: cycles.CycleStore,
+        waits: WaitStore,
         scorer: ChurnScorer,
+        trigger_deadline: timedelta,
         rule: TargetingRule | None = None,
     ) -> None:
         self._runs = runs
         self._cycles = cycles
+        self._waits = waits
         self._scorer = scorer
+        self._trigger_deadline = trigger_deadline
         self._rule = rule
 
     @activity.defn(name=ENSURE_RUN)
@@ -83,3 +95,47 @@ class RunActivities:
             # `trigger_cycles.run_id` holds the experiment version the cycle froze.
             experiment_version=cycle.run_id,
         )
+
+    @activity.defn(name=PARK_TRIGGER_WAIT)
+    def park_trigger_wait(self, intent: TriggerWaitIntent) -> ParkedWait:
+        """Write the `waits` row that makes a missing trigger visible (criterion 4).
+
+        The deadline is the record's: `operator stalled` reads it from this row, and a
+        rerun gets the deadline the first attempt wrote, not a later one.
+        """
+        wait = self._waits.park(
+            wait_id=f"wait-{intent.run_id}-trigger-{intent.sequence}",
+            run_id=intent.run_id,
+            kind=TRIGGER,
+            state_snapshot=intent.after_data_as_of,
+            timeout=self._trigger_deadline,
+        )
+        assert wait.deadline is not None  # park refuses a trigger wait without one
+        due_in = wait.deadline - datetime.now(UTC)
+        return ParkedWait(wait_id=wait.wait_id, due_in_s=due_in.total_seconds())
+
+    @activity.defn(name=SATISFY_TRIGGER_WAIT)
+    def satisfy_trigger_wait(self, arrived: TriggerArrived) -> str:
+        """The trigger came: satisfy its wait, once, however many times this runs.
+
+        A rerun after the first attempt landed finds the wait satisfied and stops there.
+        Two attempts overlapping is settled by `resume`'s conditional update: the loser
+        is refused, retried, and then finds it satisfied.
+        """
+        wait = self._waits.get(arrived.wait_id)
+        assert wait is not None  # parked by this run before it waited
+        if not wait.satisfied:
+            resume(
+                self._waits,
+                ResumeEvent(
+                    run_id=wait.run_id,
+                    wait_id=wait.wait_id,
+                    state_snapshot=wait.state_snapshot,
+                    payload={
+                        "kind": arrived.trigger.kind,
+                        "experiment_id": arrived.trigger.experiment_id,
+                        "data_as_of": arrived.trigger.data_as_of,
+                    },
+                ),
+            )
+        return arrived.wait_id

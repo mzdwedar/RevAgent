@@ -18,14 +18,12 @@ import pytest
 
 from agentstack.interfaces.wiring import build_stack
 from agentstack.runtime.cycles import CycleStore
-from agentstack.runtime.run import RunStore
-from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import CycleResult, RunProgress, RunStart, Trigger
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 from agentstack.storage.database import Database
 from tests.fitness.test_trigger_to_candidate import RULE, WATERMARK, StubScorer
-from tests.temporal_support import progress_until, running_worker
+from tests.temporal_support import activities_for, progress_until, running_worker
 
 pytestmark = pytest.mark.usefixtures("fixture_dataset")
 
@@ -144,12 +142,7 @@ def test_the_activity_rerun_after_it_wrote_is_one_cycle(app_database: Database) 
     """At-least-once (P2): a completion lost after the claim landed reruns the activity.
     Called twice directly, as the retry would, it converges without scoring again."""
     scorer = StubScorer()
-    activities = RunActivities(
-        runs=RunStore(db=app_database),
-        cycles=CycleStore(db=app_database),
-        scorer=scorer,
-        rule=RULE,
-    )
+    activities = activities_for(app_database, scorer=scorer, rule=RULE)
 
     first = activities.evaluate_cycle(trigger())
     second = activities.evaluate_cycle(trigger())

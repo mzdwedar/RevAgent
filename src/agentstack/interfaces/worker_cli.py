@@ -17,12 +17,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 from agentstack.interfaces import preflight_cli
 from agentstack.prediction.engine import TabPFNScorer
+from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import TemporalUnavailable, connect, temporal_address
 from agentstack.runtime.temporal.contracts import TASK_QUEUE
 from agentstack.runtime.temporal.worker import build_worker
+from agentstack.runtime.waits import WaitStore
 from agentstack.storage.database import Database
 from agentstack.storage.pool import database_url, open_pool, redacted
 
@@ -65,8 +67,10 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
         activities = RunActivities(
             runs=RunStore(db=db),
             cycles=CycleStore(db=db),
+            waits=WaitStore(db=db),
             # The scorer preflight just proved can load its weights.
             scorer=TabPFNScorer(),
+            trigger_deadline=TriggerCadence.load().trigger_deadline,
         )
         worker = build_worker(
             client, activities=activities, executor=executor, task_queue=task_queue

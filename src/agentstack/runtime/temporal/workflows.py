@@ -17,11 +17,16 @@ from temporalio.exceptions import ActivityError, ApplicationError
 from agentstack.runtime.temporal.contracts import (
     ENSURE_RUN,
     EVALUATE_CYCLE,
+    PARK_TRIGGER_WAIT,
+    SATISFY_TRIGGER_WAIT,
     CycleResult,
+    ParkedWait,
     RunEnd,
     RunProgress,
     RunStart,
     Trigger,
+    TriggerArrived,
+    TriggerWaitIntent,
 )
 from agentstack.runtime.temporal.retry import RETRY
 
@@ -43,6 +48,12 @@ class ExperimentWorkflow:
         self._recorded = False
         self._pending: list[Trigger] = []
         self._cycles: list[CycleResult] = []
+        # How many trigger waits this run has parked; names the next one. Replay
+        # rebuilds it from history, so a rerun parks the same wait, not another.
+        self._waits_parked = 0
+        self._last_watermark = "none"
+        self._waiting_on: str | None = None
+        self._overdue = False
 
     @workflow.run
     async def run(self, start: RunStart) -> RunEnd:
@@ -54,8 +65,50 @@ class ExperimentWorkflow:
         )
         self._recorded = True
         while True:
+            if not self._pending:
+                await self._wait_for_trigger()
+            trigger = self._pending.pop(0)
+            self._cycles.append(await self._evaluate(trigger))
+            self._last_watermark = trigger.data_as_of
+
+    async def _wait_for_trigger(self) -> None:
+        """Waiting is state (Part 4). The `waits` row says what the run is waiting for
+        and by when; this only decides when to look again.
+
+        Past the deadline nothing expires. The run is overdue, `operator stalled` says
+        so from the row, and it goes on waiting: a trigger that never fires has to
+        surface, not end the run (SPEC.md criterion 4).
+        """
+        intent = TriggerWaitIntent(
+            run_id=self._run_id,
+            sequence=self._waits_parked,
+            after_data_as_of=self._last_watermark,
+        )
+        parked: ParkedWait = await workflow.execute_activity(
+            PARK_TRIGGER_WAIT,
+            intent,
+            result_type=ParkedWait,
+            start_to_close_timeout=RECORD_TIMEOUT,
+            retry_policy=RETRY,
+        )
+        self._waits_parked += 1
+        self._waiting_on = parked.wait_id
+        try:
+            await workflow.wait_condition(
+                lambda: bool(self._pending),
+                timeout=timedelta(seconds=max(parked.due_in_s, 0.0)),
+            )
+        except TimeoutError:
+            self._overdue = True
             await workflow.wait_condition(lambda: bool(self._pending))
-            self._cycles.append(await self._evaluate(self._pending.pop(0)))
+        await workflow.execute_activity(
+            SATISFY_TRIGGER_WAIT,
+            TriggerArrived(wait_id=parked.wait_id, trigger=self._pending[0]),
+            start_to_close_timeout=RECORD_TIMEOUT,
+            retry_policy=RETRY,
+        )
+        self._waiting_on = None
+        self._overdue = False
 
     async def _evaluate(self, trigger: Trigger) -> CycleResult:
         """One cycle. A redelivered trigger is deduplicated by the Postgres claim inside
@@ -95,4 +148,6 @@ class ExperimentWorkflow:
             recorded=self._recorded,
             pending_triggers=len(self._pending),
             cycles=tuple(self._cycles),
+            waiting_on=self._waiting_on,
+            overdue=self._overdue,
         )

@@ -27,6 +27,8 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://agent:agent@localhost:5433/agentstack
+      # Where the time-skipping tests (T38) find Temporal's test server. See below.
+      TEMPORAL_TEST_SERVER_DIR: ${{ github.workspace }}/../temporal-test-server
 
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +46,18 @@ jobs:
       # `server start-dev`. Compose keeps it the same definition as dev.
       - name: Temporal
         run: docker compose up -d --wait temporal
+
+      # The time-skipping test server is downloaded on first use, at the version the SDK
+      # pins, and uv.lock pins the SDK. So the lockfile keys the cache: a new SDK
+      # fetches a new server, and nothing else does. A failed download fails the tests.
+      # It never skips them.
+      - name: Temporal test server (cached)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TEMPORAL_TEST_SERVER_DIR }}
+          key: temporal-test-server-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - run: mkdir -p "$TEMPORAL_TEST_SERVER_DIR"
 
       - name: Lint, format, types, layer contracts
         run: bash scripts/check_fast.sh

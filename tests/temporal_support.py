@@ -9,12 +9,15 @@ says stop, so every wait here is bounded: a failure fails instead of hanging.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Any
 
 from temporalio.client import Client, WorkflowHandle
+from temporalio.testing import WorkflowEnvironment
 
 from agentstack.context.targeting import TargetingRule
 from agentstack.prediction.churn import ChurnScores
@@ -24,10 +27,14 @@ from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.contracts import RunProgress
 from agentstack.runtime.temporal.worker import build_worker
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
+from agentstack.runtime.waits import WaitStore
 from agentstack.storage.database import Database
 from tests.conftest import connect_temporal
 
 WAIT_S = 30.0
+# Long enough that no test on the real server ever sees a trigger wait go overdue by
+# accident. The tests that are about deadlines set their own, under time-skipping.
+DEFAULT_TRIGGER_DEADLINE = timedelta(days=1)
 
 
 class NoScoring:
@@ -39,28 +46,68 @@ class NoScoring:
         raise AssertionError("this test's run was not meant to score anything")
 
 
-@asynccontextmanager
-async def running_worker(
-    address: str,
-    task_queue: str,
+def activities_for(
     db: Database,
     *,
     scorer: Any = None,
     rule: TargetingRule | None = None,
-) -> AsyncIterator[Client]:
-    client = await connect_temporal(address)
-    activities = RunActivities(
+    trigger_deadline: timedelta = DEFAULT_TRIGGER_DEADLINE,
+) -> RunActivities:
+    return RunActivities(
         runs=RunStore(db=db),
         cycles=CycleStore(db=db),
+        waits=WaitStore(db=db),
         scorer=scorer or NoScoring(),
+        trigger_deadline=trigger_deadline,
         rule=rule,
     )
+
+
+@asynccontextmanager
+async def worker_on(
+    client: Client, task_queue: str, db: Database, **options: Any
+) -> AsyncIterator[Client]:
+    """The production worker, with test stores and scorer, polling `task_queue`."""
     with ThreadPoolExecutor(max_workers=4) as executor:
         worker = build_worker(
-            client, activities=activities, executor=executor, task_queue=task_queue
+            client,
+            activities=activities_for(db, **options),
+            executor=executor,
+            task_queue=task_queue,
         )
         async with worker:
             yield client
+
+
+@asynccontextmanager
+async def running_worker(
+    address: str, task_queue: str, db: Database, **options: Any
+) -> AsyncIterator[Client]:
+    client = await connect_temporal(address)
+    async with worker_on(client, task_queue, db, **options):
+        yield client
+
+
+@asynccontextmanager
+async def time_skipping() -> AsyncIterator[WorkflowEnvironment]:
+    """Temporal's time-skipping test server: days of timers in a second (P8).
+
+    The binary is fetched on first use, at the version the SDK pins, so `uv.lock` pins
+    it too. CI caches it in `TEMPORAL_TEST_SERVER_DIR`. If it can't be had, the test
+    fails and says why. It never skips.
+    """
+    try:
+        env = await WorkflowEnvironment.start_time_skipping(
+            download_dest_dir=os.environ.get("TEMPORAL_TEST_SERVER_DIR")
+        )
+    except Exception as exc:
+        raise AssertionError(
+            f"the time-skipping test server could not start ({type(exc).__name__}: {exc}). "
+            "It is downloaded on first use; set TEMPORAL_TEST_SERVER_DIR to a directory "
+            "holding it to run offline."
+        ) from exc
+    async with env:
+        yield env
 
 
 async def progress_until(
