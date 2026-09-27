@@ -105,24 +105,40 @@ def assemble(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
         reason="the request this turn answers",
         trust=Trust.UNTRUSTED,
     )
+    retrieved = ctx.deps.retriever.search(state["message"])
+    memories = ctx.deps.memory.recall(scope)
     bundle = assemble_context(
         instructions=ctx.instructions,
         latest_message=latest,
         history=[_observation_item(body, at, scope) for body, at in ctx.observations],
-        retrieved=ctx.deps.retriever.search(state["message"]),
-        memories=ctx.deps.memory.recall(scope),
+        retrieved=retrieved,
+        memories=memories,
+        requester_scope=scope,
+    )
+    # The same view without what this session has read: the request an approval is
+    # bound to. Assembled rather than filtered, so a read can neither add to it nor push
+    # something out of it over budget. With nothing read it is the bundle's fingerprint.
+    request = assemble_context(
+        instructions=ctx.instructions,
+        latest_message=latest,
+        retrieved=retrieved,
+        memories=memories,
         requester_scope=scope,
     )
     with tracer.span(
         "context.assemble",
         fingerprint=bundle.fingerprint(),
+        request_fingerprint=request.fingerprint(),
         items=len(bundle.items),
         untrusted=len(bundle.untrusted()),
         dropped_out_of_scope=bundle.dropped_out_of_scope,
     ):
         pass
     ctx.carried["bundle"] = bundle
-    return {"context_fingerprint": bundle.fingerprint()}
+    return {
+        "context_fingerprint": bundle.fingerprint(),
+        "request_fingerprint": request.fingerprint(),
+    }
 
 
 def _observation_item(body: str, at: datetime, scope: Scope) -> ContextItem:
@@ -192,7 +208,10 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
     # the exposure filter here is not a cost - it re-checks entitlement at the moment
     # the tool is actually used.
     exposed = _exposed(ctx)
-    fingerprint = state["context_fingerprint"]
+    # What an approval is bound to: the request, not what the session has read since it
+    # was asked - or a read between the ask and the resume would ask the human again. A
+    # checkpoint written before the request had its own fingerprint binds as it always did.
+    fingerprint = state.get("request_fingerprint", state["context_fingerprint"])
 
     receipts: list[str] = []
     observations: list[dict[str, Any]] = []

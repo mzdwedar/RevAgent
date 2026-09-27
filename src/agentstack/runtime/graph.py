@@ -85,8 +85,12 @@ class TurnState(TypedDict, total=False):
     proposals: list[dict[str, Any]]
     model_text: str
     # The bundle is deterministic given the message and the stores, so only its
-    # fingerprint is kept - which is all `act` ever used it for.
+    # fingerprints are kept. The whole view's, for the record; and the request's - the
+    # view minus what the session has read - which is what `act` binds approvals to.
+    # Added beside the first rather than replacing it, so a checkpoint without it
+    # resumes exactly as it was written.
     context_fingerprint: str
+    request_fingerprint: str
     blocked_on: list[str]
     resumed_by: str | None
     wait_id: str | None
