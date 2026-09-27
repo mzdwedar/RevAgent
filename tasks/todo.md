@@ -773,11 +773,26 @@ and the test that proves it.
   - `RecordingClient.refuse_before_effect` mirrors `fail_after_effect`, so both halves
     of the distinction are testable against the same client.
 
-- [ ] **T25 — `PostgresRegistryClient` for the two existing tools** · layer 7 · *M*
+- [x] **T25 — `PostgresRegistryClient` for the two existing tools** · layer 7 · *M*
   - Acceptance: single-statement guarded writes via `Database`; the fake enforces the
     same preconditions; `wiring.py` uses the Postgres client.
   - Verify: one contract suite over both clients (spec criterion 7);
     `test_approve_resume_rollout.py` and `tests/durability` green.
+  - **Done.** 21 contract cases (`tests/infra/test_registry_store.py`), each run against
+    the fake and against Postgres, plus a fitness check that `build_stack` wires the
+    real client. Drafts round-trip; a rollout needs an experiment at the named current
+    version in `draft` or `live`; widening is a second effect, repeating one is refused;
+    unknown resources are refused; tenants are separate registries.
+  - Each write is one statement: an `ON CONFLICT DO NOTHING` insert chain for a draft,
+    a guarded `UPDATE … RETURNING` feeding the event insert for a rollout. No row back
+    is `SurfaceRefused`, which T24 turned into a released claim.
+  - **Decided narrow, not in the spec:** drafting an experiment id that already exists
+    is refused. Redrafting a halted or discarded experiment under a new version is
+    assumption 6's relaunch path, and no tool owns it yet — letting the draft tool do it
+    would widen its blast radius to every existing experiment. Needs a decision before
+    anyone relaunches.
+  - Two fixtures now seed the draft an earlier turn would have written: the real
+    registry refuses to roll out an experiment nobody drafted, which the fake never did.
 
 ### ✅ Checkpoint G — real store, behaviour unchanged
 - [ ] `check_task.sh`, `tests/durability`, `lint-imports`, `stack_guard`, `checkpoint_guard` green

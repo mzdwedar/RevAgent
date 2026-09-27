@@ -19,7 +19,7 @@ from agentstack.control_plane.session import SessionView
 from agentstack.control_plane.stores import SessionStore, TranscriptStore, WorkingStateStore
 from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
-from agentstack.execution.surfaces import RecordingClient, RegistryClient, Sandbox
+from agentstack.execution.surfaces import PostgresRegistryClient, RecordingClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.slack import Notifier, RecordingNotifier
 from agentstack.interfaces.slack_callback import ReplayGuard
@@ -63,7 +63,7 @@ class Stack:
     steps: StepLedger
     waits: WaitStore
     client: RecordingClient
-    registry_client: RegistryClient
+    registry_client: PostgresRegistryClient
     # Where an approval question goes. A recorder by default: a stack built in a
     # test must not post to a real channel, and one built for the walkthrough has
     # no workspace to post to.
@@ -104,7 +104,9 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     waits = WaitStore(db=db)
     runs = RunStore(db=db)
     client = RecordingClient()
-    registry_client = RegistryClient()
+    # The registry is ours and outlives the process (T25). The API client beside it is
+    # still the reference fake: the rollout credential is an iteration-2 debt.
+    registry_client = PostgresRegistryClient(db=db)
     notifier = RecordingNotifier()
     replay_guard = ReplayGuard(db=db)
     approvers = ApproverDirectory(db=db)

@@ -42,6 +42,16 @@ ROLLOUT_ARGS = {
 @pytest.fixture
 def parked(stack: Stack) -> tuple[Run, Wait]:
     """A run that reached the rollout and parked on a human."""
+    # What an earlier drafting turn wrote. The registry refuses to roll out an
+    # experiment that was never drafted, at a version that is not its current one.
+    stack.registry_client.commit(
+        f"{TENANT}/experiments/{ROLLOUT_ARGS['experiment_id']}",
+        {
+            "experiment_version": ROLLOUT_ARGS["experiment_version"],
+            "hypothesis": "a discount retains at-risk customers",
+            "variant": "20-percent-off",
+        },
+    )
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
     run = stack.runs.ensure(
         new_run(

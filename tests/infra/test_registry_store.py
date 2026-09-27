@@ -8,8 +8,16 @@ operator with psql - would not know it.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
+from agentstack.execution.surfaces import (
+    PostgresRegistryClient,
+    RegistryClient,
+    SurfaceClient,
+    SurfaceRefused,
+)
 from agentstack.storage.database import Database, IntegrityViolation
 
 TENANT = "acme"
@@ -178,3 +186,128 @@ def test_tenants_do_not_share_an_experiment_id(app_database: Database) -> None:
 
     row = app_database.fetch_one("SELECT count(*) FROM experiments")
     assert row == (2,)
+
+
+# --- the client contract: the fake and the real store behave the same (T25) ---
+#
+# `build_stack` wires Postgres; the fake remains for tests that want no database. One
+# suite over both is what keeps "the fake says nothing reached the surface" meaning the
+# same thing as "nothing reached the registry".
+
+DRAFT_AT = f"{TENANT}/experiments/{EXPERIMENT}"
+ROLLOUT_AT = f"{DRAFT_AT}/rollout"
+DRAFT_PAYLOAD = {
+    "experiment_version": VERSION,
+    "hypothesis": "a discount retains at-risk customers",
+    "variant": "20-percent-off",
+}
+
+
+def rollout_payload(percentage: int = 10, version: str = VERSION) -> dict[str, object]:
+    return {
+        "experiment_version": version,
+        "percentage": percentage,
+        "targeting_model_version": "tabpfn-3.5",
+        "risk_threshold": 0.61,
+    }
+
+
+@pytest.fixture(params=["fake", "postgres"])
+def client(request: pytest.FixtureRequest, app_database: Database) -> SurfaceClient:
+    if request.param == "fake":
+        return RegistryClient()
+    return PostgresRegistryClient(db=app_database)
+
+
+def test_a_draft_can_be_read_back(client: Any) -> None:
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+
+    assert client.read(DRAFT_AT, {}) == {
+        "experiment_id": EXPERIMENT,
+        "status": "draft",
+        "experiment_version": VERSION,
+        "hypothesis": DRAFT_PAYLOAD["hypothesis"],
+        "variant": DRAFT_PAYLOAD["variant"],
+    }
+    assert client.drafts == {DRAFT_AT: DRAFT_PAYLOAD}
+
+
+def test_reading_an_experiment_that_does_not_exist_is_empty(client: Any) -> None:
+    assert client.read(DRAFT_AT, {}) == {}
+
+
+def test_a_draft_over_an_existing_experiment_is_refused(client: Any) -> None:
+    """Redrafting under a new version is assumption 6's relaunch path, and no tool owns
+    it yet. Until one does, the draft tool cannot touch an experiment that exists."""
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(DRAFT_AT, {**DRAFT_PAYLOAD, "experiment_version": "exp:other"})
+
+    assert client.read(DRAFT_AT, {})["experiment_version"] == VERSION
+
+
+def test_a_rollout_of_a_draft_makes_it_live(client: Any) -> None:
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+
+    client.commit(ROLLOUT_AT, rollout_payload())
+
+    assert client.read(DRAFT_AT, {})["status"] == "live"
+    assert client.rollouts == [(ROLLOUT_AT, rollout_payload())]
+
+
+def test_a_live_experiment_can_be_widened(client: Any) -> None:
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+    client.commit(ROLLOUT_AT, rollout_payload(10))
+
+    client.commit(ROLLOUT_AT, rollout_payload(25))
+
+    assert [p["percentage"] for _, p in client.rollouts] == [10, 25]
+
+
+def test_a_rollout_of_nothing_is_refused(client: Any) -> None:
+    with pytest.raises(SurfaceRefused):
+        client.commit(ROLLOUT_AT, rollout_payload())
+
+    assert client.rollouts == []
+
+
+def test_a_rollout_of_a_version_that_is_not_current_is_refused(client: Any) -> None:
+    """The approval was granted against one frozen cohort. A rollout naming another
+    must not land on this experiment."""
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(ROLLOUT_AT, rollout_payload(version="exp:other"))
+
+    assert client.rollouts == []
+    assert client.read(DRAFT_AT, {})["status"] == "draft"
+
+
+def test_the_same_rollout_twice_is_refused_and_recorded_once(client: Any) -> None:
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+    client.commit(ROLLOUT_AT, rollout_payload())
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(ROLLOUT_AT, rollout_payload())
+
+    assert len(client.rollouts) == 1
+
+
+def test_a_resource_the_registry_does_not_serve_is_refused(client: Any) -> None:
+    with pytest.raises(SurfaceRefused):
+        client.commit(f"{DRAFT_AT}/delete_everything", {})
+
+    assert client.drafts == {}
+
+
+def test_tenants_are_separate_registries(client: Any) -> None:
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+
+    assert client.read(f"globex/experiments/{EXPERIMENT}", {}) == {}
+
+
+def test_the_rollout_resource_is_written_not_read(client: Any) -> None:
+    """History is read through its own resource (T26), not by reading the verb."""
+    with pytest.raises(SurfaceRefused):
+        client.read(ROLLOUT_AT, {})

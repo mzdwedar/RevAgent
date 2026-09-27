@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import pytest
 
+from agentstack.execution.surfaces import PostgresRegistryClient
+from agentstack.interfaces.wiring import Stack
 from agentstack.tools.catalog import build_registry
 from agentstack.tools.experiments import DRAFT_STAGE, EVALUATION_STAGE, ROLLOUT_STAGE
 
@@ -41,3 +43,9 @@ def test_a_drafting_turn_cannot_see_the_rollout_tool() -> None:
 
 def test_the_experiment_stages_are_distinct() -> None:
     assert len({DRAFT_STAGE, EVALUATION_STAGE, ROLLOUT_STAGE}) == 3
+
+
+def test_the_stack_writes_the_real_registry(stack: Stack) -> None:
+    """The fake is for tests that ask for it. A stack wired from `build_stack` records
+    drafts and rollouts where they outlive the process - T25's whole point."""
+    assert isinstance(stack.registry_client, PostgresRegistryClient)
