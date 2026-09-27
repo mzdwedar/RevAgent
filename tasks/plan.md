@@ -173,6 +173,11 @@ Tasks: `tasks/todo.md` § Phase 8. **Starts after Phase 7 is complete.** T24's
 be committing through, and rewriting the runtime under a phase that is still
 changing it is the collision T22 already warned about.
 
+**Amended 2026-09-27 (human decision): Phase 8 goes ahead of T26–T31.** T24 and T25,
+the stated reason for the dependency, have landed. The one known collision is
+`tests/durability/test_concurrency.py`: T30 adds 20 concurrent halts to it, and T45
+re-points it at the worker. Whichever of the two lands second rebases onto the other.
+
 ```
 T32 substrate ─► T33 skeleton ─► T34 worker ─► T35 retry+interceptor ─► [I]
 [I] ─► T36 trigger loop ─► T37 ingress ─► T38 trigger waits ─► [J]

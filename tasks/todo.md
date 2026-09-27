@@ -872,13 +872,24 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     `data/manifest.json` is **not** committed, despite CLAUDE.md saying it is. A fresh
     checkout fails `test_data_snapshot` until the manifest is copied in.
 
-- [ ] **T33 — Workflow package skeleton + contract 6** · layer 3 · *S*
+- [x] **T33 — Workflow package skeleton + contract 6** · layer 3 · *S*
   - Acceptance: `runtime/temporal/contracts.py` (ids-only dataclasses) and an empty
     `ExperimentWorkflow`; `.importlinter` contract 6 exactly as in the spec.
   - Verify: `lint-imports` green; new `tests/fitness/test_temporal_boundaries.py`:
     contract 6 exists and names all six forbidden modules (C38); `stack_guard`
     flags its removal.
   - Files: `runtime/temporal/{__init__,contracts,workflows}.py`, `.importlinter`, test.
+  - **Done.** 5 tests. Besides the contract, the workflow side is also held to an
+    allow-list (stdlib, `temporalio`, `contracts`), which a layer added later can't
+    slip past. The empty workflow runs on the dev server.
+  - **Contract 6 held at lint time and failed at runtime.** The sandbox re-imports a
+    workflow's parent packages, and `agentstack/runtime/__init__.py` re-exported
+    `run_turn`, `WaitStore` and others, so importing `workflows` loaded the gateway and
+    `requests` inside the sandbox, which refused them. Nothing imported those
+    re-exports, so the init now imports nothing. Passing modules through the sandbox
+    would have worked too, and it would have switched off determinism checks on our
+    own workflow code.
+  - T32 was cherry-picked onto this branch (it was based before T24).
 
 - [ ] **T34 — Worker, entry point, run identity** · layer 3 · *M*
   - Acceptance: `worker.py` + `agentstack-worker`; the workflow id is

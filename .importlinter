@@ -96,3 +96,21 @@ source_modules =
 forbidden_modules =
     psycopg
     psycopg_pool
+
+[importlinter:contract:6]
+# Workflow code is replayed from history, and the sandbox does not object to an import
+# of the gateway or the driver (ADR-0008, E4). So the only way to keep an effect out of
+# workflow code is to keep the path to one out: activities are named, never imported.
+# Approved with SPEC-durable-runtime.md.
+name = Workflow code has no path to an effect (Parts 4 and 7)
+type = forbidden
+source_modules =
+    agentstack.runtime.temporal.workflows
+    agentstack.runtime.temporal.contracts
+forbidden_modules =
+    agentstack.execution
+    agentstack.storage
+    agentstack.policy
+    agentstack.model
+    agentstack.prediction
+    agentstack.runtime.temporal.activities
