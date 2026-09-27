@@ -13,6 +13,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+TASK_QUEUE = "experiment-runs"
+
+# Activities are named here and registered by the worker. Workflow code refers to these
+# strings, never to `activities.py`: importing it would drag the gateway and the
+# driver into the sandbox, and the sandbox would not object (E4).
+ENSURE_RUN = "ensure_run"
+
 
 def workflow_id(run_id: str) -> str:
     """The one workflow per run. The server refuses a second start under the same id
@@ -22,7 +29,15 @@ def workflow_id(run_id: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class RunStart:
+    """Who the run is, as identifiers. Identity, not authority: an envelope is minted
+    inside the activity that acts, from the session, never carried from here."""
+
     run_id: str
+    session_id: str
+    tenant: str
+    user: str
+    stage: str = "default"
+    channel: str = "unknown"
 
 
 @dataclass(frozen=True, slots=True)

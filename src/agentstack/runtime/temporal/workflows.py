@@ -9,9 +9,13 @@ imported.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from temporalio import workflow
 
-from agentstack.runtime.temporal.contracts import RunEnd, RunStart
+from agentstack.runtime.temporal.contracts import ENSURE_RUN, RunEnd, RunStart
+
+RECORD_TIMEOUT = timedelta(seconds=30)
 
 
 @workflow.defn
@@ -20,4 +24,7 @@ class ExperimentWorkflow:
 
     @workflow.run
     async def run(self, start: RunStart) -> RunEnd:
+        # The record first. Temporal knows the run exists; Postgres has to know too,
+        # because every wait, step and approval hangs off the `runs` row.
+        await workflow.execute_activity(ENSURE_RUN, start, start_to_close_timeout=RECORD_TIMEOUT)
         return RunEnd(run_id=start.run_id, status="complete")

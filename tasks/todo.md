@@ -891,7 +891,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     own workflow code.
   - T32 was cherry-picked onto this branch (it was based before T24).
 
-- [ ] **T34 — Worker, entry point, run identity** · layer 3 · *M*
+- [x] **T34 — Worker, entry point, run identity** · layer 3 · *M*
   - Acceptance: `worker.py` + `agentstack-worker`; the workflow id is
     `experiment-run:{run_id}`; an `ensure_run` activity upserts the `runs` row; the worker
     runs preflight before polling and exits non-zero when Temporal is unreachable.
@@ -900,6 +900,20 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     `test_prediction_gate` green.
   - Files: `runtime/temporal/{worker,activities}.py`, `interfaces/worker_cli.py`,
     `pyproject.toml` (script), test.
+  - **Done.** 9 tests in `test_temporal_boundaries`. `start_run` (in `client.py`) attaches
+    to a run that's already going (`USE_EXISTING`) rather than failing, so all five
+    racing starts get the same handle, and the server decides it. `RunStart` carries the
+    run's identifiers (session, tenant, user, stage, channel) and nothing that grants
+    authority.
+  - Preflight is an injectable argument that defaults to the real `agentstack-preflight`.
+    One test proves the default refuses without a token. The C45 test injects a passing
+    preflight, so it fails for the reason it's about (no server), and it's bounded at 5s.
+  - **Seen before T35 fixed it:** the first run of the test hung. `runs.session_id` is a
+    foreign key, the test had no session, and Temporal's default policy retried the
+    failing activity forever. That's rule 2's reason for existing, and why every
+    result wait in the tests is now bounded.
+  - Not yet covered: `worker_cli._serve`, the poll loop itself (78% of the file). The
+    durability tests start it as a real process from T36.
 
 - [ ] **T35 — The one RetryPolicy + declared-activity interceptor** · layer 3 · *S*
   - Acceptance: `retry.py`: refusals (`UnresolvedEffect`, `ApprovalStale`,
