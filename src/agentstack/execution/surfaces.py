@@ -115,10 +115,14 @@ class Sandbox:
 
 # --- the experiment registry ---
 #
-# Two resources, and anything else is refused rather than guessed at:
+# A closed table of resources, each served by the verbs listed and no other. Anything
+# else is refused rather than guessed at:
 #
-#   {tenant}/experiments/{id}           create the draft (commit) / the experiment (read)
-#   {tenant}/experiments/{id}/rollout   expose the current version to a percentage
+#   {tenant}/experiments/               read    the tenant's experiments, bounded
+#   {tenant}/experiments/{id}           read    the experiment, at its current version
+#                                       commit  create the draft
+#   {tenant}/experiments/{id}/history   read    rollouts and halts, oldest first
+#   {tenant}/experiments/{id}/rollout   commit  expose the current version to a percentage
 #
 # Both clients below hold the same preconditions, and `tests/infra/test_registry_store.py`
 # runs one contract suite over both. A precondition that does not hold is
@@ -127,20 +131,52 @@ class Sandbox:
 # arguments - it is "this resource, now", which only the surface can answer.
 
 _REGISTRY_RESOURCE = re.compile(
-    r"^(?P<tenant>[^/]+)/experiments/(?P<experiment>[^/]+)(?P<action>/rollout)?$"
+    r"^(?P<tenant>[^/]+)/experiments/(?:(?P<experiment>[^/]+)(?:/(?P<suffix>[a-z_]+))?)?$"
 )
+
+# Per verb, the action each suffix names. A resource valid for one verb is not thereby
+# valid for the other: history is read and never written, a rollout written and never
+# read. The collection (no experiment) is the list read and nothing else.
+_READS: dict[str | None, str] = {None: "experiment", "history": "history"}
+_COMMITS: dict[str | None, str] = {None: "draft", "rollout": "rollout"}
 
 # A rollout may widen a live experiment or launch a draft; from any other state it is
 # refused. `halted` is terminal for a version in iteration 1 (SPEC-registry.md).
 _ROLLOUT_FROM = ("draft", "live")
 
+# One read cannot flood the context window (SPEC-registry.md, Budgets). The tool schema
+# refuses more; the surface clamps anyway, because the schema is not its only caller.
+LIST_LIMIT = 50
+LIST_DEFAULT = 20
 
-def _registry_resource(resource: str) -> tuple[str, str, str]:
+# The events that change exposure. Discards and abstentions are history too, but they
+# never put a variant in front of anyone, so they are not rollout history.
+_EXPOSURE_KINDS = ("rollout", "halt")
+
+
+def _registry_resource(resource: str, verb: dict[str | None, str]) -> tuple[str, str, str]:
+    """(tenant, experiment, action) for this verb, or a refusal. The collection has no
+    experiment, and only the list read serves it."""
     match = _REGISTRY_RESOURCE.match(resource)
-    if match is None:
+    if match is not None and match["experiment"] is None and verb is _READS:
+        return match["tenant"], "", "list"
+    if match is None or match["experiment"] is None or match["suffix"] not in verb:
         raise SurfaceRefused(f"{resource}: not a resource the experiment registry serves")
-    action = "rollout" if match["action"] else "draft"
-    return match["tenant"], match["experiment"], action
+    return match["tenant"], match["experiment"], verb[match["suffix"]]
+
+
+def _list_limit(query: dict[str, Any]) -> int:
+    return max(1, min(int(query.get("limit", LIST_DEFAULT)), LIST_LIMIT))
+
+
+def _history(experiment: str, events: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    """Current exposure is derived from the latest rollout or halt, never stored as a
+    second truth beside the events it would have to agree with."""
+    return {
+        "experiment_id": experiment,
+        "events": [{"kind": kind, **payload} for kind, payload in events],
+        "current_exposure": events[-1][1]["percentage"] if events else 0,
+    }
 
 
 @dataclass(slots=True)
@@ -156,25 +192,50 @@ class RegistryClient:
     """
 
     drafts: dict[str, dict[str, Any]] = field(default_factory=dict)
-    rollouts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # Every effect after the draft, in order: (experiment resource, kind, payload) - the
+    # fake's `registry_events`.
+    events: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
     reads: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     # Apply the effect and then lose the answer: the failure two-phase idempotency
     # exists for. Same switch as RecordingClient, for the same reason.
     fail_after_effect: bool = False
     _status: dict[str, str] = field(default_factory=dict)
 
+    @property
+    def rollouts(self) -> list[tuple[str, dict[str, Any]]]:
+        return [(f"{base}/rollout", p) for base, kind, p in self.events if kind == "rollout"]
+
     def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
-        tenant, experiment, action = _registry_resource(resource)
-        if action != "draft":
-            raise SurfaceRefused(f"{resource}: not readable")
+        tenant, experiment, action = _registry_resource(resource, _READS)
         self.reads.append((resource, dict(query)))
-        draft = self.drafts.get(resource)
+        if action == "list":
+            return self._list(tenant, query)
+        base = f"{tenant}/experiments/{experiment}"
+        draft = self.drafts.get(base)
         if draft is None:
             return {}
-        return {"experiment_id": experiment, "status": self._status[resource], **draft}
+        if action == "history":
+            return _history(
+                experiment,
+                [(k, p) for b, k, p in self.events if b == base and k in _EXPOSURE_KINDS],
+            )
+        return {"experiment_id": experiment, "status": self._status[base], **draft}
+
+    def _list(self, tenant: str, query: dict[str, Any]) -> dict[str, Any]:
+        prefix = f"{tenant}/experiments/"
+        rows = [
+            {
+                "experiment_id": base.removeprefix(prefix),
+                "status": self._status[base],
+                "experiment_version": draft["experiment_version"],
+            }
+            for base, draft in sorted(self.drafts.items())
+            if base.startswith(prefix) and query.get("status") in (None, self._status[base])
+        ]
+        return {"experiments": rows[: _list_limit(query)]}
 
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
-        tenant, experiment, action = _registry_resource(resource)
+        tenant, experiment, action = _registry_resource(resource, _COMMITS)
         base = f"{tenant}/experiments/{experiment}"
         if action == "draft":
             if base in self.drafts:
@@ -192,7 +253,7 @@ class RegistryClient:
                 raise SurfaceRefused(f"{base} is {self._status[base]}; it cannot be rolled out")
             if (resource, payload) in self.rollouts:
                 raise SurfaceRefused(f"{resource}: this rollout already happened")
-            self.rollouts.append((resource, dict(payload)))
+            self.events.append((base, "rollout", dict(payload)))
             self._status[base] = "live"
             receipt = f"rollout-{len(self.rollouts)}"
         if self.fail_after_effect:
@@ -239,10 +300,11 @@ class PostgresRegistryClient:
         return [(f"{t}/experiments/{e}/rollout", dict(p)) for t, e, p in rows]
 
     def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
-        del query
-        tenant, experiment, action = _registry_resource(resource)
-        if action != "draft":
-            raise SurfaceRefused(f"{resource}: not readable")
+        tenant, experiment, action = _registry_resource(resource, _READS)
+        if action == "list":
+            return self._list(tenant, query)
+        if action == "history":
+            return self._history(tenant, experiment)
         row = self.db.fetch_one(
             "SELECT e.status, e.current_version, v.variant,"
             " (SELECT r.hypothesis FROM draft_revisions r"
@@ -267,8 +329,38 @@ class PostgresRegistryClient:
             "variant": variant,
         }
 
+    def _list(self, tenant: str, query: dict[str, Any]) -> dict[str, Any]:
+        status = query.get("status")
+        rows = self.db.fetch_all(
+            "SELECT experiment_id, status, current_version FROM experiments"
+            " WHERE tenant = %s AND (%s::text IS NULL OR status = %s)"
+            " ORDER BY experiment_id LIMIT %s",
+            (tenant, status, status, _list_limit(query)),
+        )
+        return {
+            "experiments": [
+                {"experiment_id": e, "status": s, "experiment_version": v} for e, s, v in rows
+            ]
+        }
+
+    def _history(self, tenant: str, experiment: str) -> dict[str, Any]:
+        if (
+            self.db.fetch_one(
+                "SELECT 1 FROM experiments WHERE tenant = %s AND experiment_id = %s",
+                (tenant, experiment),
+            )
+            is None
+        ):
+            return {}
+        rows = self.db.fetch_all(
+            "SELECT kind, payload FROM registry_events"
+            " WHERE tenant = %s AND experiment_id = %s AND kind = ANY(%s) ORDER BY id",
+            (tenant, experiment, list(_EXPOSURE_KINDS)),
+        )
+        return _history(experiment, [(kind, dict(payload)) for kind, payload in rows])
+
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
-        tenant, experiment, action = _registry_resource(resource)
+        tenant, experiment, action = _registry_resource(resource, _COMMITS)
         if action == "draft":
             return self._draft(tenant, experiment, payload)
         return self._rollout(tenant, experiment, payload)

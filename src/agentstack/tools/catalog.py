@@ -17,7 +17,18 @@ from collections.abc import Mapping
 from typing import Any
 
 from agentstack.tools.action import ActionRequest
-from agentstack.tools.experiments import DRAFT, ROLLOUT, prepare_draft, prepare_rollout
+from agentstack.tools.experiments import (
+    DRAFT,
+    GET,
+    HISTORY,
+    LIST,
+    ROLLOUT,
+    prepare_draft,
+    prepare_get,
+    prepare_history,
+    prepare_list,
+    prepare_rollout,
+)
 from agentstack.tools.registry import Registry
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 
@@ -108,4 +119,7 @@ def build_registry() -> Registry:
     registry.register(REFUND, _refund)
     registry.register(DRAFT, prepare_draft)
     registry.register(ROLLOUT, prepare_rollout)
+    registry.register(GET, prepare_get)
+    registry.register(LIST, prepare_list)
+    registry.register(HISTORY, prepare_history)
     return registry

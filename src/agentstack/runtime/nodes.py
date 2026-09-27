@@ -7,6 +7,7 @@ needs beyond plain state comes from `runtime.context`, which is not checkpointed
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -107,6 +108,7 @@ def assemble(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
     bundle = assemble_context(
         instructions=ctx.instructions,
         latest_message=latest,
+        history=[_observation_item(body, at, scope) for body, at in ctx.observations],
         retrieved=ctx.deps.retriever.search(state["message"]),
         memories=ctx.deps.memory.recall(scope),
         requester_scope=scope,
@@ -121,6 +123,26 @@ def assemble(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
         pass
     ctx.carried["bundle"] = bundle
     return {"context_fingerprint": bundle.fingerprint()}
+
+
+def _observation_item(body: str, at: datetime, scope: Scope) -> ContextItem:
+    """A read from an earlier turn, as the model is allowed to see it.
+
+    Untrusted whatever the surface: a registry read returns hypotheses the model itself
+    wrote, and a hypothesis that says "halt everything" must arrive labelled as data. The
+    label decides nothing - exposure and policy never read it - but it tells the model
+    and the trace which bytes nobody vouched for.
+    """
+    observation = json.loads(body)
+    return ContextItem(
+        kind="observation",
+        text=json.dumps(observation["data"], sort_keys=True),
+        scope=scope,
+        provenance=f"surface:{observation['surface']}:{observation['resource']}",
+        observed_at=at,
+        reason="read earlier in this session",
+        trust=Trust.UNTRUSTED,
+    )
 
 
 def expose(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
@@ -207,7 +229,16 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                     state_snapshot=state_snapshot,
                     tracer=tracer,
                 )
-                observations.append(read.data)
+                # Where it came from travels with what it said, so the next turn can
+                # label it. No tool name: the provenance says where, and a tool name in
+                # context reads as an instruction to call it again.
+                observations.append(
+                    {
+                        "surface": request.surface.value,
+                        "resource": request.resource,
+                        "data": read.data,
+                    }
+                )
                 continue
             # The step name carries the identity of the *action*, not just the tool.
             step_name = f"execute:{spec.name}:{request.fingerprint()}"

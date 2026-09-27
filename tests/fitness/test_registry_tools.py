@@ -15,14 +15,24 @@ import pytest
 from agentstack.execution.surfaces import PostgresRegistryClient
 from agentstack.interfaces.wiring import Stack
 from agentstack.tools.catalog import build_registry
-from agentstack.tools.experiments import DRAFT_STAGE, EVALUATION_STAGE, ROLLOUT_STAGE
+from agentstack.tools.experiments import (
+    DRAFT_STAGE,
+    EVALUATION_STAGE,
+    LIST,
+    ROLLOUT_STAGE,
+    STATUSES,
+    prepare_list,
+)
+from agentstack.tools.spec import Approval, Surface
 
 from .conftest import TENANT
 
+READS = {"get_experiment", "list_experiments"}
+
 EXPOSURE = {
-    DRAFT_STAGE: {"create_experiment_draft"},
-    EVALUATION_STAGE: set(),
-    ROLLOUT_STAGE: {"roll_out_variant_to_percentage"},
+    DRAFT_STAGE: READS | {"create_experiment_draft"},
+    EVALUATION_STAGE: READS | {"get_rollout_history"},
+    ROLLOUT_STAGE: READS | {"get_rollout_history", "roll_out_variant_to_percentage"},
 }
 
 
@@ -49,3 +59,54 @@ def test_the_stack_writes_the_real_registry(stack: Stack) -> None:
     """The fake is for tests that ask for it. A stack wired from `build_stack` records
     drafts and rollouts where they outlive the process - T25's whole point."""
     assert isinstance(stack.registry_client, PostgresRegistryClient)
+
+
+def test_a_read_is_a_read() -> None:
+    """No effect, no approval, one scope: a read that needed a tier would be a write
+    wearing a read's name, and one that took a write scope would widen every grant."""
+    reads = [s for s in build_registry().specs() if s.name in READS | {"get_rollout_history"}]
+
+    assert len(reads) == 3
+    for spec in reads:
+        assert spec.side_effecting is False
+        assert spec.approval is Approval.NONE
+        assert spec.scope == "experiments:read"
+        assert spec.surface is Surface.REGISTRY
+
+
+def test_a_list_is_bounded_in_its_schema() -> None:
+    limit = LIST.input_schema["properties"]["limit"]
+
+    assert (limit["minimum"], limit["maximum"]) == (1, 50)
+    assert LIST.input_schema["properties"]["status"]["enum"] == STATUSES
+
+
+def test_the_collection_read_stays_inside_the_sandbox_prefix() -> None:
+    """Listing names the collection with a trailing slash, which the existing
+    `{tenant}/experiments/` prefix already covers - containment is not widened."""
+    request = prepare_list({"tenant": TENANT})
+
+    assert request.resource == f"{TENANT}/experiments/"
+    assert request.payload == {"limit": 20}
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "resource"),
+    [
+        ("get_experiment", {"experiment_id": "exp-7"}, f"{TENANT}/experiments/exp-7"),
+        ("get_rollout_history", {"experiment_id": "exp-7"}, f"{TENANT}/experiments/exp-7/history"),
+        ("list_experiments", {"status": "live", "limit": 5}, f"{TENANT}/experiments/"),
+    ],
+)
+def test_each_read_asks_the_surface_through_a_resource_it_serves(
+    stack: Stack, tool: str, arguments: dict[str, object], resource: str
+) -> None:
+    """Prepared through the registry, validated, and read back through the real store:
+    a read tool whose resource the surface refused would be a menu item that never works."""
+    registry = build_registry()
+    exposed = registry.expose_for(tenant=TENANT, stage=ROLLOUT_STAGE)
+
+    request = registry.prepare(tool, {"tenant": TENANT, **arguments}, exposed=exposed)
+
+    assert request.resource == resource
+    assert isinstance(stack.registry_client.read(request.resource, request.payload), dict)

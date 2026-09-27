@@ -795,14 +795,38 @@ and the test that proves it.
     registry refuses to roll out an experiment nobody drafted, which the fake never did.
 
 ### ✅ Checkpoint G — real store, behaviour unchanged
-- [ ] `check_task.sh`, `tests/durability`, `lint-imports`, `stack_guard`, `checkpoint_guard` green
-- [ ] Human review
+- [x] `check_task.sh`, `tests/durability`, `lint-imports`, `stack_guard`, `checkpoint_guard` green
+- [x] Human review — the go-ahead for T26–T31 (2026-09-27) stands in for it.
+  - Run against a throwaway Postgres on 5434, the shared-DB collision still unfixed.
+  - **Found, not fixed:** `data/manifest.json` is meant to be committed and is on no
+    branch. `.gitignore` excludes the directory (`data/`), and git cannot re-include a
+    file under an excluded directory, so `!data/manifest.json` is inert (`data/*` would
+    work). A fresh worktree fails
+    `test_the_manifest_records_a_watermark_for_every_registered_dataset` until the main
+    checkout's `data/` is copied in.
 
-- [ ] **T26 — Read tools** · layers 6, 7, 5 · *M*
+- [x] **T26 — Read tools** · layers 6, 7, 5 (+1, 2 for the loop) · *M*
   - Acceptance: `get_experiment`, `list_experiments` (`limit` 1–50), `get_rollout_history`.
   - Verify: matrix rows in `test_registry_tools.py`; `limit: 51` refused; read of
     model-authored text enters context `UNTRUSTED` (`test_untrusted_content.py`);
     `execution.read` spans (`test_trace_completeness.py`).
+  - **Done.** Three `NONE`-tier reads on `experiments:read`. The surface's resources are
+    now one closed table per verb, so history cannot be written and a rollout cannot be
+    read. `list` is bounded twice: the schema refuses outside 1–50, and the surface
+    clamps anyway. `history` derives `current_exposure` from the latest rollout or halt
+    and never stores it.
+  - **The validator now enforces `enum`, `minimum` and `maximum`.** Before this, a bound
+    declared in a schema was checked by nothing.
+  - **The read loop is closed.** Until now a read's data stopped at
+    `TurnResult.observations`, so the model never saw what it read. Now `handle` appends
+    each read to the transcript as `kind="observation"`, and the next turn's `assemble`
+    shows the last 5 as `trust=untrusted`, with `surface:{surface}:{resource}` as their
+    provenance. They reach the runtime as plain `(body, at)` pairs, because runtime
+    may not import `control_plane`. `TurnContext` gains the field, and its exact-set
+    test was extended.
+  - The `execution.read` span is asserted on a registry read in
+    `test_untrusted_content.py`, not in `test_trace_completeness.py`: that is where the
+    turn doing the read already is.
 
 - [ ] **T27 — Draft lifecycle** · layers 6, 7 · *M*
   - Acceptance: `revise_draft_hypothesis`, `discard_experiment_draft`; revise appends a

@@ -92,7 +92,13 @@ def test_an_experiment_run_is_shown_neither_refund_tool(stack: Stack) -> None:
     """Exposing every tool on every run is the cheapest way to hand an injection a menu."""
     names = {s.name for stage in (DRAFT_STAGE, ROLLOUT_STAGE) for s in exposed(stack, stage)}
 
-    assert names == {"create_experiment_draft", "roll_out_variant_to_percentage"}
+    assert names == {
+        "create_experiment_draft",
+        "roll_out_variant_to_percentage",
+        "get_experiment",
+        "list_experiments",
+        "get_rollout_history",
+    }
 
 
 # --- criterion 19: refused before the registry is touched ---

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -99,6 +100,9 @@ class TurnContext:
     envelope: IdentityEnvelope
     deps: TurnDeps
     instructions: str
+    # Reads from earlier turns of this session, as (transcript body, when): the control
+    # plane holds them, and this layer may not import it, so they arrive as plain data.
+    observations: tuple[tuple[str, datetime], ...] = ()
     # Filled as the turn proceeds. Not checkpointed, and not meant to be: these are
     # this process's view of this turn.
     carried: dict[str, Any] = field(default_factory=dict)

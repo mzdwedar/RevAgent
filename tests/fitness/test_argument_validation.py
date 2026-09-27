@@ -52,6 +52,36 @@ def test_the_validator_reads_the_declared_schema_not_a_hand_written_copy() -> No
         validate_arguments(spec, {})
 
 
+@pytest.mark.parametrize(
+    ("arguments", "complaint"),
+    [
+        ({"limit": 51}, "at most 50"),
+        ({"limit": 0}, "at least 1"),
+        ({"limit": "5000"}, "at most 50"),
+        ({"status": "approved"}, "must be one of"),
+    ],
+)
+def test_a_declared_bound_is_enforced_not_just_declared(
+    arguments: dict[str, object], complaint: str
+) -> None:
+    """A budget in the schema that nothing checks is a budget in name only: `limit: 5000`
+    would reach the surface looking validated."""
+    spec = REGISTRY.spec("list_experiments")
+
+    with pytest.raises(InvalidToolArguments, match=complaint):
+        validate_arguments(spec, {"tenant": TENANT, **arguments})
+
+
+def test_a_value_inside_its_bounds_passes() -> None:
+    spec = REGISTRY.spec("list_experiments")
+
+    assert validate_arguments(spec, {"tenant": TENANT, "limit": "50", "status": "live"}) == {
+        "tenant": TENANT,
+        "limit": 50,
+        "status": "live",
+    }
+
+
 def test_a_malformed_proposal_fails_closed_and_traceably(stack: Stack, run: Run) -> None:
     """The turn ends with evidence and a reply, not a stack trace."""
     garbled = InboundEvent(

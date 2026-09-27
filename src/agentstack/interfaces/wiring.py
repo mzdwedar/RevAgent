@@ -7,6 +7,7 @@ the backend chosen in ADR-0002 is a change to this file and to nothing else.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -46,6 +47,11 @@ VERSIONS = VersionStamp(
     policy="policy-v1",
     retrieval="static-v1",
 )
+
+# How many earlier reads a turn is shown. A handful, most recent: enough to act on what
+# was just read, not so many that old reads crowd out the question (list reads are
+# themselves capped at 50 rows).
+OBSERVATIONS_IN_CONTEXT = 5
 
 
 @dataclass(slots=True)
@@ -215,11 +221,23 @@ def handle(
             channel=event.channel,
         )
     )
+    earlier = stack.transcripts.recent(
+        view.session_id, kind="observation", limit=OBSERVATIONS_IN_CONTEXT
+    )
     result = run_turn(
         run=run,
         envelope=envelope_for(view, scopes=scopes),
         message=event.text,
         deps=stack.deps,
+        observations=[(e.body, e.at) for e in earlier],
     )
+    # What the turn read is part of the record before it is part of any prompt: the
+    # transcript holds it, and the next turn's context is derived from there.
+    for observation in result.observations:
+        stack.transcripts.append(
+            session_id=view.session_id,
+            kind="observation",
+            body=json.dumps(observation, sort_keys=True),
+        )
     stack.transcripts.append(session_id=view.session_id, kind="agent", body=result.text)
     return result

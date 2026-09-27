@@ -34,6 +34,75 @@ from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSp
 DRAFT_STAGE = "draft"
 EVALUATION_STAGE = "evaluation"
 ROLLOUT_STAGE = "rollout"
+EXPERIMENT_STAGES = frozenset({DRAFT_STAGE, EVALUATION_STAGE, ROLLOUT_STAGE})
+
+# The four states an experiment can be in (migrations/0012). A read may filter by one;
+# no tool may name one as a target - a transition is a tool, not an argument.
+STATUSES = ["draft", "live", "halted", "discarded"]
+
+_ID = {"type": "string", "format": "id"}
+
+
+def _read(
+    name: str,
+    description: str,
+    properties: dict[str, Any],
+    required: list[str],
+    stages: frozenset[str],
+) -> ToolSpec:
+    """A registry read: no effect, no approval, one scope for all of them.
+
+    What it returns includes model-authored prose (hypotheses), so it enters the next
+    turn's context as untrusted - the read is safe, its content is not.
+    """
+    return ToolSpec(
+        name=name,
+        description=description,
+        input_schema={
+            "type": "object",
+            "properties": {"tenant": _ID, **properties},
+            "required": ["tenant", *required],
+        },
+        acts_as=ActsAs.DELEGATED,
+        scope="experiments:read",
+        surface=Surface.REGISTRY,
+        side_effecting=False,
+        reversible=True,
+        approval=Approval.NONE,
+        idempotency=Idempotency.NATURAL,
+        stages=stages,
+    )
+
+
+GET = _read(
+    "get_experiment",
+    "Read one experiment: its status, current version, variant and latest hypothesis.",
+    {"experiment_id": _ID},
+    ["experiment_id"],
+    EXPERIMENT_STAGES,
+)
+
+LIST = _read(
+    "list_experiments",
+    "List this tenant's experiments, optionally only those in one status. At most 50.",
+    {
+        "status": {"type": "string", "enum": STATUSES},
+        # Bounded in the schema, so one read cannot flood the context window.
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+    },
+    [],
+    EXPERIMENT_STAGES,
+)
+
+# Not on the draft stage: a drafting turn has nothing live to look back on, and every
+# tool on a stage is one more thing an injection can ask for.
+HISTORY = _read(
+    "get_rollout_history",
+    "Read one experiment's rollouts and halts, oldest first, and its current exposure.",
+    {"experiment_id": _ID},
+    ["experiment_id"],
+    frozenset({EVALUATION_STAGE, ROLLOUT_STAGE}),
+)
 
 DRAFT = ToolSpec(
     name="create_experiment_draft",
@@ -150,4 +219,44 @@ def prepare_rollout(arguments: Mapping[str, Any]) -> ActionRequest:
         # different effects, and the second must not be swallowed as a retry of the
         # first. The version is in it for the same reason as the draft.
         idempotency_key=f"rollout:{tenant}:{experiment}:{version}:{percentage}",
+    )
+
+
+def prepare_get(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    return ActionRequest(
+        tool=GET.name,
+        surface=GET.surface,
+        resource=f"{tenant}/experiments/{experiment}",
+        payload={},
+        idempotency_key=f"get:{tenant}:{experiment}",
+    )
+
+
+def prepare_list(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    query: dict[str, Any] = {"limit": arguments.get("limit", 20)}
+    if "status" in arguments:
+        query["status"] = arguments["status"]
+    return ActionRequest(
+        tool=LIST.name,
+        surface=LIST.surface,
+        # The trailing slash is the collection, and it sits inside the `{tenant}/experiments/`
+        # prefix the sandbox already allows - listing does not widen containment.
+        resource=f"{tenant}/experiments/",
+        payload=query,
+        idempotency_key=f"list:{tenant}:{query.get('status', '*')}:{query['limit']}",
+    )
+
+
+def prepare_history(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    return ActionRequest(
+        tool=HISTORY.name,
+        surface=HISTORY.surface,
+        resource=f"{tenant}/experiments/{experiment}/history",
+        payload={},
+        idempotency_key=f"history:{tenant}:{experiment}",
     )

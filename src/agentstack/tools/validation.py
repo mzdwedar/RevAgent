@@ -7,10 +7,10 @@ is a KeyError and a garbage number is a ValueError - both of which escape the tu
 uncaught.
 
 This is a deliberately small subset of JSON Schema: object types, `required`,
-`properties` with primitive type names, and `additionalProperties` defaulting to
-false. That is what the tool catalog declares. It is not a dependency because the
-subset a capability surface needs is this small - if a tool ever needs `oneOf` or
-`$ref`, reach for jsonschema then and say so in an ADR.
+`properties` with primitive type names, `enum`, `minimum`/`maximum`, and
+`additionalProperties` defaulting to false. That is what the tool catalog declares.
+It is not a dependency because the subset a capability surface needs is this small -
+if a tool ever needs `oneOf` or `$ref`, reach for jsonschema then and say so in an ADR.
 """
 
 from __future__ import annotations
@@ -81,8 +81,22 @@ def validate_arguments(spec: ToolSpec, arguments: Mapping[str, Any]) -> dict[str
             raise InvalidToolArguments(
                 f"{spec.name}: {name} must be {declared}, got {type(value).__name__}"
             )
+        _within_bounds(spec, name, properties[name], value)
         coerced[name] = value
     return coerced
+
+
+def _within_bounds(spec: ToolSpec, name: str, declared: Mapping[str, Any], value: Any) -> None:
+    """`enum`, `minimum` and `maximum`: a bound a schema declares and nothing enforces is
+    a budget in name only - `limit: 5000` would reach the surface looking validated."""
+    allowed = declared.get("enum")
+    if allowed is not None and value not in allowed:
+        raise InvalidToolArguments(f"{spec.name}: {name} must be one of {allowed}, got {value!r}")
+    low, high = declared.get("minimum"), declared.get("maximum")
+    if low is not None and value < low:
+        raise InvalidToolArguments(f"{spec.name}: {name} must be at least {low}, got {value}")
+    if high is not None and value > high:
+        raise InvalidToolArguments(f"{spec.name}: {name} must be at most {high}, got {value}")
 
 
 def _from_text(declared: str, value: str) -> Any:

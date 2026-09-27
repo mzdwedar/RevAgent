@@ -311,3 +311,90 @@ def test_the_rollout_resource_is_written_not_read(client: Any) -> None:
     """History is read through its own resource (T26), not by reading the verb."""
     with pytest.raises(SurfaceRefused):
         client.read(ROLLOUT_AT, {})
+
+
+# --- reads (T26) ---
+
+LIST_AT = f"{TENANT}/experiments/"
+HISTORY_AT = f"{DRAFT_AT}/history"
+
+
+def draft(client: Any, experiment: str, tenant: str = TENANT) -> None:
+    client.commit(f"{tenant}/experiments/{experiment}", DRAFT_PAYLOAD)
+
+
+@pytest.mark.parametrize("resource", [LIST_AT, HISTORY_AT])
+def test_a_read_resource_is_read_not_written(client: Any, resource: str) -> None:
+    """Each resource serves the verbs in the table and no other: committing to history
+    or to the collection would be a write with no precondition to hold it."""
+    draft(client, EXPERIMENT)
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(resource, {"experiment_version": VERSION})
+
+
+def test_a_list_names_each_experiment_once(client: Any) -> None:
+    draft(client, "exp-2")
+    draft(client, "exp-1")
+
+    assert client.read(LIST_AT, {"limit": 20}) == {
+        "experiments": [
+            {"experiment_id": "exp-1", "status": "draft", "experiment_version": VERSION},
+            {"experiment_id": "exp-2", "status": "draft", "experiment_version": VERSION},
+        ]
+    }
+
+
+def test_a_list_filters_by_status(client: Any) -> None:
+    draft(client, "exp-1")
+    draft(client, EXPERIMENT)
+    client.commit(ROLLOUT_AT, rollout_payload())
+
+    live = client.read(LIST_AT, {"status": "live", "limit": 20})["experiments"]
+
+    assert [row["experiment_id"] for row in live] == [EXPERIMENT]
+
+
+def test_a_list_is_one_tenants(client: Any) -> None:
+    draft(client, "exp-1")
+    draft(client, "exp-9", tenant="globex")
+
+    rows = client.read(LIST_AT, {"limit": 20})["experiments"]
+
+    assert [row["experiment_id"] for row in rows] == ["exp-1"]
+
+
+@pytest.mark.parametrize(("asked", "returned"), [(2, 2), (5000, 3), (0, 1)])
+def test_a_list_is_clamped_at_the_surface(client: Any, asked: int, returned: int) -> None:
+    """The schema refuses more than 50; the surface clamps anyway, because the schema is
+    not its only caller."""
+    for n in range(3):
+        draft(client, f"exp-{n}")
+
+    assert len(client.read(LIST_AT, {"limit": asked})["experiments"]) == returned
+
+
+def test_history_is_in_order_and_derives_exposure(client: Any) -> None:
+    draft(client, EXPERIMENT)
+    client.commit(ROLLOUT_AT, rollout_payload(10))
+    client.commit(ROLLOUT_AT, rollout_payload(25))
+
+    history = client.read(HISTORY_AT, {})
+
+    assert [e["percentage"] for e in history["events"]] == [10, 25]
+    assert {e["kind"] for e in history["events"]} == {"rollout"}
+    assert history["current_exposure"] == 25
+
+
+def test_a_draft_has_an_empty_history(client: Any) -> None:
+    draft(client, EXPERIMENT)
+
+    assert client.read(HISTORY_AT, {}) == {
+        "experiment_id": EXPERIMENT,
+        "events": [],
+        "current_exposure": 0,
+    }
+
+
+def test_the_history_of_nothing_is_empty(client: Any) -> None:
+    assert client.read(HISTORY_AT, {}) == {}

@@ -8,7 +8,9 @@ progress. It does not own authority, and it never touches a surface directly.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from agentstack.context.assemble import ContextBundle
@@ -64,6 +66,7 @@ def run_turn(
     deps: TurnDeps,
     instructions: str = "You are a support agent. Prefer the narrowest tool that fits.",
     turn_id: str | None = None,
+    observations: Sequence[tuple[str, datetime]] = (),
 ) -> TurnResult:
     """One turn, executed as a checkpointed graph (ADR-0006).
 
@@ -80,6 +83,7 @@ def run_turn(
         envelope=envelope,
         deps=deps,
         instructions=instructions,
+        observations=tuple(observations),
         carried={"tracer": tracer},
     )
     final = advance(
