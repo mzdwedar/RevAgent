@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import grimp
+
 from agentstack.execution.gateway import Gateway
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, envelope_for, handle
@@ -70,3 +72,23 @@ def test_the_idempotency_key_is_the_business_identity_of_the_effect() -> None:
     assert _refund(args).idempotency_key == _refund(dict(args)).idempotency_key, (
         "a retry must reproduce the key, so it cannot be a random uuid"
     )
+
+
+def test_no_key_can_be_derived_from_temporal_identity() -> None:
+    """ADR-0008 rule 1, and half of spec criterion 36 (E1).
+
+    A key built from a workflow id, a Temporal run id, an activity id or an attempt
+    number lands twice under retry, reset or redelivery. That's what the probe
+    measured: only the content-derived key landed once under all three. The keys are
+    built in `agentstack.tools`, so the tools have no path to `temporalio` at all,
+    directly or through anything they import.
+    """
+    graph = grimp.build_graph("agentstack", include_external_packages=True)
+
+    assert graph.chain_exists(
+        importer="agentstack.runtime", imported="temporalio", as_packages=True
+    ), "control: the runtime does reach temporalio, so a False below is a real answer"
+    chain = graph.find_shortest_chain(importer="agentstack.tools", imported="temporalio")
+    assert not graph.chain_exists(
+        importer="agentstack.tools", imported="temporalio", as_packages=True
+    ), f"agentstack.tools reaches temporalio: {chain}"

@@ -1070,10 +1070,15 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   first's. The fix is a fix-forward migration adding `tenant` to the key, plus the
   store and the claim. It needs its own task and a human decision on the migration.
 
-- [ ] **T39 — Idempotency keys never derive from Temporal identity** · layer 6 · *XS*
+- [x] **T39 — Idempotency keys never derive from Temporal identity** · layer 6 · *XS*
   - Acceptance: nothing in `agentstack.tools` imports `temporalio`.
   - Verify: `test_idempotency.py` gains the import assertion (rule 1, part of C36).
   - Files: `tests/fitness/test_idempotency.py`.
+  - **Done.** Checked on the import graph (grimp, the engine behind `lint-imports`,
+    already installed with it), so an indirect path counts too. There's a control
+    assertion that `agentstack.runtime` *does* reach `temporalio`, so the test can't
+    pass by building a graph without external packages. Mutation-checked: a planted
+    import in `tools/spec.py` fails with the chain named.
 
 - [ ] **T40 — The turn as one activity** · layer 3 · *M*
   - Acceptance: `run_turn` activity runs the LangGraph graph (Postgres checkpointer,
