@@ -34,6 +34,7 @@ def build_worker(
             activities.park_trigger_wait,
             activities.satisfy_trigger_wait,
             activities.run_turn,
+            activities.ask_approval,
         ],
         activity_executor=executor,
         interceptors=[DeclaredActivitiesOnly()],

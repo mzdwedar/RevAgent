@@ -1155,13 +1155,47 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     a refused proposal and an abstention don't; death between record and settle converges
     on one row; UPDATE and DELETE are refused with the constraint named.
 
-- [ ] **T41 — Approval wait and re-ask on timers; retire `deadlines.py`** · layer 3 · *M*
+- [x] **T41 — Approval wait and re-ask on timers; retire `deadlines.py`** · layer 3 · *M*
   - Acceptance: `park_wait` activity writes the wait row (fingerprint, summary,
     snapshot) and asks; the workflow re-asks on a timer, never expiring silently.
     `deadlines.py` is deleted once its tests pass against the timer loop.
   - Verify: time-skipping: 72 simulated hours unanswered → asked at every interval
     (C32); `test_stalled_waits` re-ask tests green; `park_wait` rerun → one wait row.
   - Files: `runtime/temporal/{workflows,activities}.py`, `runtime/deadlines.py` (deleted), `tests/durability/test_timers.py`.
+  - **Done. The flow SPEC.md describes now runs end to end up to the answer:** propose →
+    draft turn (PRE_COMMIT, commits) → **rollout turn** (told the action from the frozen
+    cohort: 10% per SPEC, predicate in the payload) → the gateway stops it (ALWAYS), `act`
+    parks the `human_approval` wait → **`ask_approval`** puts the question → the workflow
+    waits on `REASK_EVERY` (24h) and asks again each time, never expiring.
+  - **The wait is parked where it always was, by the turn's `act`,** not by a separate
+    `park_wait`. What changed is that its id is now derived
+    (`waits.approval_wait_id(run, fingerprint, snapshot)`), so a turn that parked it and
+    died before its checkpoint parks the same wait again. A different snapshot gives a
+    different wait: the question is about that world.
+  - **The ask seam is filled for the first time.** Before this, nothing in production
+    ever posted an approval (`post_approval` and `fire_reasks`'s `ask` were called only
+    by tests). `Asker` (runtime) is implemented by `wiring.ChannelAsker`: it builds the
+    real `ApprovalAsk` from the wait's summary and the frozen cohort
+    (`estimated_customers = round(size × 10%)`, value at risk) and posts it.
+    `agentstack-worker` uses `SlackNotifier`; tests use the recorder.
+  - **Re-asks are recorded on the wait** (`reasks`, next `deadline`) by
+    `WaitStore.record_asked`, which replaces `record_reask`. It only moves forward and
+    only while pending, so a rerun counts once and an answer that lands mid-ask wins.
+    `deadlines.py` is deleted. Its five tests in `test_stalled_waits` were rewritten in
+    place against `ask_approval` (plus one for an ask with no summary), and the timer half
+    is in `test_approval_wait` (72 simulated hours: asked 4 times, `reasks == 3`, still
+    pending).
+  - **Semantics made explicit:** while a run waits for a person, new triggers queue
+    behind the answer. That's the existing Part 3 gate ("a run with an unsatisfied wait
+    doesn't look at anything else"). Checkpoint J's kill test now opens with a
+    `metric_movement` (refused, so the run parks on a trigger wait) to keep testing what
+    it was about.
+  - T40's tests now count *drafting* calls (the rollout turn is a second, legitimate
+    model call) and wait until the run settles at the approval before tearing down.
+  - `stack_guard` flagged 4 assertions fewer in `test_stalled_waits.py`. Instead of
+    explaining it away, the rewritten tests gained real assertions: the question's
+    content and size, visible duplicates, nothing posted on failure or after an answer.
+    It's intact now.
 
 - [ ] **T42 — The Slack answer notifies the workflow** · layer 1 · *S*
   - Acceptance: `slack_callback.py` runs `ApprovalCoordinator.apply` as today, **then**

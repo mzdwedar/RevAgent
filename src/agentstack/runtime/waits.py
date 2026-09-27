@@ -8,6 +8,7 @@ input that satisfies it. Anything less resumes into a world it never saw.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -59,6 +60,17 @@ class Wait:
     # and an approval wait is asked again; neither is allowed to lapse quietly.
     deadline: datetime | None = None
     reasks: int = 0
+
+
+def approval_wait_id(run_id: str, action_fingerprint: str, state_snapshot: str) -> str:
+    """The one approval wait for this action, against this state, in this run.
+
+    Derived, so a turn that parks it and dies before its checkpoint lands parks the
+    same wait when it runs again, not a second question. A different state is a
+    different question: an approval is bound to the world it was asked about.
+    """
+    digest = hashlib.sha256(f"{run_id}\n{action_fingerprint}\n{state_snapshot}".encode())
+    return f"wait-approval-{digest.hexdigest()[:24]}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,17 +194,18 @@ class WaitStore:
         )
         return tuple(Wait(*row) for row in rows)
 
-    def record_reask(self, wait: Wait, *, next_deadline: datetime) -> Wait | None:
-        """Move the deadline on after the question was put again.
+    def record_asked(self, wait_id: str, *, reasks: int, next_deadline: datetime) -> Wait | None:
+        """Record that the question was put for the `reasks`-th time again, and when next.
 
-        Conditional on the deadline still being the one that was read, and on the wait
-        still pending. `None` means someone answered, or another timer got there first.
+        Only moves forward, and only while the wait is pending: a rerun of the same ask
+        (at-least-once) finds `reasks` already there and changes nothing, and an answer
+        that landed first wins. `None` means one of those happened.
         """
         row = self.db.fetch_one(
-            "UPDATE waits SET deadline = %s, reasks = reasks + 1"
-            " WHERE wait_id = %s AND NOT satisfied AND deadline = %s"
+            "UPDATE waits SET deadline = %s, reasks = %s"
+            " WHERE wait_id = %s AND NOT satisfied AND reasks < %s"
             f" RETURNING {_COLUMNS}",
-            (next_deadline, wait.wait_id, wait.deadline),
+            (next_deadline, reasks, wait_id, reasks),
         )
         return None if row is None else Wait(*row)
 

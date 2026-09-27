@@ -39,6 +39,7 @@ from agentstack.storage.database import Database
 from agentstack.tools.experiments import DRAFT_STAGE
 from tests.fitness.test_trigger_to_candidate import RULE, WATERMARK, StubScorer
 from tests.temporal_support import (
+    DRAFT_TOOL,
     DraftingEngine,
     activities_for,
     progress_until,
@@ -85,15 +86,15 @@ def test_a_proposed_cohort_is_drafted_once_and_audited_with_its_rule(
         async with worker(stack, app_database, temporal_address, task_queue, engine) as client:
             run_id = await deliver(stack, client, PAYLOAD, source="t", task_queue=task_queue)
             handle = handle_of(client, run_id)
-            progress = await progress_until(handle, lambda p: len(p.turns) == 1)
+            progress = await progress_until(handle, lambda p: len(p.turns) == 2)
             history = (await handle.fetch_history()).to_json()
             return run_id, progress, history
 
     run_id, progress, history = asyncio.run(draft())
 
-    (turn,) = progress.turns
+    turn = progress.turns[0]  # the draft; the second is the rollout, parked for a person
     assert turn.refusal is None and turn.receipts == 1, turn
-    assert engine.calls == 1
+    assert engine.drafts == 1
     draft_row = stack.registry_client.drafts[DRAFTED]
     assert draft_row["experiment_version"] == progress.cycles[0].experiment_version
     committed = [r for r in stack.audit.for_run(run_id) if r.outcome == "committed"]
@@ -115,7 +116,7 @@ def test_the_turn_is_told_its_ids_and_the_transcript_keeps_what_was_said(
             stack, app_database, temporal_address, task_queue, DraftingEngine()
         ) as client:
             run_id = await deliver(stack, client, PAYLOAD, source="t", task_queue=task_queue)
-            await progress_until(handle_of(client, run_id), lambda p: len(p.turns) == 1)
+            await progress_until(handle_of(client, run_id), lambda p: len(p.turns) == 2)
             return run_id
 
     run_id = asyncio.run(draft())
@@ -124,7 +125,9 @@ def test_the_turn_is_told_its_ids_and_the_transcript_keeps_what_was_said(
     assert run is not None
     events = stack.transcripts.for_session(run.session_id)
     asked = [e.body for e in events if e.kind == "user"]
-    assert len(asked) == 1 and "experiment_id=exp-7" in asked[0]
+    drafting, proposing = asked  # two turns: the draft, then the rollout's proposal
+    assert "create_experiment_draft" in drafting and "experiment_id=exp-7" in drafting
+    assert "roll_out_variant_to_percentage" in proposing and "percentage=10" in proposing
     assert any(e.kind == "agent" for e in events)
 
 
@@ -152,7 +155,7 @@ def test_a_rerun_of_a_finished_turn_asks_the_model_nothing(
     second = activities.run_turn(intent)
 
     assert first == second
-    assert engine.calls == 1
+    assert engine.drafts == 1
     assert list(stack.registry_client.drafts) == [DRAFTED]
 
 
@@ -164,15 +167,15 @@ def test_a_redelivery_after_the_run_closed_finds_the_turn_taken(
     async def deliver_twice_around_a_close() -> RunProgress:
         async with worker(stack, app_database, temporal_address, task_queue, engine) as client:
             run_id = await deliver(stack, client, PAYLOAD, source="t", task_queue=task_queue)
-            await progress_until(handle_of(client, run_id), lambda p: len(p.turns) == 1)
+            await progress_until(handle_of(client, run_id), lambda p: len(p.turns) == 2)
             await handle_of(client, run_id).terminate("closed")
             await deliver(stack, client, PAYLOAD, source="t", task_queue=task_queue)
-            return await progress_until(handle_of(client, run_id), lambda p: len(p.turns) == 1)
+            return await progress_until(handle_of(client, run_id), lambda p: len(p.turns) == 2)
 
     progress = asyncio.run(deliver_twice_around_a_close())
 
     assert progress.turns[0].receipts == 1
-    assert engine.calls == 1, "the second execution found the turn already taken"
+    assert engine.drafts == 1, "the second execution found the turn already taken"
     assert list(stack.registry_client.drafts) == [DRAFTED]
 
 
@@ -186,7 +189,7 @@ def test_a_workflow_reset_replays_the_turn_without_a_second_draft(
         async with worker(stack, app_database, temporal_address, task_queue, engine) as client:
             run_id = await deliver(stack, client, PAYLOAD, source="t", task_queue=task_queue)
             handle = handle_of(client, run_id)
-            await progress_until(handle, lambda p: len(p.turns) == 1)
+            await progress_until(handle, lambda p: len(p.turns) == 2)
             before = (await handle.describe()).run_id
 
             # Reset to the end of the first workflow task: before the cycle and the turn.
@@ -206,14 +209,14 @@ def test_a_workflow_reset_replays_the_turn_without_a_second_draft(
                 )
             )
             after = handle_of(client, run_id)
-            progress = await progress_until(after, lambda p: len(p.turns) == 1)
+            progress = await progress_until(after, lambda p: len(p.turns) == 2)
             return before, reset.run_id, progress
 
     before, after, progress = asyncio.run(draft_then_reset())
 
     assert before != after, "the reset started a new execution"
     assert progress.turns[0].receipts == 1
-    assert engine.calls == 1
+    assert engine.drafts == 1
     assert list(stack.registry_client.drafts) == [DRAFTED]
 
 
@@ -221,7 +224,8 @@ class SlowDraftingEngine(DraftingEngine):
     """A model that takes longer to answer than the turn's heartbeat timeout."""
 
     def generate(self, request: Any) -> Any:
-        time.sleep(SLOW_MODEL_S)
+        if DRAFT_TOOL in request.tool_names:  # the turn under test; the rollout stays quick
+            time.sleep(SLOW_MODEL_S)
         return super().generate(request)
 
 
@@ -243,13 +247,13 @@ def test_a_turn_longer_than_its_heartbeat_timeout_is_not_retried_while_alive(
         async with worker(stack, app_database, temporal_address, task_queue, engine) as client:
             run_id = await deliver(stack, client, PAYLOAD, source="t", task_queue=task_queue)
             return await progress_until(
-                handle_of(client, run_id), lambda p: len(p.turns) == 1, timeout=SLOW_MODEL_S + 30
+                handle_of(client, run_id), lambda p: len(p.turns) == 2, timeout=SLOW_MODEL_S + 30
             )
 
     progress = asyncio.run(slow_draft())
 
     assert progress.turns[0].receipts == 1
-    assert engine.calls == 1, "a second attempt started while the first was still alive"
+    assert engine.drafts == 1, "a second attempt started while the first was still alive"
 
 
 def _run_for(stack: Stack) -> str:

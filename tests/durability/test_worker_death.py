@@ -33,7 +33,8 @@ from agentstack.runtime.waits import WaitStore
 from agentstack.storage.database import Database
 from tests.conftest import connect_temporal
 from tests.fitness.test_trigger_to_candidate import WATERMARK
-from tests.temporal_support import progress_until
+from tests.temporal_support import DRAFT_TOOL, progress_until
+from tests.temporal_support import model_calls as asked_with
 
 ROOT = Path(__file__).resolve().parents[2]
 READY_TIMEOUT_S = 30.0
@@ -86,9 +87,9 @@ def start_worker(
     return process
 
 
-def payload(data_as_of: str) -> dict[str, str]:
+def payload(data_as_of: str, kind: str = "data_arrival") -> dict[str, str]:
     return {
-        "kind": "data_arrival",
+        "kind": kind,
         "experiment_id": "exp-7",
         "data_as_of": data_as_of,
         "tenant": "acme",
@@ -113,7 +114,11 @@ def test_a_run_survives_its_worker_being_killed_while_it_waits(
 
         async def before_the_kill() -> tuple[str, RunProgress]:
             client = await connect_temporal(temporal_address)
-            run_id = await deliver(stack, client, payload(WATERMARK), source="t", task_queue=queue)
+            # A metric movement: scored, then refused the proposal by layer 8, so the run
+            # parks on its next trigger wait. (A proposal would park it on a person's
+            # answer instead, and triggers wait behind that: T41.)
+            first_trigger = payload(WATERMARK, kind="metric_movement")
+            run_id = await deliver(stack, client, first_trigger, source="t", task_queue=queue)
             handle = client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
             progress = await progress_until(
                 handle, lambda p: len(p.cycles) == 1 and p.waiting_on is not None
@@ -156,7 +161,7 @@ def test_a_run_survives_its_worker_being_killed_while_it_waits(
                 process.kill()
                 process.wait(timeout=10)
 
-    assert parked.cycles[0].outcome == "propose"
+    assert parked.cycles[0].refusal == "OutcomeNotAuthorized"
     # The batch that arrived into the gap: evaluated once, by the new process. The
     # snapshot on disk is still the first batch, so the honest answer is to abstain.
     assert resumed.cycles[1].data_as_of == "fixture:the-next-batch"
@@ -241,8 +246,9 @@ def test_a_turn_killed_after_the_model_answered_is_finished_without_asking_again
         async def finished() -> RunProgress:
             client = await connect_temporal(temporal_address)
             handle = client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+            # Settled at the approval: drafted, then the rollout proposed and parked.
             return await progress_until(
-                handle, lambda p: len(p.turns) == 1, timeout=TURN_RESUME_BOUND_S
+                handle, lambda p: len(p.turns) == 2, timeout=TURN_RESUME_BOUND_S
             )
 
         progress = asyncio.run(finished())
@@ -254,8 +260,9 @@ def test_a_turn_killed_after_the_model_answered_is_finished_without_asking_again
                 process.wait(timeout=10)
 
     assert reached.read_text() == "create_experiment_draft", "killed at the draft's commit"
-    assert model_calls.read_text().split() == [str(first.pid)], "asked once, before the kill"
-    (turn,) = progress.turns
+    drafting = asked_with(model_calls, tool=DRAFT_TOOL)
+    assert drafting == [str(first.pid)], "asked to draft once, before the kill"
+    turn = progress.turns[0]
     assert turn.refusal is None and turn.receipts == 1, turn
     assert list(stack.registry_client.drafts) == ["acme/experiments/exp-7"]
     committed = [r for r in stack.audit.for_run(run_id) if r.outcome == "committed"]

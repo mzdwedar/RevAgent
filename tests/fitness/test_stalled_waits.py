@@ -16,13 +16,16 @@ from typing import Any
 
 import pytest
 
+from agentstack.context.frozen_cohorts import FrozenCohortStore
+from agentstack.context.targeting import Cohort, TargetingRule
 from agentstack.interfaces import operator_cli
 from agentstack.interfaces.inbound import InboundEvent
+from agentstack.interfaces.slack import RecordingNotifier
 from agentstack.interfaces.triggers import parse_trigger
-from agentstack.interfaces.wiring import Stack, build_stack, handle
+from agentstack.interfaces.wiring import ChannelAsker, Stack, build_stack, handle
 from agentstack.runtime.cycles import UNSETTLED_AFTER, CycleStore
-from agentstack.runtime.deadlines import ReaskFailed, fire_reasks
 from agentstack.runtime.run import Run
+from agentstack.runtime.temporal.contracts import AskIntent
 from agentstack.runtime.waits import (
     APPROVAL_REASK_AFTER,
     ResumeEvent,
@@ -31,6 +34,7 @@ from agentstack.runtime.waits import (
     resume,
 )
 from agentstack.storage.database import Database, IntegrityViolation
+from tests.temporal_support import activities_for
 
 from .conftest import SCOPES, TENANT
 
@@ -251,77 +255,172 @@ def test_overdue_formats_hours_below_a_day() -> None:
 # --- an unanswered approval is asked again, never silently expired --------------------
 
 
-def test_the_reask_timer_fires_on_an_overdue_approval(stack: Stack, run: Run) -> None:
+# Re-pointed at T41. The timer used to be `deadlines.fire_reasks`, a sweep over overdue
+# rows; it is now the run's own workflow, which asks every REASK_EVERY until answered
+# (`tests/durability/test_approval_wait.py` holds that across 72 simulated hours). What
+# these hold is the ask itself, the `ask_approval` activity: the same five guarantees.
+
+VERSION = "exp:abc123"
+
+
+def frozen(stack: Stack, run: Run) -> None:
+    """The cohort the question is about: an ask is sized from it, never from memory."""
+    rule = TargetingRule(
+        profile="test", risk_quantile=0.9, minimum_cohort=10, minimum_annual_value_at_risk_cents=1
+    )
+    FrozenCohortStore(db=stack.runs.db).record(
+        tenant=run.tenant,
+        experiment_id="exp-7",
+        cohort=Cohort(
+            experiment_version=VERSION,
+            dataset="fixture",
+            data_as_of="fixture:abc",
+            model_version="stub-1",
+            rule=rule,
+            risk_threshold=0.61,
+            members=tuple(range(40)),
+            annual_value_at_risk_cents=1_000_000,
+            risk_quantiles=(0.1, 0.3, 0.5, 0.7, 0.9),
+            revenue_note="fixture",
+        ),
+    )
+
+
+class Asking:
+    """Records every question put, and can fail or be answered mid-ask."""
+
+    def __init__(self, stack: Stack, *, fail: bool = False, answer: bool = False) -> None:
+        self.inner = ChannelAsker(stack.notifier)
+        self.stack = stack
+        self.fail = fail
+        self.answer = answer
+        self.asked: list[str] = []
+
+    def ask(self, *, run: Run, wait: Wait, cohort: Any, percentage: int) -> str:
+        if self.fail:
+            raise RuntimeError("slack is down")
+        if self.answer:
+            resume(
+                self.stack.waits,
+                ResumeEvent(run.run_id, wait.wait_id, wait.state_snapshot, {"approved_by": "ana"}),
+            )
+        self.asked.append(wait.wait_id)
+        return self.inner.ask(run=run, wait=wait, cohort=cohort, percentage=percentage)
+
+
+def ask(stack: Stack, run: Run, wait: Wait, asker: Asking, *, asked: int) -> None:
+    activities_for(stack.runs.db, asker=asker).ask_approval(
+        AskIntent(
+            run_id=run.run_id,
+            wait_id=wait.wait_id,
+            experiment_id="exp-7",
+            experiment_version=VERSION,
+            asked=asked,
+        )
+    )
+
+
+def test_a_reask_puts_the_question_again_and_moves_its_deadline(stack: Stack, run: Run) -> None:
     wait = park_approval(stack, run)
-    asked: list[str] = []
-    now = later(APPROVAL_REASK_AFTER + timedelta(minutes=1))
+    frozen(stack, run)
+    asker = Asking(stack)
+    before = later(timedelta(0))
 
-    (moved,) = fire_reasks(stack.waits, now=now, ask=lambda w: asked.append(w.wait_id))
+    ask(stack, run, wait, asker, asked=1)
 
-    assert asked == [wait.wait_id]
-    assert moved.reasks == 1
-    assert moved.deadline == now + APPROVAL_REASK_AFTER
+    moved = stack.waits.get(wait.wait_id)
+    assert asker.asked == [wait.wait_id]
+    assert moved is not None and moved.reasks == 1
+    assert moved.deadline is not None and moved.deadline >= before + APPROVAL_REASK_AFTER
     assert not moved.satisfied, "re-asking is not answering"
+    # The question as put: bound to this wait, sized from the frozen cohort, not memory.
+    (put,) = posted(stack)
+    assert put.wait_id == wait.wait_id and put.summary == wait.approval_summary
+    assert put.estimated_customers == 4 and put.experiment_version == VERSION
 
 
-def test_it_does_not_fire_early_or_twice_in_one_interval(stack: Stack, run: Run) -> None:
-    park_approval(stack, run)
-    asked: list[str] = []
+def test_the_same_reask_run_twice_counts_once(stack: Stack, run: Run) -> None:
+    """At-least-once: a rerun puts the question twice (harmless: a second answer to one
+    wait is refused) and records the re-ask once. The next interval counts again."""
+    wait = park_approval(stack, run)
+    frozen(stack, run)
+    asker = Asking(stack)
 
-    def ask(w: Wait) -> None:
-        asked.append(w.wait_id)
+    ask(stack, run, wait, asker, asked=1)
+    ask(stack, run, wait, asker, asked=1)
+    once = stack.waits.get(wait.wait_id)
+    assert once is not None and once.reasks == 1
 
-    fire_reasks(stack.waits, now=later(APPROVAL_REASK_AFTER - timedelta(minutes=1)), ask=ask)
-    assert asked == []
-
-    now = later(APPROVAL_REASK_AFTER + timedelta(minutes=1))
-    fire_reasks(stack.waits, now=now, ask=ask)
-    fire_reasks(stack.waits, now=now, ask=ask)
-    assert len(asked) == 1
-
-    fire_reasks(stack.waits, now=now + APPROVAL_REASK_AFTER, ask=ask)
-    assert len(asked) == 2, "still unanswered a day later: asked again, not expired"
+    ask(stack, run, wait, asker, asked=2)
+    twice = stack.waits.get(wait.wait_id)
+    assert twice is not None and twice.reasks == 2, "still unanswered: asked again, not expired"
+    # Every put is visible, the rerun's duplicate included: a second copy is harmless,
+    # a missing one is the silent expiry.
+    assert asker.asked == [wait.wait_id] * 3
+    assert len(posted(stack)) == 3
 
 
 def test_an_answered_approval_is_not_asked_again(stack: Stack, run: Run) -> None:
     wait = park_approval(stack, run)
+    frozen(stack, run)
     resume(stack.waits, ResumeEvent(run.run_id, wait.wait_id, "fp-1", {"approved_by": "ana"}))
-    asked: list[str] = []
+    asker = Asking(stack)
 
-    fire_reasks(stack.waits, now=later(2 * WEEK), ask=lambda w: asked.append(w.wait_id))
+    ask(stack, run, wait, asker, asked=1)
 
-    assert asked == []
+    assert asker.asked == []
+    assert posted(stack) == []
+    unmoved = stack.waits.get(wait.wait_id)
+    assert unmoved is not None and unmoved.reasks == 0
 
 
 def test_a_failed_reask_is_loud_and_leaves_the_question_due(stack: Stack, run: Run) -> None:
-    """A failed notification that moved the deadline anyway would be a silent expiry."""
-    failing = park_approval(stack, run)
-    working = park_approval(stack, run)
-    asked: list[str] = []
+    """A failed notification that moved the deadline anyway would be a silent expiry.
+    It fails the activity instead, which Temporal retries; the record is untouched."""
+    wait = park_approval(stack, run)
+    frozen(stack, run)
 
-    def ask(w: Wait) -> None:
-        if w.wait_id == failing.wait_id:
-            raise RuntimeError("slack is down")
-        asked.append(w.wait_id)
+    with pytest.raises(RuntimeError, match="slack is down"):
+        ask(stack, run, wait, Asking(stack, fail=True), asked=1)
 
-    now = later(APPROVAL_REASK_AFTER + timedelta(minutes=1))
-    with pytest.raises(ReaskFailed, match="slack is down") as caught:
-        fire_reasks(stack.waits, now=now, ask=ask)
-
-    assert list(caught.value.failures) == [failing.wait_id]
-    assert asked == [working.wait_id], "one failure must not stop the others being asked"
-    assert [w.wait_id for w in stack.waits.due_for_reask(now=now)] == [failing.wait_id]
+    unmoved = stack.waits.get(wait.wait_id)
+    assert unmoved is not None and unmoved.reasks == 0 and unmoved.deadline == wait.deadline
+    assert not unmoved.satisfied, "still pending: due to be asked again"
+    assert posted(stack) == [], "nothing was put, and nothing claims it was"
 
 
 def test_an_answer_landing_mid_reask_wins(stack: Stack, run: Run) -> None:
-    """Answered between being read as overdue and having its deadline moved."""
+    """Answered while the question was being put: the re-ask is not recorded over it."""
     wait = park_approval(stack, run)
+    frozen(stack, run)
+    asker = Asking(stack, answer=True)
 
-    def answer_while_asking(w: Wait) -> None:
-        resume(stack.waits, ResumeEvent(run.run_id, w.wait_id, "fp-1", {"approved_by": "ana"}))
+    ask(stack, run, wait, asker, asked=1)
 
-    moved = fire_reasks(stack.waits, now=later(2 * WEEK), ask=answer_while_asking)
-
-    assert moved == ()
     (satisfied,) = stack.waits.satisfied_for(run.run_id)
     assert satisfied.wait_id == wait.wait_id and satisfied.reasks == 0
+    assert asker.asked == [wait.wait_id], "it was put once; the answer beat the record"
+    assert stack.waits.pending_for(run.run_id) == ()
+
+
+def test_a_wait_that_does_not_say_what_it_asks_is_never_put(stack: Stack, run: Run) -> None:
+    """An ask is built from the wait's recorded summary. Without one there is nothing a
+    person could decide, so none is invented."""
+    wait = stack.waits.park(
+        run_id=run.run_id,
+        kind="human_approval",
+        state_snapshot="fp-1",
+        action_fingerprint="fp-action-1",
+    )
+    frozen(stack, run)
+
+    with pytest.raises(ValueError, match="does not say what it asks about"):
+        ask(stack, run, wait, Asking(stack), asked=0)
+
+    assert posted(stack) == []
+
+
+def posted(stack: Stack) -> list[Any]:
+    notifier = stack.notifier
+    assert isinstance(notifier, RecordingNotifier)
+    return [question for _, question in notifier.posted]

@@ -22,12 +22,12 @@ from temporalio.testing import WorkflowEnvironment
 
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
-from agentstack.interfaces.wiring import ExperimentTurns, Stack
+from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, Stack
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
-from agentstack.runtime.temporal.activities import RunActivities, TurnHost
+from agentstack.runtime.temporal.activities import Asker, RunActivities, TurnHost
 from agentstack.runtime.temporal.contracts import RunProgress
 from agentstack.runtime.temporal.worker import build_worker
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
@@ -41,13 +41,24 @@ WAIT_S = 30.0
 DEFAULT_TRIGGER_DEADLINE = timedelta(days=1)
 
 
-class DraftingEngine:
-    """Stands in for the model on a drafting turn, and does what the instruction asks.
+DRAFT_TOOL = "create_experiment_draft"
+ROLLOUT_TOOL = "roll_out_variant_to_percentage"
 
-    Takes tenant, experiment and version from the rendered context, exactly as told, and
-    writes its own hypothesis and variant. If the draft tool isn't exposed it proposes
-    nothing, as a model shown no such tool could not call it. Every call is recorded
-    to `calls`, a file when the count must survive a killed process.
+
+def model_calls(path: Path, *, tool: str) -> list[str]:
+    """The pids that asked the model with `tool` shown, from a DraftingEngine calls file."""
+    lines = path.read_text().split("\n") if path.exists() else []
+    return [pid for pid, shown in (line.split() for line in lines if line) if shown == tool]
+
+
+class DraftingEngine:
+    """Stands in for the model on a turn, and does what the instruction asks.
+
+    On a drafting turn it takes tenant, experiment and version from the rendered
+    context, exactly as told, and writes its own hypothesis and variant. On a rollout
+    turn it proposes the rollout it was told, argument for argument. A model shown
+    neither tool proposes nothing. Every call is recorded to `calls`, a file when the
+    count must survive a killed process.
     """
 
     asset = ModelAsset(name="drafting-stub", context_window=8192, max_output_tokens=512)
@@ -55,15 +66,47 @@ class DraftingEngine:
     def __init__(self, calls: Path | None = None) -> None:
         self.calls_file = calls
         self.calls = 0
+        # One entry per call: the tool this call was shown to act with ("none" if neither).
+        self.shown: list[str] = []
+
+    @property
+    def drafts(self) -> int:
+        """How many times the model was asked to draft: what a drafting turn must not repeat."""
+        return self.shown.count(DRAFT_TOOL)
 
     def generate(self, request: ModelRequest) -> ModelResponse:
         self.calls += 1
+        tool = next((t for t in (ROLLOUT_TOOL, DRAFT_TOOL) if t in request.tool_names), "none")
+        self.shown.append(tool)
         if self.calls_file is not None:
             with self.calls_file.open("a") as handle:
-                handle.write(f"{os.getpid()}\n")
+                handle.write(f"{os.getpid()} {tool}\n")
+        return self._answer(request)
+
+    def _answer(self, request: ModelRequest) -> ModelResponse:
         told = dict(
             token.split("=", 1) for token in request.rendered_context.split() if "=" in token
         )
+        if "roll_out_variant_to_percentage" in request.tool_names:
+            rollout: dict[str, Any] = {
+                key: told[key]
+                for key in (
+                    "tenant",
+                    "experiment_id",
+                    "experiment_version",
+                    "targeting_model_version",
+                )
+            }
+            rollout |= {
+                "percentage": int(told["percentage"]),
+                "risk_threshold": float(told["risk_threshold"]),
+            }
+            return ModelResponse(
+                text="proposed the rollout",
+                proposals=(
+                    ToolCallProposal(tool="roll_out_variant_to_percentage", arguments=rollout),
+                ),
+            )
         if "create_experiment_draft" not in request.tool_names:
             return ModelResponse(text="nothing I was shown can draft this")
         arguments = {key: told[key] for key in ("tenant", "experiment_id", "experiment_version")}
@@ -93,6 +136,7 @@ def activities_for(
     rule: TargetingRule | None = None,
     trigger_deadline: timedelta = DEFAULT_TRIGGER_DEADLINE,
     turns: TurnHost | None = None,
+    asker: Asker | None = None,
 ) -> RunActivities:
     return RunActivities(
         runs=RunStore(db=db),
@@ -103,6 +147,7 @@ def activities_for(
         trigger_deadline=trigger_deadline,
         rule=rule,
         turns=turns,
+        asker=asker,
     )
 
 
@@ -110,6 +155,11 @@ def turns_for(stack: Stack, engine: Any) -> ExperimentTurns:
     """The production turn host, over a test stack, with a test engine."""
     stack.deps.engine = engine
     return ExperimentTurns(stack)
+
+
+def asker_for(stack: Stack) -> ChannelAsker:
+    """The production asker, posting to the test stack's recording notifier."""
+    return ChannelAsker(stack.notifier)
 
 
 @asynccontextmanager

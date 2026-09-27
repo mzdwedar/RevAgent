@@ -17,7 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.interfaces import preflight_cli
-from agentstack.interfaces.wiring import ExperimentTurns, build_stack
+from agentstack.interfaces.slack import SlackNotifier
+from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, build_stack
 from agentstack.model.ollama_engine import OllamaEngine
 from agentstack.prediction.engine import TabPFNScorer
 from agentstack.runtime.cadence import TriggerCadence
@@ -73,8 +74,11 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
         ):
             db = Database(pool=pool)
             stack = build_stack(db, saver)
-            # The model engine a turn drafts with (SPEC.md: qwen3:8b through Ollama).
+            # The model engine a turn drafts with (SPEC.md: qwen3:8b through Ollama), and
+            # the channel approvals are asked in (needs SLACK_BOT_TOKEN; a missing token
+            # fails each ask loudly, and the wait stays pending and visible).
             stack.deps.engine = OllamaEngine()
+            stack.notifier = SlackNotifier()
             activities = RunActivities(
                 runs=RunStore(db=db),
                 cycles=CycleStore(db=db),
@@ -84,6 +88,7 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
                 scorer=TabPFNScorer(),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
                 turns=ExperimentTurns(stack),
+                asker=ChannelAsker(stack.notifier),
             )
             worker = build_worker(
                 client, activities=activities, executor=executor, task_queue=task_queue

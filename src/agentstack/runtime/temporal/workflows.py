@@ -9,18 +9,23 @@ imported.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError
 
 from agentstack.runtime.temporal.contracts import (
+    ASK_APPROVAL,
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
     PARK_TRIGGER_WAIT,
+    REASK_EVERY,
+    ROLLOUT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
+    AskIntent,
     CycleResult,
     ParkedWait,
     RunEnd,
@@ -63,6 +68,9 @@ class ExperimentWorkflow:
         self._waiting_on: str | None = None
         self._overdue = False
         self._turns: list[TurnOutcome] = []
+        self._awaiting: str | None = None
+        self._asks = 0
+        self._answered: list[str] = []
 
     @workflow.run
     async def run(self, start: RunStart) -> RunEnd:
@@ -81,9 +89,69 @@ class ExperimentWorkflow:
             self._cycles.append(cycle)
             self._last_watermark = trigger.data_as_of
             if cycle.outcome == "propose":
-                # A frozen cohort is worth an experiment. Drafting it is the model's job,
-                # in a turn; what the draft may commit is decided by policy (PRE_COMMIT).
-                self._turns.append(await self._take_turn(DRAFT, cycle))
+                await self._propose(cycle)
+
+    async def _propose(self, cycle: CycleResult) -> None:
+        """SPEC.md: draft the experiment, then ask a person before rolling it out.
+
+        Drafting is the model's job, in a turn, and policy lets it commit (PRE_COMMIT).
+        The rollout is proposed in a second turn, which the gateway stops at the
+        approval boundary (ALWAYS): the turn parks the wait and the run asks.
+        """
+        drafted = await self._take_turn(DRAFT, cycle)
+        self._turns.append(drafted)
+        if drafted.refusal is not None or drafted.receipts == 0:
+            return
+        proposed = await self._take_turn(ROLLOUT, cycle)
+        self._turns.append(proposed)
+        if proposed.wait_id is not None and cycle.experiment_version is not None:
+            await self._await_approval(proposed.wait_id, cycle)
+
+    async def _await_approval(self, wait_id: str, cycle: CycleResult) -> None:
+        """Ask, then wait. Every REASK_EVERY without an answer, ask again. Never expire.
+
+        The wait row says what is asked and against which snapshot; the answer is
+        authorised and recorded by layer 8 before the workflow is told (T42). This
+        only decides when to put the question again.
+        """
+        assert cycle.experiment_version is not None
+        self._awaiting = wait_id
+        self._asks = 0
+        while True:
+            await self._ask(wait_id, cycle.experiment_id, cycle.experiment_version)
+            try:
+                await workflow.wait_condition(
+                    lambda: wait_id in self._answered, timeout=REASK_EVERY
+                )
+                break
+            except TimeoutError:
+                continue  # unanswered: the question is put again, never dropped
+        self._awaiting = None
+
+    async def _ask(self, wait_id: str, experiment_id: str, experiment_version: str) -> None:
+        intent = AskIntent(
+            run_id=self._run_id,
+            wait_id=wait_id,
+            experiment_id=experiment_id,
+            experiment_version=experiment_version,
+            asked=self._asks,
+        )
+        # Only a refusal is suppressed (a worker that cannot ask at all). The wait stays
+        # pending and visible, and the next interval tries again.
+        with suppress(ActivityError):
+            await workflow.execute_activity(
+                ASK_APPROVAL, intent, start_to_close_timeout=RECORD_TIMEOUT, retry_policy=RETRY
+            )
+        self._asks += 1
+
+    @workflow.signal
+    def answered(self, wait_id: str) -> None:
+        """The person's answer was authorised and recorded (layer 8, in the callback).
+
+        Carries a wait id and nothing else: whether it was a yes, and who said it, is in
+        the `approvals` row and the wait, where layer 8 wrote it. Nothing here decides.
+        """
+        self._answered.append(wait_id)
 
     async def _take_turn(self, stage: str, cycle: CycleResult) -> TurnOutcome:
         intent = TurnIntent(
@@ -189,4 +257,7 @@ class ExperimentWorkflow:
             waiting_on=self._waiting_on,
             overdue=self._overdue,
             turns=tuple(self._turns),
+            awaiting_approval=self._awaiting,
+            asks=self._asks,
+            answered=tuple(self._answered),
         )

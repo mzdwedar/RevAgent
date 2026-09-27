@@ -21,6 +21,7 @@ from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.graph import TurnContext, TurnState
 from agentstack.runtime.snapshot import resource_snapshot
+from agentstack.runtime.waits import approval_wait_id
 from agentstack.tools.registry import ToolNotExposed
 from agentstack.tools.validation import InvalidToolArguments
 
@@ -260,6 +261,9 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 channel=run.channel,
             ).render()
             wait = deps.waits.park(
+                # Derived, not random: a turn that parked this and died before its
+                # checkpoint landed parks the same wait when it runs again (T41).
+                wait_id=approval_wait_id(run.run_id, request.fingerprint(), state_snapshot),
                 run_id=run.run_id,
                 kind="human_approval",
                 state_snapshot=state_snapshot,

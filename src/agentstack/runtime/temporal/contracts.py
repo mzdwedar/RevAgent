@@ -12,6 +12,7 @@ and nothing else.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 TASK_QUEUE = "experiment-runs"
 
@@ -23,11 +24,18 @@ EVALUATE_CYCLE = "evaluate_cycle"
 PARK_TRIGGER_WAIT = "park_trigger_wait"
 SATISFY_TRIGGER_WAIT = "satisfy_trigger_wait"
 RUN_TURN = "run_turn"
+ASK_APPROVAL = "ask_approval"
 
 # The stage a turn runs at, which decides the tools it is shown (T22). Named here
 # because workflow code may not import `agentstack.tools`, where the stages are defined;
-# `test_temporal_boundaries` holds this equal to `tools.experiments.DRAFT_STAGE`.
+# tests hold these equal to `tools.experiments.DRAFT_STAGE` and `ROLLOUT_STAGE`.
 DRAFT = "draft"
+ROLLOUT = "rollout"
+
+# How long a question waits unanswered before it is put again. Named here because
+# workflow code may not import `runtime.waits`; a test holds it equal to
+# `waits.APPROVAL_REASK_AFTER`, which is what the wait row's deadline is set from.
+REASK_EVERY = timedelta(hours=24)
 
 
 def workflow_id(run_id: str) -> str:
@@ -138,6 +146,20 @@ class TurnOutcome:
     refusals: int = 0
     # Set when the activity itself was refused (a gateway or layer-8 refusal type).
     refusal: str | None = None
+    # Set when the turn stopped for a person: the approval wait it parked.
+    wait_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AskIntent:
+    """Put this wait's question to a person. `asked` counts the times before this one:
+    0 is the first ask, and each re-ask after a timer is one more."""
+
+    run_id: str
+    wait_id: str
+    experiment_id: str
+    experiment_version: str
+    asked: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,3 +175,8 @@ class RunProgress:
     waiting_on: str | None = None
     overdue: bool = False
     turns: tuple[TurnOutcome, ...] = ()
+    # The approval the run is parked on, how many times it has been put, and the waits
+    # whose answers have arrived.
+    awaiting_approval: str | None = None
+    asks: int = 0
+    answered: tuple[str, ...] = ()

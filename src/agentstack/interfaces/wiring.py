@@ -13,6 +13,7 @@ from typing import Any
 
 from temporalio.client import Client
 
+from agentstack.context.frozen_cohorts import FrozenCohort
 from agentstack.context.items import Scope, Trust
 from agentstack.context.memory import MaintenanceQueue, MemoryStore
 from agentstack.context.retrieval import Candidate, StaticRetriever
@@ -23,7 +24,7 @@ from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import PostgresRegistryClient, RecordingClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.slack import Notifier, RecordingNotifier
+from agentstack.interfaces.slack import ApprovalAsk, Notifier, RecordingNotifier
 from agentstack.interfaces.slack_callback import ReplayGuard
 from agentstack.interfaces.triggers import parse_trigger
 from agentstack.model.engine import EchoEngine
@@ -34,6 +35,7 @@ from agentstack.policy.approvers import ApproverDirectory
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.triggers import TriggerEvent
 from agentstack.runtime.approvals import ApprovalCoordinator
+from agentstack.runtime.drafting import estimated_customers
 from agentstack.runtime.graph import build_turn_graph
 from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
 from agentstack.runtime.run import (
@@ -47,7 +49,7 @@ from agentstack.runtime.run import (
 from agentstack.runtime.steps import StepLedger
 from agentstack.runtime.temporal.client import deliver_trigger
 from agentstack.runtime.temporal.contracts import TASK_QUEUE, RunStart, Trigger
-from agentstack.runtime.waits import WaitStore
+from agentstack.runtime.waits import Wait, WaitStore
 from agentstack.storage.database import Database
 from agentstack.tools.catalog import build_registry
 from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT_STAGE
@@ -349,3 +351,35 @@ class ExperimentTurns:
     def record(self, run: Run, *, asked: str, answered: str) -> None:
         self.stack.transcripts.append(session_id=run.session_id, kind="user", body=asked)
         self.stack.transcripts.append(session_id=run.session_id, kind="agent", body=answered)
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelAsker:
+    """The asker for an experiment run's worker (`runtime.temporal.Asker`).
+
+    Builds the question from the record: what the wait asks about (its summary, bound
+    to the fingerprint and snapshot it was parked against) and what the frozen cohort
+    says it touches. The channel is the stack's notifier: Slack in production, a
+    recorder in tests.
+    """
+
+    notifier: Notifier
+    channel: str = "#experiments"
+
+    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, percentage: int) -> str:
+        if wait.approval_summary is None:
+            raise ValueError(f"{wait.wait_id} does not say what it asks about; nothing to put")
+        return self.notifier.post_approval(
+            ApprovalAsk(
+                run_id=run.run_id,
+                wait_id=wait.wait_id,
+                summary=wait.approval_summary,
+                experiment_version=cohort.experiment_version,
+                data_as_of=cohort.data_as_of,
+                percentage=percentage,
+                estimated_customers=estimated_customers(cohort, percentage),
+                annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
+                tenant=run.tenant,
+            ),
+            channel=self.channel,
+        )

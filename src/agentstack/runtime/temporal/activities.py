@@ -22,24 +22,27 @@ from typing import Protocol
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from agentstack.context.frozen_cohorts import FrozenCohortStore
+from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind
 from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
-from agentstack.runtime.drafting import draft_instruction
+from agentstack.runtime.drafting import ROLLOUT_PERCENTAGE, draft_instruction, rollout_instruction
 from agentstack.runtime.graph import finished_turn, turn_thread
 from agentstack.runtime.loop import TurnDeps
 from agentstack.runtime.loop import run_turn as take_turn
 from agentstack.runtime.operator import Evaluation, evaluate_trigger
 from agentstack.runtime.run import Run, RunStore
 from agentstack.runtime.temporal.contracts import (
+    ASK_APPROVAL,
+    DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
     PARK_TRIGGER_WAIT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
+    AskIntent,
     CycleResult,
     ParkedWait,
     RunStart,
@@ -49,7 +52,14 @@ from agentstack.runtime.temporal.contracts import (
     TurnIntent,
     TurnOutcome,
 )
-from agentstack.runtime.waits import TRIGGER, ResumeEvent, WaitStore, resume
+from agentstack.runtime.waits import (
+    APPROVAL_REASK_AFTER,
+    TRIGGER,
+    ResumeEvent,
+    Wait,
+    WaitStore,
+    resume,
+)
 
 # A turn's p95 is 60s (SPEC.md), and the workflow gives it 120s. A heartbeat every few
 # seconds lets Temporal notice a dead worker in `HEARTBEAT_TIMEOUT` instead of waiting
@@ -57,6 +67,7 @@ from agentstack.runtime.waits import TRIGGER, ResumeEvent, WaitStore, resume
 HEARTBEAT_EVERY_S = 5.0
 
 NO_TURN_HOST = "NoTurnHost"
+NO_ASKER = "NoAsker"
 
 
 class TurnHost(Protocol):
@@ -75,6 +86,17 @@ class TurnHost(Protocol):
     def record(self, run: Run, *, asked: str, answered: str) -> None: ...
 
 
+class Asker(Protocol):
+    """Puts an approval question to a person. Supplied by the composition root: the
+    runtime can't import the channel (contract 4) and shouldn't know it's Slack.
+
+    Everything the question says comes from the record (the wait and the frozen cohort),
+    so the process that asks needn't be the one that parked it. Returns the message id.
+    """
+
+    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, percentage: int) -> str: ...
+
+
 class RunActivities:
     """Activities bound to the stores they write, built once per worker."""
 
@@ -89,7 +111,9 @@ class RunActivities:
         trigger_deadline: timedelta,
         rule: TargetingRule | None = None,
         turns: TurnHost | None = None,
+        asker: Asker | None = None,
     ) -> None:
+        self._asker = asker
         self._runs = runs
         self._cycles = cycles
         self._cohorts = cohorts
@@ -233,7 +257,7 @@ class RunActivities:
         if done is not None:
             return _outcome(done)
 
-        message = draft_instruction(tenant=run.tenant, cycle=cycle)
+        message = self._instruction(intent, run, cycle)
         with _heartbeating():
             result = take_turn(
                 run=run,
@@ -244,18 +268,76 @@ class RunActivities:
             )
         self._turns.record(run, asked=message, answered=result.text)
         return TurnOutcome(
-            status=result.status, receipts=len(result.receipts), refusals=len(result.refusals)
+            status=result.status,
+            receipts=len(result.receipts),
+            refusals=len(result.refusals),
+            wait_id=None if result.pending_wait is None else result.pending_wait.wait_id,
         )
+
+    def _instruction(self, intent: TurnIntent, run: Run, cycle: cycles.Cycle) -> str:
+        """What this stage's turn is told, from the record. Never passed through history."""
+        if intent.stage == DRAFT:
+            return draft_instruction(tenant=run.tenant, cycle=cycle)
+        return rollout_instruction(
+            experiment_id=intent.experiment_id, cohort=self._frozen(run.tenant, cycle)
+        )
+
+    def _frozen(self, tenant: str, cycle: cycles.Cycle) -> FrozenCohort:
+        assert cycle.run_id is not None  # a proposed cycle names its experiment version
+        cohort = self._cohorts.get(
+            tenant=tenant, experiment_id=cycle.experiment_id, experiment_version=cycle.run_id
+        )
+        assert cohort is not None  # recorded before the cycle that proposed it settled
+        return cohort
+
+    @activity.defn(name=ASK_APPROVAL)
+    def ask_approval(self, intent: AskIntent) -> str:
+        """Put the question to a person, from the record, and note that it was put.
+
+        The first ask and every re-ask go through here. Asking twice is harmless (the
+        second answer to one wait is refused as already answered); a question never put
+        is the silent expiry this exists to prevent. So the question is posted first and
+        the re-ask recorded after, only moving forward, and an answer that landed while
+        it was being put wins.
+        """
+        if self._asker is None:
+            raise ApplicationError(
+                "this worker was built without an asker, so no one can be asked",
+                type=NO_ASKER,
+                non_retryable=True,
+            )
+        run = self._runs.get(intent.run_id)
+        wait = self._waits.get(intent.wait_id)
+        assert run is not None and wait is not None  # parked by this run's turn
+        if wait.satisfied:
+            return intent.wait_id  # answered before it could be asked again
+        cohort = self._cohorts.get(
+            tenant=run.tenant,
+            experiment_id=intent.experiment_id,
+            experiment_version=intent.experiment_version,
+        )
+        assert cohort is not None  # the rollout was proposed from it
+        message = self._asker.ask(run=run, wait=wait, cohort=cohort, percentage=ROLLOUT_PERCENTAGE)
+        if intent.asked > 0:
+            self._waits.record_asked(
+                intent.wait_id,
+                reasks=intent.asked,
+                next_deadline=datetime.now(UTC) + APPROVAL_REASK_AFTER,
+            )
+        return message
 
 
 def _outcome(state: dict[str, object]) -> TurnOutcome:
     receipts = state.get("receipts") or []
     refusals = state.get("refusals") or []
     assert isinstance(receipts, list) and isinstance(refusals, list)
+    wait_id = state.get("wait_id")
     return TurnOutcome(
         status=str(state.get("status", "complete")),
         receipts=len(receipts),
         refusals=len(refusals),
+        # A finished turn that stopped for a person reports the same wait on a rerun.
+        wait_id=None if wait_id is None else str(wait_id),
     )
 
 
