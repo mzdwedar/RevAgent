@@ -942,8 +942,9 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     a decision.
 
 ### ✅ Checkpoint I — foundation, nothing can act yet
-- [ ] `check_task.sh`, `lint-imports`, `stack_guard`, `tests/infra` green; coverage risk closed
-- [ ] No activity exists that can reach `gateway.execute`
+- [x] `check_task.sh`, `lint-imports`, `stack_guard`, `tests/infra` green; coverage risk closed
+- [x] No activity exists that can reach `gateway.execute` (grimp: no import chain from
+  `activities`, `worker` or `interceptors` to `execution.gateway`)
 - [ ] Human review
 
 - [ ] **T36 — Trigger loop: an evaluation cycle as an activity** · layer 3 · *M*
