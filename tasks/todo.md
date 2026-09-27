@@ -928,10 +928,30 @@ and the test that proves it.
     it. The narrowness bar bounds that to reversible, `PRE_COMMIT`, one-experiment
     acts on the draft stage. It cannot make it zero.
 
-- [ ] **T31 — Ledger and bar** · docs · *S*
+- [x] **T31 — Ledger and bar** · docs · *S*
   - `CONSTRAINTS.md` gains "Registry narrowness" and "Registry preconditions" rows
     (additions only); `STACK.md` rows 6/7; `SPEC-registry.md` migration numbers and
     open-question answers; `SPEC.md` decisions table links the sub-spec.
+  - **Done.**
+    - `CONSTRAINTS.md`: two rows added, nothing edited. The twenty-halt race lives in
+      "Registry preconditions" rather than in an edit to "Concurrency".
+    - `STACK.md`: rows 5, 6, 7 and 8 extended. Row 5 covers observations entering
+      context as untrusted. Row 8 covers why a rule no approval may override belongs
+      in `decide`.
+    - `SPEC-registry.md`, revision 3: all three open questions answered where they are
+      asked, and a "Revised in the build" section with the resource table, the
+      `halt_only_zeroes` placement, the read loop, the enforced bounds, the scope
+      rename and the blank-revision refusal.
+    - `SPEC.md`: the decisions table links the sub-spec.
+
+### Phase 7 — done
+- [x] All nine registry tools, spec criteria 1–8 each held by a named test
+- [x] `check_task.sh`, `tests/durability`, `lint-imports`, `stack_guard`,
+      `checkpoint_guard`, `evals --gates` green
+- [ ] `/stack-audit` on the phase's diff (mandatory before `/ship`)
+- [ ] Human review
+- Still open, by name: the relaunch path (T25), and a per-invocation test database
+  (T22/T23).
 
 ## Phase 8 — Durable runtime on Temporal
 

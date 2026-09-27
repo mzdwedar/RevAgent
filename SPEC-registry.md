@@ -1,6 +1,6 @@
 # Spec: Experiment Registry and its tools
 
-Status: **approved** (revision 2)
+Status: **approved** (revision 3: built, T22–T31; see § Revised in the build)
 Date: 2026-09-24
 Parent: `SPEC.md` (Experiment Operator, revision 10). This is a sub-spec of that one
 capability, not a new module: the registry's only consumer is still the run
@@ -144,7 +144,7 @@ uv run python scripts/stack_guard.py --base main
 migrations/0012_experiment_registry.{up,down}.sql   the four tables below
 src/agentstack/tools/experiments.py                 ToolSpecs + prepare_* for all 9 tools
 src/agentstack/tools/catalog.py                     registers them (no logic)
-src/agentstack/policy/precommit.py                  + halt_only_zeroes check
+src/agentstack/policy/decisions.py                  + halt_only_zeroes check (in decide; see below)
 src/agentstack/execution/surfaces.py                + PostgresRegistryClient (via storage pool)
 src/agentstack/interfaces/wiring.py                 selects the Postgres client
 tests/fitness/test_registry_tools.py                narrowness, exposure matrix, scopes
@@ -260,7 +260,7 @@ Coverage bar unchanged (changed lines ≥ 80%).
 | 5 Context | yes, small | registry read results enter context as `trust=untrusted` (hypothesis prose is model-authored) | `test_untrusted_content.py` (extended) |
 | 6 Tools | **yes** | seven new `ToolSpec`s, three stages, five scopes | `test_tool_registry.py`, `test_registry_tools.py` |
 | 7 Execution | **yes** | `PostgresRegistryClient`: guarded writes, insert-only history, reads | `test_capability_is_not_execution.py`, `test_registry_store.py` |
-| 8 Policy | yes | `halt_only_zeroes` pre-commit check | `test_approval_tiers.py` |
+| 8 Policy | yes | `halt_only_zeroes`, in `decide` (§ Revised in the build) | `test_approval_tiers.py` |
 | 9 Observability | yes, inherited | every write already audited by the gateway; reads get an `execution.read` span | `test_trace_completeness.py` |
 | 10 Infrastructure | yes | migrations `0011` (stage remap) and `0012` (registry) | `tests/infra` |
 
@@ -322,13 +322,67 @@ Coverage bar unchanged (changed lines ≥ 80%).
 
 ## Open Questions
 
+All three are answered. The question text is kept with each answer, so the record
+shows what was asked.
+
 1. **Runs already on `stage='experiment'`.** Default: a data migration maps them to
    `draft` (the only thing that stage legitimately did before rollout approval), with
    the change noted for `checkpoint_guard`. The alternative is to park them loudly as
    `needs_migration`.
+   **Answered (T22):** `migrations/0011_split_experiment_stage` remaps them to `draft`.
+   The down migration folds the three stages back into one and says it is lossy.
 2. **A precondition miss after an idempotency claim.** Default: the surface raises
    `RegistryConflict`, the gateway finalizes the claim as `refused` (not `unresolved`),
    and the turn gets a tool error it can explain. This needs a small gateway change;
    confirm it belongs in this work.
+   **Answered (T24):** the surface raises `SurfaceRefused`, and the gateway calls
+   `IdempotencyLedger.abandon` rather than finalizing. A refused key must stay free
+   for the later legitimate call. The refusal is audited `refused`, and the turn
+   answers with a `tool.reject`.
 3. **Should `record_abstention` also be exposed on `metric_movement` cycles?** Default:
    yes. `SPEC.md` lets those cycles abstain, and the note is the explanation.
+   **Answered (T28):** yes, by construction. The tool is on the `evaluation` stage, and
+   nothing ties a stage to a trigger kind, so an evaluation run can record an
+   abstention whichever trigger woke it.
+
+## Revised in the build (T26–T30)
+
+What changed against revision 2, and why. Each item is also in `tasks/todo.md` under
+its task.
+
+- **The resource table.** Each resource serves exactly the verbs listed. Anything else
+  is `SurfaceRefused`. The list read uses the trailing-slash collection, which the
+  existing `{tenant}/experiments/` sandbox prefix already covers.
+
+  | Resource | Verb | Tool |
+  |---|---|---|
+  | `{t}/experiments/` | read | `list_experiments` |
+  | `{t}/experiments/{e}` | read / commit | `get_experiment` / `create_experiment_draft` |
+  | `{t}/experiments/{e}/history` | read | `get_rollout_history` |
+  | `{t}/experiments/{e}/rollout` | commit | `roll_out_variant_to_percentage` |
+  | `{t}/experiments/{e}/revision` | commit | `revise_draft_hypothesis` |
+  | `{t}/experiments/{e}/discard` | commit | `discard_experiment_draft` |
+  | `{t}/experiments/{e}/abstention` | commit | `record_abstention` |
+  | `{t}/experiments/{e}/halt` | commit | `halt_rollout` |
+
+- **`halt_only_zeroes` is in `decide`, not in the `PRE_COMMIT` rule set.** In the rule
+  set, a refusal escalates the run to a human, and an existing grant skips the rules
+  altogether. A person approving a hand-built "halt to 5%" would have got it through.
+  In `decide`, which runs first on every call, a non-zero halt is `PolicyDenied`,
+  audited `denied` / `halt.only_zeroes`, and no approval changes that. Criterion 6
+  holds more strongly than it was written.
+- **Reads reach the model.** A read used to stop at `TurnResult.observations`. The
+  Boundary Decisions row "registry reads are observations appended to the transcript"
+  is now true: `handle` appends each read as `kind="observation"`, and the next turn
+  shows the last five as `trust=untrusted`, with the surface and resource as
+  provenance.
+- **Declared bounds are enforced.** `tools/validation.py` checks `enum`, `minimum` and
+  `maximum`. Without that, `list_experiments`' 1–50 limit would have been decoration.
+- **`create_experiment_draft`'s scope** is `experiments:draft`, as the tools table
+  says. It was `experiments:write` until T27.
+- **A blank revision is a refusal.** The store's `revision_says_something` check fails
+  the statement whole, so nothing applied. It would otherwise have stranded the claim
+  as an unresolved effect.
+- **Still open:** redrafting an existing experiment id under a new version (assumption
+  6's relaunch path). `create_experiment_draft` refuses any experiment id that already
+  exists, and no tool owns relaunching yet (T25).
