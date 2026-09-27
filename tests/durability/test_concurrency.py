@@ -27,9 +27,11 @@ from typing import Any
 import pytest
 
 from agentstack.execution.gateway import UnresolvedEffect
+from agentstack.execution.surfaces import SurfaceRefused
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.triggers import parse_trigger
-from agentstack.interfaces.wiring import Stack, build_stack, handle
+from agentstack.interfaces.wiring import Stack, build_stack, envelope_for, handle
+from agentstack.observability.spans import Tracer
 from agentstack.policy.triggers import Outcome, TriggerEvent
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.fanout import DEFAULT_MAX_IN_FLIGHT, fan_out
@@ -37,6 +39,7 @@ from agentstack.runtime.run import Run, new_run
 from agentstack.runtime.steps import StepConflict
 from agentstack.runtime.waits import ResumeEvent, resume
 from agentstack.storage.database import Database, IntegrityViolation
+from agentstack.tools.experiments import EVALUATION_STAGE, HALT, prepare_halt
 
 RUNS = 100
 TENANT = "acme"
@@ -272,3 +275,112 @@ def test_the_bound_is_below_the_pool_and_must_admit_something(app_database: Data
     assert 1 <= DEFAULT_MAX_IN_FLIGHT <= DEFAULT_MAX_SIZE
     with pytest.raises(ValueError, match="would evaluate nothing"):
         fan_out(CycleStore(db=app_database), [trigger(0)], Evaluator(), max_in_flight=0)
+
+
+# --- SPEC-registry.md criterion 4: twenty halts, one halt ------------------------------
+
+HALTS = 20
+EXPERIMENT_AT = f"{TENANT}/experiments/exp-7"
+VERSION = "exp:abc123"
+HALT_SCOPES = frozenset({"experiments:halt"})
+
+
+def live_experiment(stack: Stack) -> None:
+    stack.registry_client.commit(
+        EXPERIMENT_AT,
+        {
+            "experiment_version": VERSION,
+            "hypothesis": "a discount retains at-risk customers",
+            "variant": "20-percent-off",
+        },
+    )
+    stack.registry_client.commit(
+        f"{EXPERIMENT_AT}/rollout",
+        {
+            "experiment_version": VERSION,
+            "percentage": 10,
+            "targeting_model_version": "tabpfn-3.5",
+            "risk_threshold": 0.61,
+        },
+    )
+
+
+def halt_events(app_database: Database) -> int:
+    row = app_database.fetch_one("SELECT count(*) FROM registry_events WHERE kind = 'halt'")
+    assert row is not None
+    return int(row[0])
+
+
+def test_twenty_runs_halting_at_once_halt_once(stack: Stack, app_database: Database) -> None:
+    """Twenty evaluation runs see the same guardrail breach and halt together. The key is
+    business identity - one halt per version - so the ledger sees one effect however many
+    runs ask; every other caller is deduplicated or told the outcome is still open."""
+    live_experiment(stack)
+    runs = []
+    for i in range(HALTS):
+        user = f"evaluator-{i}"
+        session = stack.resolver.start(user_id=user, tenant=TENANT)
+        run = stack.runs.ensure(
+            new_run(
+                session_id=session.session_id,
+                tenant=TENANT,
+                user=user,
+                stage=EVALUATION_STAGE,
+                channel="load",
+            )
+        )
+        view = stack.resolver.resolve(session_id=session.session_id, user_id=user, tenant=TENANT)
+        runs.append((run, envelope_for(view, scopes=HALT_SCOPES)))
+    request = prepare_halt(
+        {
+            "tenant": TENANT,
+            "experiment_id": "exp-7",
+            "experiment_version": VERSION,
+            "reason": "churn rose in the variant",
+        }
+    )
+    receipts: list[str] = []
+
+    def halt(i: int) -> None:
+        run, envelope = runs[i]
+        result = stack.deps.gateway.execute(
+            request=request,
+            spec=HALT,
+            envelope=envelope,
+            run_id=run.run_id,
+            state_snapshot="s",
+            tracer=Tracer(
+                run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions
+            ),
+        )
+        receipts.append(result.receipt)
+
+    raised = at_once(HALTS, halt)
+
+    assert all(isinstance(exc, UnresolvedEffect) for exc in raised), Counter(map(repr, raised))
+    assert len(set(receipts)) == 1, "every caller that got an answer got the one halt"
+    assert stack.registry_client.read(EXPERIMENT_AT, {})["status"] == "halted"
+    assert halt_events(app_database) == 1
+
+
+def test_twenty_halts_at_the_store_itself_apply_once(stack: Stack, app_database: Database) -> None:
+    """The same race with the ledger out of the way: twenty different halts (different
+    reasons, so different rows) straight at the registry. Only the `WHERE status =
+    'live'` on the statement that moves the row stands between them and twenty events."""
+    live_experiment(stack)
+    receipts: list[str] = []
+
+    def halt(i: int) -> None:
+        receipts.append(
+            stack.registry_client.commit(
+                f"{EXPERIMENT_AT}/halt",
+                {"experiment_version": VERSION, "percentage": 0, "reason": f"look {i}"},
+            )
+        )
+
+    raised = at_once(HALTS, halt)
+
+    assert len(receipts) == 1
+    assert len(raised) == HALTS - 1
+    assert all(isinstance(exc, SurfaceRefused) for exc in raised), Counter(map(repr, raised))
+    assert halt_events(app_database) == 1

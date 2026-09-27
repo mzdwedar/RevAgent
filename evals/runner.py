@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -54,6 +54,13 @@ class Case:
     trigger: dict[str, Any] | None = None
     deliveries: int = 1
     description: str = ""
+    # The stage the run is on, which decides its menu.
+    stage: str = "default"
+    # What the registry already holds, written before the turn as an earlier run would
+    # have: [{"resource": ..., "payload": ...}], committed in order.
+    registry: list[dict[str, Any]] = field(default_factory=list)
+    # Later turns of the same run, so what one turn read is in the next one's context.
+    followups: list[str] = field(default_factory=list)
 
     @staticmethod
     def load(path: Path) -> Case:
@@ -131,8 +138,12 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
         return _run_trigger_case(case, db, started)
     failures: list[str] = []
     stack = _stack_for(case, db, checkpointer)
+    for seed in case.registry:
+        stack.registry_client.commit(seed["resource"], seed["payload"])
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
-    run = new_run(session_id=session.session_id, tenant=TENANT, user=USER, channel="eval")
+    run = new_run(
+        session_id=session.session_id, tenant=TENANT, user=USER, stage=case.stage, channel="eval"
+    )
     event = InboundEvent(
         channel="eval",
         tenant=TENANT,
@@ -175,6 +186,9 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
             for _ in range(case.repeat):
                 result = handle(stack, event, scopes=scopes, run=run)
                 span_names |= result.tracer.names()
+        for text in case.followups:
+            result = handle(stack, replace(event, text=text), scopes=scopes, run=run)
+            span_names |= result.tracer.names()
     except Exception as exc:  # the refusal is the result under test
         error = exc
 
@@ -215,6 +229,12 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
         failures.append(f"{len(stack.client.calls)} surface calls != {expect['surface_calls']}")
     if "surface_reads" in expect and len(stack.client.reads) != expect["surface_reads"]:
         failures.append(f"{len(stack.client.reads)} surface reads != {expect['surface_reads']}")
+    if "registry_events" in expect:
+        # Rollouts, halts, discards and abstentions: every registry effect after a draft.
+        row = db.fetch_one("SELECT count(*) FROM registry_events")
+        events = int(row[0]) if row else 0
+        if events != expect["registry_events"]:
+            failures.append(f"{events} registry events != {expect['registry_events']}")
     # Scoped to this run, not to the sink. The audit sink is a shared table now, and
     # "every record ever written" would make each case's expectation depend on which
     # cases ran before it.

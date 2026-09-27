@@ -5,7 +5,9 @@ all. This file holds the second bound as an exact matrix - not "rollout is absen
 drafting" but "drafting is shown precisely these tools" - because an assertion of
 absence passes just as happily when a new, wider tool is added beside it.
 
-The matrix grows one row at a time as the registry tools land (T26-T29).
+The first bound - the shape - is the narrowness bar below (T30): no generic setters, no
+batch arguments, only the rollout names a percentage, every write names its version,
+and one scope per blast radius.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from agentstack.tools.experiments import (
     prepare_list,
     prepare_revise,
 )
-from agentstack.tools.spec import Approval, Surface
+from agentstack.tools.spec import Approval, Surface, ToolSpec
 
 from .conftest import TENANT, USER
 
@@ -71,6 +73,86 @@ def test_a_drafting_turn_cannot_see_the_rollout_tool() -> None:
 
 def test_the_experiment_stages_are_distinct() -> None:
     assert len({DRAFT_STAGE, EVALUATION_STAGE, ROLLOUT_STAGE}) == 3
+
+
+def test_the_menus_are_the_sizes_the_spec_names() -> None:
+    """Spec criterion 2, as numbers: a sixth drafting tool is a decision, not a drift."""
+    assert {stage: len(tools) for stage, tools in EXPOSURE.items()} == {
+        DRAFT_STAGE: 5,
+        EVALUATION_STAGE: 5,
+        ROLLOUT_STAGE: 4,
+    }
+
+
+# --- the narrowness bar (SPEC-registry.md § What "narrow" means here) ---
+#
+# Held over every registry tool the catalog has, not over a list typed here, so a tenth
+# tool is held to it the moment it is registered.
+
+REGISTRY_TOOLS = [s for s in build_registry().specs() if s.surface is Surface.REGISTRY]
+WRITE_TOOLS = [s for s in REGISTRY_TOOLS if s.side_effecting]
+
+
+def properties(spec: ToolSpec) -> dict[str, Any]:
+    return dict(spec.input_schema["properties"])
+
+
+def test_all_nine_registry_tools_are_registered() -> None:
+    """Spec criterion 1. `test_tool_registry.py` holds each one's metadata."""
+    assert {s.name for s in REGISTRY_TOOLS} == set().union(*EXPOSURE.values())
+    assert len(REGISTRY_TOOLS) == 9
+
+
+@pytest.mark.parametrize("spec", REGISTRY_TOOLS, ids=lambda s: s.name)
+def test_no_registry_tool_is_a_generic_setter(spec: ToolSpec) -> None:
+    """A transition is a tool; its target state is its name. A tool taking `status`,
+    `fields`, `patch` or `updates` could be told to do anything. The one `status` is the
+    list read's filter, which names what to show, not what to become."""
+    setters = {"fields", "patch", "updates"} | ({"status"} if spec is not LIST else set())
+
+    assert not setters & set(properties(spec))
+
+
+@pytest.mark.parametrize("spec", REGISTRY_TOOLS, ids=lambda s: s.name)
+def test_a_registry_tool_names_one_thing_at_a_time(spec: ToolSpec) -> None:
+    """No batch, no list of ids: every argument is a single value, so one call touches
+    one experiment."""
+    kinds = {p["type"] for p in properties(spec).values()}
+
+    assert not kinds & {"array", "object"}
+
+
+def test_only_the_rollout_can_name_a_percentage() -> None:
+    """A halt with a `percentage` argument is a rollout with a nicer name."""
+    assert [s.name for s in REGISTRY_TOOLS if "percentage" in properties(s)] == [
+        "roll_out_variant_to_percentage"
+    ]
+
+
+@pytest.mark.parametrize("spec", WRITE_TOOLS, ids=lambda s: s.name)
+def test_every_write_names_the_version_it_was_prepared_against(spec: ToolSpec) -> None:
+    """A call prepared against one frozen cohort cannot land on another."""
+    assert "experiment_version" in spec.input_schema["required"]
+
+
+def test_each_scope_is_one_blast_radius() -> None:
+    """Five scopes, and a grant of one never implies another: drafting cannot halt,
+    annotating cannot stop anything, and only the rollout scope reaches customers."""
+    by_scope: dict[str, set[str]] = {}
+    for spec in REGISTRY_TOOLS:
+        by_scope.setdefault(spec.scope, set()).add(spec.name)
+
+    assert by_scope == {
+        "experiments:read": {"get_experiment", "list_experiments", "get_rollout_history"},
+        "experiments:draft": {
+            "create_experiment_draft",
+            "revise_draft_hypothesis",
+            "discard_experiment_draft",
+        },
+        "experiments:annotate": {"record_abstention"},
+        "experiments:halt": {"halt_rollout"},
+        "experiments:rollout": {"roll_out_variant_to_percentage"},
+    }
 
 
 def test_the_stack_writes_the_real_registry(stack: Stack) -> None:
