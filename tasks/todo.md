@@ -981,12 +981,35 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     needs a workflow id, and it has to start the run if there isn't one, which needs
     a session. Layer 1 may resolve neither.
 
-- [ ] **T37 — Ingress hands triggers to the workflow** · layer 1 · *S*
+- [x] **T37 — Ingress hands triggers to the workflow** · layer 1 · *S*
   - Acceptance: `interfaces/triggers.py` calls `client.deliver_trigger` (signal-with-start)
     and resolves nothing itself.
   - Verify: redelivered trigger **after the workflow closed**, with id reuse allowed →
     one evaluation, deduped on the Postgres claim (C30); `test_layer_boundaries` contract 4.
   - Files: `interfaces/triggers.py`, `runtime/temporal/client.py`, test.
+  - **Done, with a design decided at T37 (human, 2026-09-27):** nothing mapped an
+    experiment to its run, and a run can't start without a session. Migration `0013`
+    adds `experiment_runs (tenant, experiment_id) → (run_id, session_id)`. The
+    ingress does what `handle()` does for Slack, in the same place: `wiring.deliver`
+    parses (`triggers.py` stays a pure parser), `run_for_trigger` resolves the run from
+    the record, and `client.deliver_trigger` signal-with-starts it. The `RunStart`
+    comes from the `runs` row, never from the trigger.
+  - **Claim, then write.** The mapping is claimed with ids minted beforehand, and only
+    the winner's ids are written (`SessionStore.ensure`, new, and `RunStore.ensure`,
+    both upserts). Eight racing first deliveries leave one mapping, one session and one
+    run, with no orphans, and a delivery that died halfway is finished by the next.
+    No foreign key onto `runs`/`sessions`, because the claim comes first.
+  - C30 against a real worker: deliver, terminate the workflow, redeliver. Temporal
+    starts a **second execution** (asserted), the scorer still ran once, there's one
+    `trigger_cycles` row, and the new execution reads back the first cycle's outcome.
+  - The session belongs to `EXPERIMENT_OPERATOR` (`agent-operator`, as in
+    `interfaces/cli.py`). The trigger's tenant only chooses which tenant's experiment
+    is meant, the same authority it had before Temporal.
+  - **`stack_guard` reports "2 assertions removed" in `test_trigger_cycle.py`.** It's a
+    move, not a removal: the dataset fixture, with its two asserts, moved to
+    `tests/durability/conftest.py` so both trigger modules share it. The counter works
+    per file, and the net count across files is unchanged. Against `--base main` it's
+    clean, because the file is new since `main`.
 
 - [ ] **T38 — Trigger waits and deadlines on durable timers** · layer 3 · *S*
   - Acceptance: a trigger wait writes its `waits` row (deadline required, as today) and

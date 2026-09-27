@@ -25,6 +25,10 @@ class Run:
     channel: str = "unknown"
 
 
+def new_run_id() -> str:
+    return f"run-{uuid.uuid4()}"
+
+
 def new_run(
     *,
     session_id: str,
@@ -34,7 +38,7 @@ def new_run(
     channel: str = "unknown",
 ) -> Run:
     return Run(
-        run_id=f"run-{uuid.uuid4()}",
+        run_id=new_run_id(),
         session_id=session_id,
         tenant=tenant,
         user=user,
@@ -69,3 +73,36 @@ class RunStore:
             (run_id,),
         )
         return None if row is None else Run(*row)
+
+
+@dataclass(frozen=True, slots=True)
+class ExperimentRun:
+    tenant: str
+    experiment_id: str
+    run_id: str
+    session_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExperimentRunStore:
+    """Which run is an experiment's (SPEC.md: one durable run per experiment).
+
+    `claim` is one statement, like the trigger cycle's: two first deliveries arriving
+    together both read "nothing here", and only the insert can decide between them.
+    The loser's ids were never written anywhere, so losing leaves nothing behind.
+    """
+
+    db: Database
+
+    def claim(self, candidate: ExperimentRun) -> ExperimentRun:
+        """Record `candidate` as this experiment's run, or return the one already recorded."""
+        row = self.db.fetch_one(
+            "INSERT INTO experiment_runs (tenant, experiment_id, run_id, session_id)"
+            " VALUES (%s, %s, %s, %s)"
+            " ON CONFLICT (tenant, experiment_id) DO UPDATE"
+            "   SET tenant = EXCLUDED.tenant"
+            " RETURNING tenant, experiment_id, run_id, session_id",
+            (candidate.tenant, candidate.experiment_id, candidate.run_id, candidate.session_id),
+        )
+        assert row is not None  # the upsert always returns exactly one row
+        return ExperimentRun(*row)

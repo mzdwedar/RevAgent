@@ -12,12 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
 from agentstack.interfaces.wiring import build_stack
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
@@ -26,36 +24,12 @@ from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import CycleResult, RunProgress, RunStart, Trigger
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 from agentstack.storage.database import Database
-from tests.fitness.test_trigger_to_candidate import RULE, WATERMARK, StubScorer, snapshot
+from tests.fitness.test_trigger_to_candidate import RULE, WATERMARK, StubScorer
 from tests.temporal_support import progress_until, running_worker
 
+pytestmark = pytest.mark.usefixtures("fixture_dataset")
+
 TENANT = "acme"
-
-
-@pytest.fixture(autouse=True)
-def _fixture_dataset(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """The same fixture dataset `test_trigger_to_candidate` targets, loaded in-process:
-    the worker runs its activities in this process, so the monkeypatch reaches them."""
-    REGISTRY["fixture"] = DatasetSpec(
-        key="fixture",
-        kaggle="nobody/nothing",
-        files=("fixture.csv",),
-        target="Churn",
-        churned="1",
-        drops={},
-        revenue_columns=("monthly charge",),
-        revenue_periods_per_year=12,
-        revenue_note="fixture revenue, annualised x12",
-    )
-
-    def only_the_fixture(key: str, root: Path | None = None) -> CohortSnapshot:
-        assert key == "fixture", f"asked for {key!r}"
-        assert root is None
-        return snapshot()
-
-    monkeypatch.setattr("agentstack.context.datasets.load", only_the_fixture)
-    yield
-    REGISTRY.pop("fixture", None)
 
 
 @pytest.fixture

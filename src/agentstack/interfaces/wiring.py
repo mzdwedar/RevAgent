@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from temporalio.client import Client
+
 from agentstack.context.items import Scope, Trust
 from agentstack.context.memory import MaintenanceQueue, MemoryStore
 from agentstack.context.retrieval import Candidate, StaticRetriever
 from agentstack.control_plane.resolve import SessionResolver
-from agentstack.control_plane.session import SessionView
+from agentstack.control_plane.session import Session, SessionView, new_session
 from agentstack.control_plane.stores import SessionStore, TranscriptStore, WorkingStateStore
 from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
@@ -23,17 +25,28 @@ from agentstack.execution.surfaces import PostgresRegistryClient, RecordingClien
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.slack import Notifier, RecordingNotifier
 from agentstack.interfaces.slack_callback import ReplayGuard
+from agentstack.interfaces.triggers import parse_trigger
 from agentstack.model.engine import EchoEngine
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import VersionStamp
 from agentstack.policy.approval import ApprovalStore
 from agentstack.policy.approvers import ApproverDirectory
 from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.policy.triggers import TriggerEvent
 from agentstack.runtime.approvals import ApprovalCoordinator
 from agentstack.runtime.graph import build_turn_graph
 from agentstack.runtime.loop import TurnDeps, TurnResult, run_turn
-from agentstack.runtime.run import Run, RunStore, new_run
+from agentstack.runtime.run import (
+    ExperimentRun,
+    ExperimentRunStore,
+    Run,
+    RunStore,
+    new_run,
+    new_run_id,
+)
 from agentstack.runtime.steps import StepLedger
+from agentstack.runtime.temporal.client import deliver_trigger
+from agentstack.runtime.temporal.contracts import TASK_QUEUE, RunStart, Trigger
 from agentstack.runtime.waits import WaitStore
 from agentstack.storage.database import Database
 from agentstack.tools.catalog import build_registry
@@ -77,6 +90,8 @@ class Stack:
     # nothing itself: the next turn does, through the gateway.
     coordinator: ApprovalCoordinator
     deps: TurnDeps
+    # Which run is an experiment's. A trigger names an experiment; Temporal needs a run.
+    experiment_runs: ExperimentRunStore
 
 
 def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Stack:
@@ -171,6 +186,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
         approver_directory=approvers,
         coordinator=coordinator,
         deps=deps,
+        experiment_runs=ExperimentRunStore(db=db),
     )
 
 
@@ -223,3 +239,78 @@ def handle(
     )
     stack.transcripts.append(session_id=view.session_id, kind="agent", body=result.text)
     return result
+
+
+# Who an experiment's session belongs to. The operator, not a customer and not whoever
+# sent the trigger: the trigger's tenant is a claim, and it chooses nothing but which
+# tenant's experiment is meant. Authority is minted per act, later, in an activity.
+EXPERIMENT_OPERATOR = "agent-operator"
+
+
+def run_for_trigger(stack: Stack, event: TriggerEvent) -> RunStart:
+    """The run this trigger belongs to, created the first time an experiment is triggered.
+
+    Claim, then write. The mapping is claimed with ids minted here, and only the
+    winner's ids are then written, each with an upsert, so any number of first
+    deliveries converge on one session and one run, and a delivery that died halfway
+    is finished by the next one.
+    """
+    mapping = stack.experiment_runs.claim(
+        ExperimentRun(
+            tenant=event.tenant,
+            experiment_id=event.experiment_id,
+            run_id=new_run_id(),
+            session_id=new_session(user_id=EXPERIMENT_OPERATOR, tenant=event.tenant).session_id,
+        )
+    )
+    stack.sessions.ensure(
+        Session(
+            session_id=mapping.session_id,
+            user_id=EXPERIMENT_OPERATOR,
+            tenant=mapping.tenant,
+            created_at=datetime.now(UTC),
+        )
+    )
+    run = stack.runs.ensure(
+        Run(
+            run_id=mapping.run_id,
+            session_id=mapping.session_id,
+            tenant=mapping.tenant,
+            user=EXPERIMENT_OPERATOR,
+            channel="trigger",
+        )
+    )
+    return RunStart(
+        run_id=run.run_id,
+        session_id=run.session_id,
+        tenant=run.tenant,
+        user=run.user,
+        stage=run.stage,
+        channel=run.channel,
+    )
+
+
+async def deliver(
+    stack: Stack,
+    client: Client,
+    payload: dict[str, Any],
+    *,
+    source: str,
+    task_queue: str = TASK_QUEUE,
+) -> str:
+    """Trigger ingress -> run -> workflow. Returns the run it was handed to.
+
+    Parsing refuses a malformed trigger before anything is written. The run is resolved
+    from the record, and the workflow is only told that something happened.
+    """
+    event = parse_trigger(payload, source=source)
+    start = run_for_trigger(stack, event)
+    trigger = Trigger(
+        kind=event.kind.value,
+        experiment_id=event.experiment_id,
+        data_as_of=event.data_as_of,
+        tenant=event.tenant,
+        source=event.source,
+    )
+    await deliver_trigger(client, start, trigger, task_queue=task_queue)
+    return start.run_id

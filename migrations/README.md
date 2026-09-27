@@ -29,3 +29,4 @@ tables are created and versioned by `PostgresSaver.setup()` rather than from her
 `0010` gives every pending trigger and approval wait a deadline, and counts re-asks.
 `0011` moves runs off the retired `experiment` stage onto `draft`, one of the three that replaced it.
 `0012` is the experiment registry: experiments, their versions, draft revisions and events — the last three insert-only.
+`0013` records which run is an experiment's, so a trigger can find (or start) the one Temporal workflow for it.

@@ -12,7 +12,7 @@ import os
 from temporalio.client import Client, WorkflowHandle
 from temporalio.common import WorkflowIDConflictPolicy
 
-from agentstack.runtime.temporal.contracts import TASK_QUEUE, RunEnd, RunStart, workflow_id
+from agentstack.runtime.temporal.contracts import TASK_QUEUE, RunEnd, RunStart, Trigger, workflow_id
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 
 DEFAULT_ADDRESS = "localhost:7233"
@@ -56,4 +56,27 @@ async def start_run(
         id=workflow_id(start.run_id),
         task_queue=task_queue,
         id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+    )
+
+
+async def deliver_trigger(
+    client: Client, start: RunStart, trigger: Trigger, *, task_queue: str = TASK_QUEUE
+) -> WorkflowHandle[ExperimentWorkflow, RunEnd]:
+    """Hand a trigger to its run, starting the run if it isn't running (signal-with-start).
+
+    Not running includes *closed*. A redelivery after the run's workflow ended starts a
+    new execution under the same id, which is allowed on purpose: the second evaluation
+    is stopped by the Postgres cycle claim, not by Temporal remembering the first,
+    because Temporal forgets once retention passes (criterion 30).
+
+    `start` comes from the run's record, never from the trigger: the trigger only says
+    something happened.
+    """
+    return await client.start_workflow(
+        ExperimentWorkflow.run,
+        start,
+        id=workflow_id(start.run_id),
+        task_queue=task_queue,
+        start_signal="trigger",
+        start_signal_args=[trigger],
     )
