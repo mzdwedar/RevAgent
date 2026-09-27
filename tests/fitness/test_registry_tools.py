@@ -10,10 +10,23 @@ The matrix grows one row at a time as the registry tools land (T26-T29).
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any
+
 import pytest
 
-from agentstack.execution.surfaces import PostgresRegistryClient
-from agentstack.interfaces.wiring import Stack
+from agentstack.execution.gateway import UnresolvedEffect
+from agentstack.execution.surfaces import (
+    PostgresRegistryClient,
+    SurfaceClient,
+    SurfaceTimeout,
+)
+from agentstack.interfaces.wiring import Stack, envelope_for
+from agentstack.observability.spans import Tracer
+from agentstack.runtime.run import new_run
+from agentstack.storage.database import Database
+from agentstack.tools.action import ActionRequest
 from agentstack.tools.catalog import build_registry
 from agentstack.tools.experiments import (
     DRAFT_STAGE,
@@ -21,16 +34,19 @@ from agentstack.tools.experiments import (
     LIST,
     ROLLOUT_STAGE,
     STATUSES,
+    prepare_discard,
     prepare_list,
+    prepare_revise,
 )
 from agentstack.tools.spec import Approval, Surface
 
-from .conftest import TENANT
+from .conftest import TENANT, USER
 
 READS = {"get_experiment", "list_experiments"}
 
 EXPOSURE = {
-    DRAFT_STAGE: READS | {"create_experiment_draft"},
+    DRAFT_STAGE: READS
+    | {"create_experiment_draft", "revise_draft_hypothesis", "discard_experiment_draft"},
     EVALUATION_STAGE: READS | {"get_rollout_history"},
     ROLLOUT_STAGE: READS | {"get_rollout_history", "roll_out_variant_to_percentage"},
 }
@@ -110,3 +126,106 @@ def test_each_read_asks_the_surface_through_a_resource_it_serves(
 
     assert request.resource == resource
     assert isinstance(stack.registry_client.read(request.resource, request.payload), dict)
+
+
+# --- spec criterion 5: an answer lost after the effect is still one effect ---
+
+REGISTRY_SCOPES = frozenset(
+    {
+        "experiments:read",
+        "experiments:draft",
+        "experiments:annotate",
+        "experiments:halt",
+        "experiments:rollout",
+    }
+)
+EXPERIMENT_AT = f"{TENANT}/experiments/exp-7"
+VERSION = "exp:abc123"
+SEED_DRAFT = {
+    "experiment_version": VERSION,
+    "hypothesis": "a discount retains at-risk customers",
+    "variant": "20-percent-off",
+}
+SEED_ROLLOUT = {
+    "experiment_version": VERSION,
+    "percentage": 10,
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.61,
+}
+
+
+@dataclass(frozen=True)
+class AnswerLost:
+    """The real store, with the answer dropped after every write has applied."""
+
+    inner: SurfaceClient
+
+    def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
+        return self.inner.read(resource, query)
+
+    def commit(self, resource: str, payload: dict[str, Any]) -> str:
+        self.inner.commit(resource, payload)
+        raise SurfaceTimeout(f"{resource}: applied, answer lost")
+
+
+Prepare = Callable[[Mapping[str, Any]], ActionRequest]
+
+# Every registry write that can be retried, its own arguments, and the state it acts on.
+WRITES: dict[str, tuple[Prepare, dict[str, Any], str]] = {
+    "revise_draft_hypothesis": (
+        prepare_revise,
+        {"hypothesis": "a smaller discount retains them too"},
+        "draft",
+    ),
+    "discard_experiment_draft": (prepare_discard, {"reason": "the cohort is too small"}, "draft"),
+}
+
+
+def _history_rows(db: Database) -> int:
+    row = db.fetch_one(
+        "SELECT (SELECT count(*) FROM draft_revisions) + (SELECT count(*) FROM registry_events)"
+    )
+    assert row is not None
+    return int(row[0])
+
+
+@pytest.mark.parametrize("tool", sorted(WRITES))
+def test_a_lost_answer_and_a_retry_leave_one_row(
+    stack: Stack, app_database: Database, tool: str
+) -> None:
+    """Applied, answer lost, retried: the retry is refused as unresolved and the store
+    holds one row, not two - against the real store, not the fake."""
+    prepare, arguments, state = WRITES[tool]
+    stack.registry_client.commit(EXPERIMENT_AT, SEED_DRAFT)
+    if state == "live":
+        stack.registry_client.commit(f"{EXPERIMENT_AT}/rollout", SEED_ROLLOUT)
+    session = stack.resolver.start(user_id=USER, tenant=TENANT)
+    run = stack.runs.ensure(
+        new_run(session_id=session.session_id, tenant=TENANT, user=USER, channel="test")
+    )
+    view = stack.resolver.resolve(session_id=run.session_id, user_id=USER, tenant=TENANT)
+    request = prepare(
+        {"tenant": TENANT, "experiment_id": "exp-7", "experiment_version": VERSION, **arguments}
+    )
+    before = _history_rows(app_database)
+
+    def attempt() -> None:
+        stack.deps.gateway.execute(
+            request=request,
+            spec=build_registry().spec(tool),
+            envelope=envelope_for(view, scopes=REGISTRY_SCOPES),
+            run_id=run.run_id,
+            state_snapshot="s",
+            tracer=Tracer(
+                run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions
+            ),
+        )
+
+    stack.deps.gateway.surfaces[Surface.REGISTRY] = AnswerLost(stack.registry_client)
+    with pytest.raises(UnresolvedEffect):
+        attempt()
+    stack.deps.gateway.surfaces[Surface.REGISTRY] = stack.registry_client
+    with pytest.raises(UnresolvedEffect, match="(?i)reconcile"):
+        attempt()
+
+    assert _history_rows(app_database) == before + 1

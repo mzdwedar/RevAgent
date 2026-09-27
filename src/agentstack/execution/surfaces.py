@@ -123,6 +123,8 @@ class Sandbox:
 #                                       commit  create the draft
 #   {tenant}/experiments/{id}/history   read    rollouts and halts, oldest first
 #   {tenant}/experiments/{id}/rollout   commit  expose the current version to a percentage
+#   {tenant}/experiments/{id}/revision  commit  reword a draft's hypothesis
+#   {tenant}/experiments/{id}/discard   commit  a draft becomes discarded
 #
 # Both clients below hold the same preconditions, and `tests/infra/test_registry_store.py`
 # runs one contract suite over both. A precondition that does not hold is
@@ -138,11 +140,29 @@ _REGISTRY_RESOURCE = re.compile(
 # valid for the other: history is read and never written, a rollout written and never
 # read. The collection (no experiment) is the list read and nothing else.
 _READS: dict[str | None, str] = {None: "experiment", "history": "history"}
-_COMMITS: dict[str | None, str] = {None: "draft", "rollout": "rollout"}
+_COMMITS: dict[str | None, str] = {
+    None: "draft",
+    "rollout": "rollout",
+    "revision": "revise",
+    "discard": "discard",
+}
 
-# A rollout may widen a live experiment or launch a draft; from any other state it is
-# refused. `halted` is terminal for a version in iteration 1 (SPEC-registry.md).
-_ROLLOUT_FROM = ("draft", "live")
+# Each status change: the states it may start from, and the state it leaves. A rollout
+# may widen a live experiment or launch a draft; only a draft may be discarded. From any
+# other state the action is refused. `halted` and `discarded` are terminal for a version
+# in iteration 1 (SPEC-registry.md).
+_TRANSITIONS: dict[str, tuple[tuple[str, ...], str]] = {
+    "rollout": (("draft", "live"), "live"),
+    "discard": (("draft",), "discarded"),
+}
+
+# The constraints a revision can meet, and what each means. The statement failed whole,
+# so each is provably nothing applied - a refusal, not an unknown outcome.
+_REVISION_REFUSALS = {
+    "one_row_per_revision": "this wording is already a revision",
+    "draft_revisions_pkey": "another revision landed first",
+    "revision_says_something": "a revision must say something",
+}
 
 # One read cannot flood the context window (SPEC-registry.md, Budgets). The tool schema
 # refuses more; the surface clamps anyway, because the schema is not its only caller.
@@ -195,6 +215,8 @@ class RegistryClient:
     # Every effect after the draft, in order: (experiment resource, kind, payload) - the
     # fake's `registry_events`.
     events: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
+    # Each experiment's hypotheses, in revision order. `drafts` keeps what was drafted.
+    revisions: dict[str, list[str]] = field(default_factory=dict)
     reads: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     # Apply the effect and then lose the answer: the failure two-phase idempotency
     # exists for. Same switch as RecordingClient, for the same reason.
@@ -219,7 +241,12 @@ class RegistryClient:
                 experiment,
                 [(k, p) for b, k, p in self.events if b == base and k in _EXPOSURE_KINDS],
             )
-        return {"experiment_id": experiment, "status": self._status[base], **draft}
+        return {
+            "experiment_id": experiment,
+            "status": self._status[base],
+            **draft,
+            "hypothesis": self.revisions[base][-1],
+        }
 
     def _list(self, tenant: str, query: dict[str, Any]) -> dict[str, Any]:
         prefix = f"{tenant}/experiments/"
@@ -241,24 +268,36 @@ class RegistryClient:
             if base in self.drafts:
                 raise SurfaceRefused(f"{base} already exists; a draft never overwrites one")
             self.drafts[base] = dict(payload)
+            self.revisions[base] = [payload["hypothesis"]]
             self._status[base] = "draft"
             receipt = f"draft-{len(self.drafts)}"
+        elif action == "revise":
+            self._current(base, payload, ("draft",))
+            if not payload["hypothesis"].strip():
+                raise SurfaceRefused(f"{base}: a revision must say something")
+            if payload["hypothesis"] in self.revisions[base]:
+                raise SurfaceRefused(f"{base}: this wording is already a revision")
+            self.revisions[base].append(payload["hypothesis"])
+            receipt = f"revision-{len(self.revisions[base])}"
         else:
-            draft = self.drafts.get(base)
-            if draft is None or draft["experiment_version"] != payload["experiment_version"]:
-                raise SurfaceRefused(
-                    f"{base} has no current version {payload['experiment_version']}"
-                )
-            if self._status[base] not in _ROLLOUT_FROM:
-                raise SurfaceRefused(f"{base} is {self._status[base]}; it cannot be rolled out")
-            if (resource, payload) in self.rollouts:
-                raise SurfaceRefused(f"{resource}: this rollout already happened")
-            self.events.append((base, "rollout", dict(payload)))
-            self._status[base] = "live"
-            receipt = f"rollout-{len(self.rollouts)}"
+            allowed, becomes = _TRANSITIONS[action]
+            self._current(base, payload, allowed)
+            if (base, action, payload) in self.events:
+                raise SurfaceRefused(f"{resource}: this {action} already happened")
+            self.events.append((base, action, dict(payload)))
+            self._status[base] = becomes
+            receipt = f"{action}-{len(self.events)}"
         if self.fail_after_effect:
             raise SurfaceTimeout(f"{resource} applied, answer lost")
         return receipt
+
+    def _current(self, base: str, payload: dict[str, Any], allowed: tuple[str, ...]) -> None:
+        """The same `WHERE` the Postgres statements carry: this version, in these states."""
+        draft = self.drafts.get(base)
+        if draft is None or draft["experiment_version"] != payload["experiment_version"]:
+            raise SurfaceRefused(f"{base} has no current version {payload['experiment_version']}")
+        if self._status[base] not in allowed:
+            raise SurfaceRefused(f"{base} is {self._status[base]}; this action needs {allowed}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,7 +402,9 @@ class PostgresRegistryClient:
         tenant, experiment, action = _registry_resource(resource, _COMMITS)
         if action == "draft":
             return self._draft(tenant, experiment, payload)
-        return self._rollout(tenant, experiment, payload)
+        if action == "revise":
+            return self._revise(tenant, experiment, payload)
+        return self._transition(tenant, experiment, action, payload)
 
     def _draft(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
         # `ON CONFLICT DO NOTHING` on the experiment, and the version and revision are
@@ -397,23 +438,29 @@ class PostgresRegistryClient:
             )
         return f"draft:{tenant}/{experiment}@{row[0]}"
 
-    def _rollout(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
+    def _transition(self, tenant: str, experiment: str, kind: str, payload: dict[str, Any]) -> str:
+        """A status change and the event that records it, as one statement: the guarded
+        `UPDATE` feeds the `INSERT`, so no event is written for a move that did not
+        happen and no move happens without its event."""
+        allowed, becomes = _TRANSITIONS[kind]
         try:
             row = self.db.fetch_one(
                 "WITH moved AS ("
-                "  UPDATE experiments SET status = 'live', updated_at = now()"
+                "  UPDATE experiments SET status = %s, updated_at = now()"
                 "  WHERE tenant = %s AND experiment_id = %s"
                 "    AND current_version = %s AND status = ANY(%s)"
                 "  RETURNING tenant, experiment_id, current_version)"
                 " INSERT INTO registry_events"
                 "  (tenant, experiment_id, experiment_version, kind, payload)"
-                " SELECT tenant, experiment_id, current_version, 'rollout', %s::jsonb"
+                " SELECT tenant, experiment_id, current_version, %s, %s::jsonb"
                 " FROM moved RETURNING id",
                 (
+                    becomes,
                     tenant,
                     experiment,
                     payload["experiment_version"],
-                    list(_ROLLOUT_FROM),
+                    list(allowed),
+                    kind,
                     json.dumps(payload),
                 ),
             )
@@ -422,11 +469,50 @@ class PostgresRegistryClient:
                 raise
             # The statement failed as a whole, so the status update went with it.
             raise SurfaceRefused(
-                f"{tenant}/experiments/{experiment}/rollout: this rollout already happened"
+                f"{tenant}/experiments/{experiment}/{kind}: this {kind} already happened"
             ) from exc
         if row is None:
             raise SurfaceRefused(
-                f"{tenant}/experiments/{experiment} is not a draft or live experiment at "
-                f"version {payload['experiment_version']}; nothing was rolled out"
+                f"{tenant}/experiments/{experiment} is not in {allowed} at version "
+                f"{payload['experiment_version']}; nothing was changed"
             )
-        return f"rollout-{row[0]}"
+        return f"{kind}-{row[0]}"
+
+    def _revise(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
+        """Append a wording to the current version of a draft - never a new version.
+
+        `FOR UPDATE` holds the experiment row for the statement: a discard racing this
+        revise either lands first, and the re-checked `status = 'draft'` matches nothing,
+        or waits until the revision is in. Two revises racing for the same `revision_no`
+        collide on the key, and the loser's statement applied nothing.
+        """
+        try:
+            row = self.db.fetch_one(
+                "WITH e AS ("
+                "  SELECT tenant, experiment_id, current_version FROM experiments"
+                "  WHERE tenant = %s AND experiment_id = %s"
+                "    AND current_version = %s AND status = 'draft'"
+                "  FOR UPDATE)"
+                " INSERT INTO draft_revisions"
+                "  (tenant, experiment_id, experiment_version, revision_no, hypothesis)"
+                " SELECT e.tenant, e.experiment_id, e.current_version,"
+                "  (SELECT max(r.revision_no) + 1 FROM draft_revisions r"
+                "    WHERE (r.tenant, r.experiment_id, r.experiment_version)"
+                "        = (e.tenant, e.experiment_id, e.current_version)),"
+                "  %s"
+                " FROM e RETURNING revision_no",
+                (tenant, experiment, payload["experiment_version"], payload["hypothesis"]),
+            )
+        except IntegrityViolation as exc:
+            if exc.constraint not in _REVISION_REFUSALS:
+                raise
+            raise SurfaceRefused(
+                f"{tenant}/experiments/{experiment}: {_REVISION_REFUSALS[exc.constraint]}; "
+                "nothing was changed"
+            ) from exc
+        if row is None:
+            raise SurfaceRefused(
+                f"{tenant}/experiments/{experiment} is not a draft at version "
+                f"{payload['experiment_version']}; nothing was revised"
+            )
+        return f"revision-{row[0]}"

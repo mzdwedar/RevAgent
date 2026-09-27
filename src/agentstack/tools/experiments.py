@@ -22,6 +22,7 @@ saw (criterion 14).
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from typing import Any
 
@@ -128,7 +129,7 @@ DRAFT = ToolSpec(
         ],
     },
     acts_as=ActsAs.DELEGATED,
-    scope="experiments:write",
+    scope="experiments:draft",
     surface=Surface.REGISTRY,
     side_effecting=True,
     reversible=True,
@@ -177,6 +178,100 @@ ROLLOUT = ToolSpec(
     ),
     stages=frozenset({ROLLOUT_STAGE}),
 )
+
+
+# --- the draft lifecycle: reword it, or throw it away ---
+#
+# Both name the version, so a call prepared against one frozen cohort cannot land on
+# another, and neither can reach anything but a draft: the store's `WHERE status =
+# 'draft'` is on the same statement as the change.
+
+REVISE = ToolSpec(
+    name="revise_draft_hypothesis",
+    description=(
+        "Reword a draft experiment's hypothesis. The variant and the cohort are unchanged; "
+        "only drafts can be revised."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            "hypothesis": {"type": "string"},
+        },
+        # No variant: rewording the reason cannot change what customers would see.
+        "required": ["tenant", "experiment_id", "experiment_version", "hypothesis"],
+    },
+    acts_as=ActsAs.DELEGATED,
+    scope="experiments:draft",
+    surface=Surface.REGISTRY,
+    side_effecting=True,
+    reversible=True,
+    approval=Approval.PRE_COMMIT,
+    idempotency=Idempotency.KEY,
+    stages=frozenset({DRAFT_STAGE}),
+)
+
+DISCARD = ToolSpec(
+    name="discard_experiment_draft",
+    description=(
+        "Discard a draft experiment that should not go ahead. Only drafts can be discarded."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            "reason": {"type": "string"},
+        },
+        "required": ["tenant", "experiment_id", "experiment_version", "reason"],
+    },
+    acts_as=ActsAs.DELEGATED,
+    scope="experiments:draft",
+    surface=Surface.REGISTRY,
+    side_effecting=True,
+    reversible=True,
+    approval=Approval.PRE_COMMIT,
+    idempotency=Idempotency.KEY,
+    stages=frozenset({DRAFT_STAGE}),
+)
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def prepare_revise(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    version = arguments["experiment_version"]
+    hypothesis = arguments["hypothesis"]
+    return ActionRequest(
+        tool=REVISE.name,
+        surface=REVISE.surface,
+        resource=f"{tenant}/experiments/{experiment}/revision",
+        payload={"experiment_version": version, "hypothesis": hypothesis},
+        # The wording is the identity: the same words twice is one revision, and new
+        # words are a new one. Hashed, so the key stays short whatever the model wrote.
+        idempotency_key=f"revise:{tenant}:{experiment}:{version}:{_digest(hypothesis)}",
+    )
+
+
+def prepare_discard(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    version = arguments["experiment_version"]
+    return ActionRequest(
+        tool=DISCARD.name,
+        surface=DISCARD.surface,
+        resource=f"{tenant}/experiments/{experiment}/discard",
+        payload={"experiment_version": version, "reason": arguments["reason"]},
+        # One discard per version, whatever the reason says: discarding twice is a
+        # retry, not a second effect.
+        idempotency_key=f"discard:{tenant}:{experiment}:{version}",
+    )
 
 
 def prepare_draft(arguments: Mapping[str, Any]) -> ActionRequest:

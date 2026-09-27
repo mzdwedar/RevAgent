@@ -23,7 +23,7 @@ from agentstack.tools.spec import ActsAs
 
 TENANT = "acme"
 USER = "agent-operator"
-SCOPES = frozenset({"experiments:write", "experiments:rollout"})
+SCOPES = frozenset({"experiments:draft", "experiments:rollout"})
 ARGS = {
     "tenant": TENANT,
     "experiment_id": "exp-7",

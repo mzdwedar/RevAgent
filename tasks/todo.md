@@ -828,10 +828,33 @@ and the test that proves it.
     `test_untrusted_content.py`, not in `test_trace_completeness.py`: that is where the
     turn doing the read already is.
 
-- [ ] **T27 — Draft lifecycle** · layers 6, 7 · *M*
+- [x] **T27 — Draft lifecycle** · layers 6, 7 · *M*
   - Acceptance: `revise_draft_hypothesis`, `discard_experiment_draft`; revise appends a
     revision, never a new `experiment_version`.
   - Verify: store contract — refused from `discarded`, `live`, `halted`; lost answer → one row.
+  - **Done.** Both are `PRE_COMMIT` on `experiments:draft`, on the draft stage only.
+    - Revise has no `variant` argument. Its key hashes the wording.
+    - Discard is keyed once per version.
+    - Contract cases, both clients: revise and discard are each refused from `live` and
+      `discarded` (`halted` joins in T29), and a refusal leaves every read unchanged.
+    - A revision is a row, never a version (Postgres, counted).
+    - A lost answer plus a retry leaves one row against the real store, through the
+      gateway, for each write (`test_registry_tools.py`, `AnswerLost`). This case list
+      grows in T28 and T29.
+  - **Scope renamed:** `create_experiment_draft` moves from `experiments:write` to
+    `experiments:draft`, per the spec. Approvals bind the action fingerprint, not the
+    scope, so parked runs are unaffected. Any caller still granting `experiments:write`
+    can no longer draft. No caller in `src/` does; the scopes come from whoever builds
+    the envelope.
+  - **One surface transition.** `_TRANSITIONS` maps each status change to the states
+    it may start from and the state it leaves. Rollout and discard are the same guarded
+    `UPDATE … RETURNING` feeding the event `INSERT`.
+  - **Revise locks the row.** It takes `FOR UPDATE` on the experiment row, so a discard
+    racing it either wins outright or waits. Two revises racing for one `revision_no`
+    collide on the key, and the loser is a refusal.
+  - **Found and fixed:** a blank revision fails the store's `revision_says_something`
+    check. The statement fails whole, so nothing applied, but it would have surfaced as
+    an unresolved effect and stranded the claim. It is now a refusal on both clients.
 
 - [ ] **T28 — `record_abstention`** · layers 6, 7 · *S*
   - Acceptance: append-only, no status change, `evaluation` stage only.

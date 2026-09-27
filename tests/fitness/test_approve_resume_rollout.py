@@ -28,7 +28,7 @@ from agentstack.tools.experiments import ROLLOUT, ROLLOUT_STAGE, prepare_rollout
 
 from .conftest import TENANT, USER
 
-SCOPES = frozenset({"experiments:write", "experiments:rollout"})
+SCOPES = frozenset({"experiments:draft", "experiments:rollout"})
 ROLLOUT_ARGS = {
     "tenant": TENANT,
     "experiment_id": "exp-7",

@@ -49,7 +49,7 @@ def draft_request(tenant: str = "acme") -> ActionRequest:
     )
 
 
-EXPERIMENT_SCOPES = SCOPES | {"experiments:write", "experiments:rollout"}
+EXPERIMENT_SCOPES = SCOPES | {"experiments:draft", "experiments:rollout"}
 
 
 def envelope(

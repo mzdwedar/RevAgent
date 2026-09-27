@@ -33,7 +33,7 @@ from agentstack.tools.validation import InvalidToolArguments
 
 from .conftest import TENANT, USER
 
-SCOPES = frozenset({"experiments:write", "experiments:rollout"})
+SCOPES = frozenset({"experiments:draft", "experiments:rollout"})
 
 GOOD_DRAFT = {
     "tenant": TENANT,
@@ -94,6 +94,8 @@ def test_an_experiment_run_is_shown_neither_refund_tool(stack: Stack) -> None:
 
     assert names == {
         "create_experiment_draft",
+        "revise_draft_hypothesis",
+        "discard_experiment_draft",
         "roll_out_variant_to_percentage",
         "get_experiment",
         "list_experiments",

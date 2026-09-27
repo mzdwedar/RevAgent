@@ -398,3 +398,146 @@ def test_a_draft_has_an_empty_history(client: Any) -> None:
 
 def test_the_history_of_nothing_is_empty(client: Any) -> None:
     assert client.read(HISTORY_AT, {}) == {}
+
+
+# --- the draft lifecycle (T27) ---
+
+REVISION_AT = f"{DRAFT_AT}/revision"
+DISCARD_AT = f"{DRAFT_AT}/discard"
+REWORDED = "a smaller discount retains them too"
+
+
+def revise_payload(hypothesis: str = REWORDED, version: str = VERSION) -> dict[str, object]:
+    return {"experiment_version": version, "hypothesis": hypothesis}
+
+
+def discard_payload(version: str = VERSION) -> dict[str, object]:
+    return {"experiment_version": version, "reason": "the cohort is too small"}
+
+
+def bring_to(client: Any, state: str) -> None:
+    """Drive the experiment to `state` through the client's own writes, never around them."""
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+    if state == "live":
+        client.commit(ROLLOUT_AT, rollout_payload())
+    elif state == "discarded":
+        client.commit(DISCARD_AT, discard_payload())
+
+
+def observed(client: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Everything a caller can see about the experiment: a refusal must change none of it."""
+    return client.read(DRAFT_AT, {}), client.read(HISTORY_AT, {})
+
+
+# Every state but the one each action needs. `halted` joins with the halt (T29).
+NOT_A_DRAFT = ["live", "discarded"]
+
+
+def test_a_revision_rewords_the_draft_and_keeps_its_version(client: Any) -> None:
+    bring_to(client, "draft")
+
+    client.commit(REVISION_AT, revise_payload())
+
+    after = client.read(DRAFT_AT, {})
+    assert (after["hypothesis"], after["experiment_version"]) == (REWORDED, VERSION)
+    assert after["status"] == "draft"
+    assert client.drafts == {DRAFT_AT: DRAFT_PAYLOAD}, "what was drafted is still on record"
+
+
+def test_a_revision_is_a_row_never_a_version(app_database: Database) -> None:
+    """Assumption 5: the version is the frozen cohort. Rewording the reason must not
+    mint a new one - that would be a different experiment wearing this one's id."""
+    client = PostgresRegistryClient(db=app_database)
+    bring_to(client, "draft")
+
+    client.commit(REVISION_AT, revise_payload())
+
+    assert app_database.fetch_one("SELECT count(*) FROM experiment_versions") == (1,)
+    assert app_database.fetch_all(
+        "SELECT revision_no, hypothesis FROM draft_revisions ORDER BY revision_no"
+    ) == [(1, DRAFT_PAYLOAD["hypothesis"]), (2, REWORDED)]
+
+
+def test_the_same_wording_twice_is_one_revision(client: Any) -> None:
+    bring_to(client, "draft")
+    client.commit(REVISION_AT, revise_payload())
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(REVISION_AT, revise_payload())
+
+
+def test_a_blank_revision_is_refused_not_left_unresolved(client: Any) -> None:
+    """The store's CHECK fails the whole statement, so nothing applied - a refusal the
+    gateway can release, not an unknown outcome that strands the claim."""
+    bring_to(client, "draft")
+
+    with pytest.raises(SurfaceRefused, match="must say something"):
+        client.commit(REVISION_AT, revise_payload(hypothesis="   "))
+
+    assert client.read(DRAFT_AT, {})["hypothesis"] == DRAFT_PAYLOAD["hypothesis"]
+
+
+@pytest.mark.parametrize("state", NOT_A_DRAFT)
+def test_a_revision_is_refused_outside_a_draft(client: Any, state: str) -> None:
+    bring_to(client, state)
+    before = observed(client)
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(REVISION_AT, revise_payload())
+
+    assert observed(client) == before
+
+
+def test_a_revision_of_another_version_is_refused(client: Any) -> None:
+    bring_to(client, "draft")
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(REVISION_AT, revise_payload(version="exp:other"))
+
+    assert client.read(DRAFT_AT, {})["hypothesis"] == DRAFT_PAYLOAD["hypothesis"]
+
+
+def test_a_revision_of_nothing_is_refused(client: Any) -> None:
+    with pytest.raises(SurfaceRefused):
+        client.commit(REVISION_AT, revise_payload())
+
+
+def test_a_discard_ends_a_draft(client: Any) -> None:
+    bring_to(client, "draft")
+
+    client.commit(DISCARD_AT, discard_payload())
+
+    assert client.read(DRAFT_AT, {})["status"] == "discarded"
+    discarded = client.read(LIST_AT, {"status": "discarded", "limit": 20})["experiments"]
+    assert [row["experiment_id"] for row in discarded] == [EXPERIMENT]
+
+
+@pytest.mark.parametrize("state", NOT_A_DRAFT)
+def test_a_discard_is_refused_outside_a_draft(client: Any, state: str) -> None:
+    """A live experiment is stopped by halting it, which says what exposure became. A
+    discard of something customers saw would erase that it ever went out."""
+    bring_to(client, state)
+    before = observed(client)
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(DISCARD_AT, discard_payload())
+
+    assert observed(client) == before
+
+
+def test_a_discard_of_another_version_is_refused(client: Any) -> None:
+    bring_to(client, "draft")
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(DISCARD_AT, discard_payload(version="exp:other"))
+
+    assert client.read(DRAFT_AT, {})["status"] == "draft"
+
+
+def test_a_discarded_experiment_cannot_be_rolled_out(client: Any) -> None:
+    bring_to(client, "discarded")
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(ROLLOUT_AT, rollout_payload())
+
+    assert client.rollouts == []
