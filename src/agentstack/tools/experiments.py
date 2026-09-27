@@ -270,6 +270,50 @@ ABSTAIN = ToolSpec(
 )
 
 
+HALT = ToolSpec(
+    name="halt_rollout",
+    description=(
+        "Stop exposing a live experiment's variant to new customers. Sets exposure to "
+        "zero; it cannot set any other percentage."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            "reason": {"type": "string"},
+        },
+        # No percentage: a halt that could name a number is a rollout with a nicer name.
+        "required": ["tenant", "experiment_id", "experiment_version", "reason"],
+    },
+    acts_as=ActsAs.DELEGATED,
+    scope="experiments:halt",
+    surface=Surface.REGISTRY,
+    side_effecting=True,
+    reversible=True,
+    # Stopping exposure is the safe direction: a guardrail breach must not wait on Slack
+    # (assumption 3). A rule decides, and the rule only ever sees zero.
+    approval=Approval.PRE_COMMIT,
+    idempotency=Idempotency.KEY,
+    stages=frozenset({EVALUATION_STAGE}),
+)
+
+
+def prepare_halt(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    version = arguments["experiment_version"]
+    return ActionRequest(
+        tool=HALT.name,
+        surface=HALT.surface,
+        resource=f"{tenant}/experiments/{experiment}/halt",
+        payload={"experiment_version": version, "percentage": 0, "reason": arguments["reason"]},
+        # One halt per version: halting twice is a retry, not a second effect.
+        idempotency_key=f"halt:{tenant}:{experiment}:{version}",
+    )
+
+
 def prepare_abstain(arguments: Mapping[str, Any]) -> ActionRequest:
     tenant = arguments["tenant"]
     experiment = arguments["experiment_id"]

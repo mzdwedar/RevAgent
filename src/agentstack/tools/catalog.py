@@ -22,6 +22,7 @@ from agentstack.tools.experiments import (
     DISCARD,
     DRAFT,
     GET,
+    HALT,
     HISTORY,
     LIST,
     REVISE,
@@ -30,6 +31,7 @@ from agentstack.tools.experiments import (
     prepare_discard,
     prepare_draft,
     prepare_get,
+    prepare_halt,
     prepare_history,
     prepare_list,
     prepare_revise,
@@ -131,4 +133,5 @@ def build_registry() -> Registry:
     registry.register(REVISE, prepare_revise)
     registry.register(DISCARD, prepare_discard)
     registry.register(ABSTAIN, prepare_abstain)
+    registry.register(HALT, prepare_halt)
     return registry

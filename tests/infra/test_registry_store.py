@@ -404,7 +404,12 @@ def test_the_history_of_nothing_is_empty(client: Any) -> None:
 
 REVISION_AT = f"{DRAFT_AT}/revision"
 DISCARD_AT = f"{DRAFT_AT}/discard"
+HALT_AT = f"{DRAFT_AT}/halt"
 REWORDED = "a smaller discount retains them too"
+
+
+def halt_payload(version: str = VERSION) -> dict[str, object]:
+    return {"experiment_version": version, "percentage": 0, "reason": "churn rose in the variant"}
 
 
 def revise_payload(hypothesis: str = REWORDED, version: str = VERSION) -> dict[str, object]:
@@ -418,8 +423,10 @@ def discard_payload(version: str = VERSION) -> dict[str, object]:
 def bring_to(client: Any, state: str) -> None:
     """Drive the experiment to `state` through the client's own writes, never around them."""
     client.commit(DRAFT_AT, DRAFT_PAYLOAD)
-    if state == "live":
+    if state in ("live", "halted"):
         client.commit(ROLLOUT_AT, rollout_payload())
+    if state == "halted":
+        client.commit(HALT_AT, halt_payload())
     elif state == "discarded":
         client.commit(DISCARD_AT, discard_payload())
 
@@ -429,8 +436,9 @@ def observed(client: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     return client.read(DRAFT_AT, {}), client.read(HISTORY_AT, {})
 
 
-# Every state but the one each action needs. `halted` joins with the halt (T29).
-NOT_A_DRAFT = ["live", "discarded"]
+# Every state but the one each action needs.
+NOT_A_DRAFT = ["live", "halted", "discarded"]
+NOT_LIVE = ["draft", "halted", "discarded"]
 
 
 def test_a_revision_rewords_the_draft_and_keeps_its_version(client: Any) -> None:
@@ -547,8 +555,8 @@ def test_a_discarded_experiment_cannot_be_rolled_out(client: Any) -> None:
 
 ABSTENTION_AT = f"{DRAFT_AT}/abstention"
 
-# Every state the lifecycle can reach so far. `halted` joins with the halt (T29).
-EVERY_STATE = ["draft", "live", "discarded"]
+# Every state the lifecycle can reach.
+EVERY_STATE = ["draft", "live", "halted", "discarded"]
 
 
 def abstention_payload(
@@ -601,3 +609,49 @@ def test_an_abstention_on_a_version_that_does_not_exist_is_refused(
         client.commit(ABSTENTION_AT, abstention_payload(version="exp:other"))
 
     assert abstentions(client, app_database) == 0
+
+
+# --- the halt (T29) ---
+
+
+def test_a_halt_stops_a_live_experiment_at_zero(client: Any) -> None:
+    bring_to(client, "live")
+
+    client.commit(HALT_AT, halt_payload())
+
+    assert client.read(DRAFT_AT, {})["status"] == "halted"
+    history = client.read(HISTORY_AT, {})
+    assert [e["kind"] for e in history["events"]] == ["rollout", "halt"]
+    assert history["current_exposure"] == 0, "exposure is derived from the halt, not stored"
+
+
+@pytest.mark.parametrize("state", NOT_LIVE)
+def test_a_halt_is_refused_unless_live(client: Any, state: str) -> None:
+    """A draft has nothing to stop; a halted or discarded version is terminal."""
+    bring_to(client, state)
+    before = observed(client)
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(HALT_AT, halt_payload())
+
+    assert observed(client) == before
+
+
+def test_a_halt_of_another_version_is_refused(client: Any) -> None:
+    bring_to(client, "live")
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(HALT_AT, halt_payload(version="exp:other"))
+
+    assert client.read(DRAFT_AT, {})["status"] == "live"
+
+
+def test_a_halted_version_cannot_be_rolled_out_again(client: Any) -> None:
+    """Assumption 6: relaunching is a new version and a fresh approval, never an un-halt."""
+    bring_to(client, "halted")
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(ROLLOUT_AT, rollout_payload(25))
+
+    assert len(client.rollouts) == 1
+    assert client.read(DRAFT_AT, {})["status"] == "halted"

@@ -50,4 +50,23 @@ def decide(
             "tenant.boundary",
             f"resource {request.resource} is outside tenant {envelope.tenant}",
         )
+    if refusal := halt_only_zeroes(spec, request):
+        return Decision(False, "halt.only_zeroes", refusal)
     return Decision(True, "allow", f"{envelope.principal} may {spec.name} on {request.resource}")
+
+
+def halt_only_zeroes(spec: ToolSpec, request: ActionRequest) -> str | None:
+    """A halt sets exposure to zero, and nothing else.
+
+    `halt_rollout` has no percentage argument, so its own prepare cannot name another
+    number. This holds for a request built any other way. It is here, not in the
+    `PRE_COMMIT` rule set, because there a refusal only escalates to a human, and an
+    existing grant skips the rules altogether. A halt to 5% is a rollout wearing a
+    halt's name, and no approval makes it one.
+    """
+    if spec.name != "halt_rollout" or request.payload.get("percentage") == 0:
+        return None
+    return (
+        f"a halt sets exposure to zero; this one names {request.payload.get('percentage')!r}, "
+        "which only a rollout, with a human's approval, may do"
+    )

@@ -874,14 +874,30 @@ and the test that proves it.
     a stage to a trigger kind. Whichever trigger woke an evaluation run, it can record
     an abstention.
 
-- [ ] **T29 — `halt_rollout` + `halt_only_zeroes`** · layers 6, 7, 8 · *M*
+- [x] **T29 — `halt_rollout` + `halt_only_zeroes`** · layers 6, 7, 8 · *M*
   - Acceptance: `live → halted` only; no `percentage` argument; policy refuses a
     non-zero halt payload before the surface.
   - Verify: `test_approval_tiers.py` (spec criterion 6); store contract.
+  - **Done.** `PRE_COMMIT` on `experiments:halt`, on the evaluation stage only, keyed
+    once per version.
+    - Its schema has no `percentage`; its prepare writes `0`.
+    - `live → halted` is one more row in `_TRANSITIONS`.
+    - Contract, both clients: refused from `draft`, `halted` and `discarded`, with every
+      read unchanged. A halted version cannot be rolled out again. History ends with
+      the halt, and `current_exposure == 0`.
+    - `halted` now joins every per-state contract case, so revise, discard and
+      abstention each run against it.
+  - **Placed in `decide`, not in the `PRE_COMMIT` rule set (spec deviation).** There,
+    a refusal only escalates the run to a human, and an existing grant skips the rules
+    entirely. So a person approving a hand-built "halt to 5%" would have got it
+    through. As a check in `decide`, which runs first on every call, a non-zero halt
+    is `PolicyDenied`, audited `denied` / `halt.only_zeroes`, and a human grant for
+    that exact fingerprint changes nothing (`test_approval_tiers.py`). It is still
+    layer 8, and `decide` still sees no free text.
 
 ### ✅ Checkpoint H — all nine registry tools
-- [ ] Exposure matrix exactly draft 5 / evaluation 5 / rollout 4 (spec criterion 2)
-- [ ] Human review
+- [x] Exposure matrix exactly draft 5 / evaluation 5 / rollout 4 (spec criterion 2)
+- [x] Human review — covered by the same go-ahead as Checkpoint G.
 
 - [ ] **T30 — Narrowness bar, concurrency, injection eval** · layers 6, 9 · *M*
   - Verify: `test_registry_tools.py` narrowness rules; 20 concurrent halts → one

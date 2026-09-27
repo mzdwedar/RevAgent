@@ -36,6 +36,7 @@ from agentstack.tools.experiments import (
     STATUSES,
     prepare_abstain,
     prepare_discard,
+    prepare_halt,
     prepare_list,
     prepare_revise,
 )
@@ -48,7 +49,7 @@ READS = {"get_experiment", "list_experiments"}
 EXPOSURE = {
     DRAFT_STAGE: READS
     | {"create_experiment_draft", "revise_draft_hypothesis", "discard_experiment_draft"},
-    EVALUATION_STAGE: READS | {"get_rollout_history", "record_abstention"},
+    EVALUATION_STAGE: READS | {"get_rollout_history", "record_abstention", "halt_rollout"},
     ROLLOUT_STAGE: READS | {"get_rollout_history", "roll_out_variant_to_percentage"},
 }
 
@@ -184,6 +185,7 @@ WRITES: dict[str, tuple[Prepare, dict[str, Any], str]] = {
         {"explanation": "the guardrail metric is inside its noise band"},
         "live",
     ),
+    "halt_rollout": (prepare_halt, {"reason": "churn rose in the variant"}, "live"),
 }
 
 

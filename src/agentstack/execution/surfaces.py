@@ -126,6 +126,7 @@ class Sandbox:
 #   {tenant}/experiments/{id}/revision  commit  reword a draft's hypothesis
 #   {tenant}/experiments/{id}/discard   commit  a draft becomes discarded
 #   {tenant}/experiments/{id}/abstention commit record why nothing was done; no status moves
+#   {tenant}/experiments/{id}/halt      commit  a live experiment's exposure goes to zero
 #
 # Both clients below hold the same preconditions, and `tests/infra/test_registry_store.py`
 # runs one contract suite over both. A precondition that does not hold is
@@ -147,6 +148,7 @@ _COMMITS: dict[str | None, str] = {
     "revision": "revise",
     "discard": "discard",
     "abstention": "abstention",
+    "halt": "halt",
 }
 
 # Every state an experiment can be in. An abstention is a record, not a transition
@@ -154,12 +156,13 @@ _COMMITS: dict[str | None, str] = {
 _ANY_STATE = ("draft", "live", "halted", "discarded")
 
 # Each status change: the states it may start from, and the state it leaves. A rollout
-# may widen a live experiment or launch a draft; only a draft may be discarded. From any
-# other state the action is refused. `halted` and `discarded` are terminal for a version
-# in iteration 1 (SPEC-registry.md).
+# may widen a live experiment or launch a draft; only a draft may be discarded; only a
+# live experiment may be halted. From any other state the action is refused. `halted`
+# and `discarded` are terminal for a version in iteration 1 (SPEC-registry.md).
 _TRANSITIONS: dict[str, tuple[tuple[str, ...], str]] = {
     "rollout": (("draft", "live"), "live"),
     "discard": (("draft",), "discarded"),
+    "halt": (("live",), "halted"),
 }
 
 # The constraints a revision can meet, and what each means. The statement failed whole,
