@@ -1134,7 +1134,26 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   `approval.policy:…`; also after SIGKILL, retry, redelivery and reset)
 - [x] No envelope or prompt in the recorded history (spot check on the real history JSON:
   no instruction text, no `vault://` credential ref, no scope)
-- [ ] Human review
+- [x] Human review (2026-09-27: "let's continue")
+
+- [x] **T40b — Record the frozen cohort** · layers 5, 3, 10 · *S* (added 2026-09-27)
+  - **Why it's here (human decision):** T41–T43 need facts about the frozen cohort that
+    were never stored. The rollout payload needs its predicate (`targeting_model_version`,
+    `risk_threshold`), and the Slack ask needs its size and value at risk (approval
+    legibility). T40 deferred cohort *evidence for the model*; these are the action's
+    own arguments and what the approver must see. Also found: nothing in production
+    posts the first approval ask, since `post_approval` and `fire_reasks`'s `ask` are
+    only ever called from tests. T41 has to fill that seam.
+  - Acceptance: migration `0014` adds `frozen_cohorts` (insert-only, by trigger, like the
+    registry history), written for a `propose` cycle by the evaluation activity.
+  - **When it is written:** `cycles.evaluate_to_settled` gains a `before_settle` hook,
+    called after layer 8 authorised the outcome and before the cycle settles. A refused
+    proposal leaves no row, and a death between the two is finished by the rerun (same
+    version, same row). The other order could lose the cohort for good, because a
+    settled cycle is never evaluated again.
+  - Verify: `tests/durability/test_frozen_cohorts.py`, 5 tests: a proposal records it;
+    a refused proposal and an abstention don't; death between record and settle converges
+    on one row; UPDATE and DELETE are refused with the constraint named.
 
 - [ ] **T41 — Approval wait and re-ask on timers; retire `deadlines.py`** · layer 3 · *M*
   - Acceptance: `park_wait` activity writes the wait row (fingerprint, summary,

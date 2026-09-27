@@ -15,6 +15,7 @@ import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
+from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.interfaces import preflight_cli
 from agentstack.interfaces.wiring import ExperimentTurns, build_stack
 from agentstack.model.ollama_engine import OllamaEngine
@@ -77,6 +78,7 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
             activities = RunActivities(
                 runs=RunStore(db=db),
                 cycles=CycleStore(db=db),
+                cohorts=FrozenCohortStore(db=db),
                 waits=WaitStore(db=db),
                 # The scorer preflight just proved can load its weights.
                 scorer=TabPFNScorer(),

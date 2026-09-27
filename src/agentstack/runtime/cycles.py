@@ -123,7 +123,16 @@ def evaluate(store: CycleStore, trigger: TriggerEvent, evaluator: Evaluator) -> 
     return store.settle(trigger, outcome, run_id)
 
 
-def evaluate_to_settled(store: CycleStore, trigger: TriggerEvent, evaluator: Evaluator) -> Cycle:
+BeforeSettle = Callable[[Outcome, str | None], None]
+
+
+def evaluate_to_settled(
+    store: CycleStore,
+    trigger: TriggerEvent,
+    evaluator: Evaluator,
+    *,
+    before_settle: BeforeSettle | None = None,
+) -> Cycle:
     """`evaluate` for a caller that is the cycle's only evaluator and may run it twice.
 
     That caller is the Temporal activity (SPEC-durable-runtime). The run's one workflow
@@ -135,10 +144,17 @@ def evaluate_to_settled(store: CycleStore, trigger: TriggerEvent, evaluator: Eva
 
     `evaluate` keeps its meaning for `fanout.py`, where two workers race one trigger
     concurrently and an unsettled claim may belong to the other one, still working.
+
+    `before_settle` records what the outcome rests on (T40b: the frozen cohort). It runs
+    after layer 8 authorised the outcome, so a refused one leaves nothing behind, and
+    before the cycle settles, so a death between the two is finished by the rerun. The
+    other order would lose it: a settled cycle is never evaluated again.
     """
     cycle, _ = store.claim(trigger)
     if cycle.settled:
         return cycle
     outcome, run_id = evaluator(trigger)
     authorize(trigger.kind, outcome)
+    if before_settle is not None:
+        before_settle(outcome, run_id)
     return store.settle(trigger, outcome, run_id)

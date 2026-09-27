@@ -20,6 +20,7 @@ from typing import Any
 from temporalio.client import Client, WorkflowHandle
 from temporalio.testing import WorkflowEnvironment
 
+from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces.wiring import ExperimentTurns, Stack
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
@@ -96,6 +97,7 @@ def activities_for(
     return RunActivities(
         runs=RunStore(db=db),
         cycles=CycleStore(db=db),
+        cohorts=FrozenCohortStore(db=db),
         waits=WaitStore(db=db),
         scorer=scorer or NoScoring(),
         trigger_deadline=trigger_deadline,

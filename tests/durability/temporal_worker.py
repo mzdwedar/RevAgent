@@ -24,6 +24,7 @@ import pytest
 
 from agentstack.context import datasets
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
+from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.interfaces.wiring import build_stack
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cadence import TriggerCadence
@@ -123,6 +124,7 @@ async def serve(args: argparse.Namespace) -> None:
             activities = RunActivities(
                 runs=RunStore(db=db),
                 cycles=CycleStore(db=db),
+                cohorts=FrozenCohortStore(db=db),
                 waits=WaitStore(db=db),
                 scorer=RecordingScorer(Path(args.scorer_calls)),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,

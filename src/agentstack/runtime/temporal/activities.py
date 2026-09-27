@@ -22,16 +22,17 @@ from typing import Protocol
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.policy.envelope import IdentityEnvelope
-from agentstack.policy.triggers import TriggerEvent, TriggerKind
+from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind
 from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
 from agentstack.runtime.drafting import draft_instruction
 from agentstack.runtime.graph import finished_turn, turn_thread
 from agentstack.runtime.loop import TurnDeps
 from agentstack.runtime.loop import run_turn as take_turn
-from agentstack.runtime.operator import evaluate_trigger
+from agentstack.runtime.operator import Evaluation, evaluate_trigger
 from agentstack.runtime.run import Run, RunStore
 from agentstack.runtime.temporal.contracts import (
     ENSURE_RUN,
@@ -82,6 +83,7 @@ class RunActivities:
         *,
         runs: RunStore,
         cycles: cycles.CycleStore,
+        cohorts: FrozenCohortStore,
         waits: WaitStore,
         scorer: ChurnScorer,
         trigger_deadline: timedelta,
@@ -90,6 +92,7 @@ class RunActivities:
     ) -> None:
         self._runs = runs
         self._cycles = cycles
+        self._cohorts = cohorts
         self._waits = waits
         self._scorer = scorer
         self._trigger_deadline = trigger_deadline
@@ -123,11 +126,21 @@ class RunActivities:
             tenant=trigger.tenant,
             source=trigger.source,
         )
-        cycle = cycles.evaluate_to_settled(
-            self._cycles,
-            event,
-            lambda e: evaluate_trigger(e, scorer=self._scorer, rule=self._rule).as_seam_result(),
-        )
+        evaluated: list[Evaluation] = []
+
+        def evaluator(e: TriggerEvent) -> tuple[Outcome, str | None]:
+            evaluated.append(evaluate_trigger(e, scorer=self._scorer, rule=self._rule))
+            return evaluated[-1].as_seam_result()
+
+        def freeze(outcome: Outcome, _: str | None) -> None:
+            # Authorised and not yet settled: the one moment the cohort is recorded (T40b).
+            cohort = evaluated[-1].cohort if evaluated else None
+            if outcome is Outcome.PROPOSE and cohort is not None:
+                self._cohorts.record(
+                    tenant=event.tenant, experiment_id=event.experiment_id, cohort=cohort
+                )
+
+        cycle = cycles.evaluate_to_settled(self._cycles, event, evaluator, before_settle=freeze)
         return CycleResult(
             experiment_id=cycle.experiment_id,
             data_as_of=cycle.data_as_of,
