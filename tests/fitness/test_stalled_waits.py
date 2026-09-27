@@ -18,7 +18,9 @@ import pytest
 
 from agentstack.interfaces import operator_cli
 from agentstack.interfaces.inbound import InboundEvent
+from agentstack.interfaces.triggers import parse_trigger
 from agentstack.interfaces.wiring import Stack, build_stack, handle
+from agentstack.runtime.cycles import UNSETTLED_AFTER, CycleStore
 from agentstack.runtime.deadlines import ReaskFailed, fire_reasks
 from agentstack.runtime.run import Run
 from agentstack.runtime.waits import (
@@ -160,6 +162,56 @@ def test_operator_stalled_reports_it_and_exits_nonzero(
     assert wait.wait_id in out and run.run_id in out and f"tenant {TENANT}" in out
     assert "overdue 1d0h" in out
     assert "1 stalled" in out
+
+
+def test_operator_stalled_reports_a_cycle_that_never_settled(
+    app_database: Database, app_database_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Migration 0005 says `operator stalled` works through unsettled cycles; until
+    Checkpoint J nothing did. A cycle claimed long ago and never settled was refused
+    by layer 8, or is stuck retrying. Either way a person should hear about it."""
+    CycleStore(db=app_database).claim(
+        parse_trigger(
+            {
+                "kind": "metric_movement",
+                "experiment_id": "exp-7",
+                "data_as_of": "telecom:abc",
+                "tenant": TENANT,
+            },
+            source="test",
+        )
+    )
+
+    code = operator_cli.main(
+        ["--url", app_database_url, "stalled"], now=later(UNSETTLED_AFTER + timedelta(minutes=1))
+    )
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "unsettled  exp-7 @ telecom:abc  kind metric_movement" in out
+    assert "1 unsettled" in out
+
+
+def test_a_cycle_still_being_evaluated_is_not_reported(
+    app_database: Database, app_database_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every cycle is unsettled while it scores. That is work in progress, not a stall."""
+    CycleStore(db=app_database).claim(
+        parse_trigger(
+            {
+                "kind": "data_arrival",
+                "experiment_id": "exp-7",
+                "data_as_of": "telecom:abc",
+                "tenant": TENANT,
+            },
+            source="test",
+        )
+    )
+
+    code = operator_cli.main(["--url", app_database_url, "stalled"], now=later(timedelta(0)))
+
+    assert code == 0
+    assert "0 unsettled" in capsys.readouterr().out
 
 
 def test_operator_stalled_is_quiet_when_nothing_is(

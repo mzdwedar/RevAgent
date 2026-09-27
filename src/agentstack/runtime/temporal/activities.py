@@ -70,10 +70,11 @@ class RunActivities:
 
     @activity.defn(name=EVALUATE_CYCLE)
     def evaluate_cycle(self, trigger: Trigger) -> CycleResult:
-        """`cycles.evaluate` with the operator's evaluator in its seam.
+        """`cycles.evaluate_to_settled` with the operator's evaluator in its seam.
 
-        A rerun after the claim landed returns the cycle that's already there without
-        scoring again, which is what makes this safe to run at least once.
+        A rerun after the cycle settled returns it without scoring again. A rerun after
+        an attempt that died before settling evaluates it (Checkpoint J). Either way it
+        is safe to run at least once, and it never reports "no outcome" as an answer.
         """
         event = TriggerEvent(
             kind=TriggerKind(trigger.kind),
@@ -82,7 +83,7 @@ class RunActivities:
             tenant=trigger.tenant,
             source=trigger.source,
         )
-        cycle = cycles.evaluate(
+        cycle = cycles.evaluate_to_settled(
             self._cycles,
             event,
             lambda e: evaluate_trigger(e, scorer=self._scorer, rule=self._rule).as_seam_result(),

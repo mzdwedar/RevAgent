@@ -5,7 +5,9 @@
 `stalled` exists because trigger-based waiting fails silently: a run whose trigger
 never came looks exactly like one waiting patiently, unless something asks. This is
 the thing that asks. It also lists runs parked in `needs_migration` (criterion 21),
-labelled separately: nothing is late there, the code moved under them.
+labelled separately: nothing is late there, the code moved under them. And evaluation
+cycles claimed long ago that never settled: layer 8 refused the outcome, or the cycle
+is stuck retrying. A refusal left unsettled on purpose is only useful if it's seen.
 
 Exits 1 when anything is stalled, so a scheduler running it can alert on the exit code
 rather than on someone reading the output.
@@ -18,6 +20,7 @@ import re
 import sys
 from datetime import UTC, datetime, timedelta
 
+from agentstack.runtime.cycles import UNSETTLED_AFTER, CycleStore
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.waits import NEEDS_MIGRATION, WaitStore
 from agentstack.storage.database import Database
@@ -73,10 +76,21 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
                 f"  stalled  {where}  due {wait.deadline:%Y-%m-%d %H:%M%z}  "
                 f"overdue {_ago(now - wait.deadline)}"
             )
+        # Every cycle is unsettled while it scores; only one that stays that way is news.
+        claimed_before = now - max(args.older_than, UNSETTLED_AFTER)
+        cycles = [c for c in CycleStore(db=db).unsettled() if c.claimed_at <= claimed_before]
+        for cycle in cycles:
+            print(
+                f"  unsettled  {cycle.experiment_id} @ {cycle.data_as_of}  "
+                f"kind {cycle.kind.value}  claimed {_ago(now - cycle.claimed_at)} ago"
+            )
 
     migrations = sum(1 for w in waits if w.kind == NEEDS_MIGRATION)
-    print(f"{len(waits) - migrations} stalled, {migrations} {NEEDS_MIGRATION}")
-    return 1 if waits else 0
+    print(
+        f"{len(waits) - migrations} stalled, {migrations} {NEEDS_MIGRATION}, "
+        f"{len(cycles)} unsettled"
+    )
+    return 1 if waits or cycles else 0
 
 
 def _ago(delta: timedelta) -> str:

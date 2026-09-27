@@ -16,7 +16,9 @@ from typing import Any
 
 import pytest
 
+from agentstack.interfaces.triggers import parse_trigger
 from agentstack.interfaces.wiring import build_stack
+from agentstack.policy.triggers import OutcomeNotAuthorized
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import CycleResult, RunProgress, RunStart, Trigger
@@ -151,3 +153,50 @@ def test_the_activity_rerun_after_it_wrote_is_one_cycle(app_database: Database) 
     assert isinstance(first, CycleResult) and first.outcome == "propose"
     assert scorer.calls == 1
     assert app_database.fetch_one("SELECT count(*) FROM trigger_cycles") == (1,)
+
+
+def test_a_cycle_whose_attempt_died_mid_scoring_is_finished_by_the_retry(
+    app_database: Database,
+) -> None:
+    """Checkpoint J, finding (a). The first attempt claimed the cycle and died before it
+    could settle: the worker was killed while scoring. Temporal reruns the activity.
+
+    Returning the claimed cycle as it stands would hand the workflow "no outcome" as a
+    success, with nothing scored, and the run would move on past a watermark it never
+    evaluated. Under Temporal the workflow is this cycle's only evaluator, and it runs
+    one cycle at a time, so a claim it finds unsettled is its own dead attempt.
+    """
+    store = CycleStore(db=app_database)
+    event = parse_trigger(
+        {
+            "kind": "data_arrival",
+            "experiment_id": "exp-7",
+            "data_as_of": WATERMARK,
+            "tenant": TENANT,
+        },
+        source="test",
+    )
+    store.claim(event)  # the attempt that died: claimed, never settled
+    scorer = StubScorer()
+
+    result = activities_for(app_database, scorer=scorer, rule=RULE).evaluate_cycle(trigger())
+
+    assert result.outcome == "propose"
+    assert result.experiment_version is not None
+    assert scorer.calls == 1
+    assert store.unsettled() == ()
+
+
+def test_a_refused_cycle_is_refused_again_not_resumed_into_an_outcome(
+    app_database: Database,
+) -> None:
+    """The other way a cycle stays unsettled: layer 8 refused its outcome. Evaluating it
+    again reaches the same refusal. It never becomes an outcome by being retried."""
+    activities = activities_for(app_database, scorer=StubScorer(), rule=RULE)
+
+    for _ in range(2):
+        with pytest.raises(OutcomeNotAuthorized):
+            activities.evaluate_cycle(trigger(kind="metric_movement"))
+
+    (unsettled,) = CycleStore(db=app_database).unsettled()
+    assert unsettled.kind.value == "metric_movement"

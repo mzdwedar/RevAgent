@@ -1049,15 +1049,26 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   (`tests/durability/test_worker_death.py`: SIGKILL while parked, a trigger delivered with
   no worker alive, and a fresh process resumes in ~10.2s; scored once, wait settled)
 - [x] `tests/durability`, fitness, gates green (98%, stack_guard intact, 13/13 gates)
-- [ ] Human review. **Open findings to decide:**
-  (a) A worker death *mid-scoring*: the retried `evaluate_cycle` finds the claim
-  unsettled and returns `outcome=None, refusal=None` as a success, with 0 scoring
-  calls. Verified with a throwaway probe. Proposed: in the activity path only
-  (`fanout.py` still relies on today's behaviour until T45), re-evaluate a
-  claimed-but-unsettled cycle.
-  (b) Nothing in `src` calls `CycleStore.unsettled()`, although migration 0005 says
-  `operator stalled` reports unsettled cycles.
-  (c) The `trigger_cycles` key has no tenant: `exp-7` at two tenants would share cycles.
+- [x] Human review (2026-09-27: "let's continue", taken as accepting the proposals below)
+  (a) **Fixed.** A worker death *mid-scoring*: the retried `evaluate_cycle` found the
+  claim unsettled and returned `outcome=None, refusal=None` as a success, with 0 scoring
+  calls (verified first with a throwaway probe). The activity now uses
+  `cycles.evaluate_to_settled`. The run's workflow is the cycle's only evaluator, one
+  cycle at a time, so a claim it finds unsettled is its own dead attempt: it evaluates
+  again and settles, or is refused again. `cycles.evaluate` keeps its meaning for
+  `fanout.py`, whose racing threads rely on it until T45 retires them. Two tests: the
+  retry finishes the cycle (scored once, settled), and a refused cycle is refused
+  again, never resumed into an outcome.
+  (b) **Fixed.** `operator stalled` now lists cycles still unsettled
+  `UNSETTLED_AFTER` (10 min) after their claim, and exits 1 on them. That makes
+  migration 0005's comment true. Every cycle is unsettled while it scores, so a fresh
+  claim isn't reported (tested both ways).
+  (c) **Logged, not fixed: pre-existing, outside Phase 8.** The `trigger_cycles` key is
+  `(experiment_id, data_as_of, kind)`, with no tenant, while `experiments` and
+  `experiment_runs` key on `(tenant, experiment_id)`. `exp-7` at two tenants would
+  share one cycle, and the second tenant's trigger would be deduplicated against the
+  first's. The fix is a fix-forward migration adding `tenant` to the key, plus the
+  store and the claim. It needs its own task and a human decision on the migration.
 
 - [ ] **T39 — Idempotency keys never derive from Temporal identity** · layer 6 · *XS*
   - Acceptance: nothing in `agentstack.tools` imports `temporalio`.
