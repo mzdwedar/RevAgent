@@ -1045,9 +1045,19 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     execution would reuse wait id `…-trigger-0`.
 
 ### ✅ Checkpoint J — orchestration without effects (before the first side effect)
-- [ ] A real trigger drives a real cycle through the worker, killed and resumed, with no effect wired
-- [ ] `tests/durability`, fitness, gates green
-- [ ] Human review
+- [x] A real trigger drives a real cycle through the worker, killed and resumed, with no effect wired
+  (`tests/durability/test_worker_death.py`: SIGKILL while parked, a trigger delivered with
+  no worker alive, and a fresh process resumes in ~10.2s; scored once, wait settled)
+- [x] `tests/durability`, fitness, gates green (98%, stack_guard intact, 13/13 gates)
+- [ ] Human review. **Open findings to decide:**
+  (a) A worker death *mid-scoring*: the retried `evaluate_cycle` finds the claim
+  unsettled and returns `outcome=None, refusal=None` as a success, with 0 scoring
+  calls. Verified with a throwaway probe. Proposed: in the activity path only
+  (`fanout.py` still relies on today's behaviour until T45), re-evaluate a
+  claimed-but-unsettled cycle.
+  (b) Nothing in `src` calls `CycleStore.unsettled()`, although migration 0005 says
+  `operator stalled` reports unsettled cycles.
+  (c) The `trigger_cycles` key has no tenant: `exp-7` at two tenants would share cycles.
 
 - [ ] **T39 — Idempotency keys never derive from Temporal identity** · layer 6 · *XS*
   - Acceptance: nothing in `agentstack.tools` imports `temporalio`.
