@@ -13,15 +13,36 @@ from __future__ import annotations
 
 from temporalio import activity
 
+from agentstack.context.targeting import TargetingRule
+from agentstack.policy.triggers import TriggerEvent, TriggerKind
+from agentstack.prediction.churn import ChurnScorer
+from agentstack.runtime import cycles
+from agentstack.runtime.operator import evaluate_trigger
 from agentstack.runtime.run import Run, RunStore
-from agentstack.runtime.temporal.contracts import ENSURE_RUN, RunStart
+from agentstack.runtime.temporal.contracts import (
+    ENSURE_RUN,
+    EVALUATE_CYCLE,
+    CycleResult,
+    RunStart,
+    Trigger,
+)
 
 
 class RunActivities:
     """Activities bound to the stores they write, built once per worker."""
 
-    def __init__(self, *, runs: RunStore) -> None:
+    def __init__(
+        self,
+        *,
+        runs: RunStore,
+        cycles: cycles.CycleStore,
+        scorer: ChurnScorer,
+        rule: TargetingRule | None = None,
+    ) -> None:
         self._runs = runs
+        self._cycles = cycles
+        self._scorer = scorer
+        self._rule = rule
 
     @activity.defn(name=ENSURE_RUN)
     def ensure_run(self, start: RunStart) -> str:
@@ -34,3 +55,31 @@ class RunActivities:
             channel=start.channel,
         )
         return self._runs.ensure(run).run_id
+
+    @activity.defn(name=EVALUATE_CYCLE)
+    def evaluate_cycle(self, trigger: Trigger) -> CycleResult:
+        """`cycles.evaluate` with the operator's evaluator in its seam.
+
+        A rerun after the claim landed returns the cycle that's already there without
+        scoring again, which is what makes this safe to run at least once.
+        """
+        event = TriggerEvent(
+            kind=TriggerKind(trigger.kind),
+            experiment_id=trigger.experiment_id,
+            data_as_of=trigger.data_as_of,
+            tenant=trigger.tenant,
+            source=trigger.source,
+        )
+        cycle = cycles.evaluate(
+            self._cycles,
+            event,
+            lambda e: evaluate_trigger(e, scorer=self._scorer, rule=self._rule).as_seam_result(),
+        )
+        return CycleResult(
+            experiment_id=cycle.experiment_id,
+            data_as_of=cycle.data_as_of,
+            kind=cycle.kind.value,
+            outcome=None if cycle.outcome is None else cycle.outcome.value,
+            # `trigger_cycles.run_id` holds the experiment version the cycle froze.
+            experiment_version=cycle.run_id,
+        )

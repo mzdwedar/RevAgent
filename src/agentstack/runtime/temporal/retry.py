@@ -29,6 +29,10 @@ REFUSALS = (
     "ApprovalRequired",
     "ApprovalStale",
     "ApproverNotAuthorized",
+    # A trigger kind reaching an outcome it may not (policy/triggers.py). Retrying
+    # it is worse than pointless: the second attempt finds the cycle already claimed,
+    # returns it unsettled, and the refusal disappears into a success.
+    "OutcomeNotAuthorized",
 )
 
 # Not refusals: failures that the same state reproduces every time. A store that expects a

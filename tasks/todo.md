@@ -912,8 +912,8 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     foreign key, the test had no session, and Temporal's default policy retried the
     failing activity forever. That's rule 2's reason for existing, and why every
     result wait in the tests is now bounded.
-  - Not yet covered: `worker_cli._serve`, the poll loop itself (78% of the file). The
-    durability tests start it as a real process from T36.
+  - Not yet covered: `worker_cli._serve`, the poll loop itself (78% of the file).
+    Covered at T36 (see there).
 
 - [x] **T35 — The one RetryPolicy + declared-activity interceptor** · layer 3 · *S*
   - Acceptance: `retry.py`: refusals (`UnresolvedEffect`, `ApprovalStale`,
@@ -951,7 +951,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   `activities`, `worker` or `interceptors` to `execution.gateway`)
 - [x] Human review (2026-09-27: both open questions decided, see T35)
 
-- [ ] **T36 — Trigger loop: an evaluation cycle as an activity** · layer 3 · *M*
+- [x] **T36 — Trigger loop: an evaluation cycle as an activity** · layer 3 · *M*
   - Acceptance: the workflow waits for a trigger signal and runs `evaluate_cycle`
     (a thin wrapper over `cycles.evaluate` + `operator`); `metric_movement` still can't propose.
   - Verify: `test_trigger_asymmetry`, `test_trigger_to_candidate` green through the
@@ -959,6 +959,27 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     `OutcomeNotAuthorized` is non-retryable: exactly one attempt, and the workflow sees
     the refusal (decided at Checkpoint I).
   - Files: `runtime/temporal/{workflows,activities,contracts}.py`, `tests/durability/test_trigger_cycle.py`.
+  - **Done.** 5 tests in `test_trigger_cycle`, all through a real worker except the
+    direct rerun: a trigger settles one cycle; a trigger delivered three times scores
+    once and leaves one `trigger_cycles` row; `metric_movement` is refused with
+    `OutcomeNotAuthorized` and stays unsettled; a refused cycle doesn't end the run;
+    the activity called twice converges.
+  - **The run is open-ended now**, one per experiment (SPEC.md), so tests can't await
+    its result. The `progress` query reports where it is (a query, so never history),
+    and `tests/temporal_support.py` polls it with a bound. The T34 tests moved onto it.
+  - Checked against a mutant: with `OutcomeNotAuthorized` off the list, attempt 2
+    returns `outcome=None, refusal=None`. The refusal disappears into a success, which
+    is exactly what Checkpoint I predicted.
+  - `worker_cli._serve` is now covered by an in-process test that serves a run and is
+    then cancelled (95% of the file). A real `agentstack-worker` process can't be the
+    test harness, because it stops at preflight without TabPFN's weights. So the
+    SIGKILL tests (T40, T44) run their own worker processes built on `build_worker`.
+  - `Trigger` in `contracts` mirrors `TriggerEvent` as strings, because contract 6 keeps
+    `policy` out of workflow code. The activity rebuilds the event, and the kind's
+    authority is still only read by `cycles.evaluate`.
+  - **Open, for T37:** nothing maps an experiment to its run yet. `deliver_trigger`
+    needs a workflow id, and it has to start the run if there isn't one, which needs
+    a session. Layer 1 may resolve neither.
 
 - [ ] **T37 — Ingress hands triggers to the workflow** · layer 1 · *S*
   - Acceptance: `interfaces/triggers.py` calls `client.deliver_trigger` (signal-with-start)

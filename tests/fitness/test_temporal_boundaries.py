@@ -16,9 +16,9 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -32,16 +32,19 @@ from agentstack.interfaces import worker_cli
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.approvers import ApproverNotAuthorized
 from agentstack.policy.decisions import PolicyDenied
+from agentstack.policy.triggers import OutcomeNotAuthorized
+from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal import client as temporal_client
 from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import start_run
-from agentstack.runtime.temporal.contracts import RunEnd, RunStart, workflow_id
+from agentstack.runtime.temporal.contracts import RunProgress, RunStart, workflow_id
 from agentstack.runtime.temporal.interceptors import DECLARED, DeclaredActivitiesOnly
 from agentstack.runtime.temporal.retry import DETERMINISTIC, REFUSALS, RETRY, UNDECLARED
 from agentstack.runtime.temporal.worker import build_worker
 from agentstack.storage.database import Database, IntegrityViolation
 from tests.conftest import connect_temporal
+from tests.temporal_support import NoScoring, progress_until, running_worker
 
 from .conftest import TENANT, USER
 from .temporal_probes import CallOnce
@@ -127,8 +130,9 @@ def test_the_workflow_id_is_the_run_and_nothing_else() -> None:
     assert workflow_id("run-abc") == "experiment-run:run-abc"
 
 
-# A failing activity is retried until its policy says stop, and until T35 there is no
-# such policy. Every wait on a result is bounded, so a failure fails instead of hanging.
+# A failing activity is retried until its policy says stop, and a regression in the
+# policy is exactly what some of these tests catch. Every wait on a result is bounded,
+# so a failure fails instead of hanging.
 RESULT_TIMEOUT_S = 30
 
 
@@ -136,26 +140,17 @@ def _start(run_id: str, session_id: str) -> RunStart:
     return RunStart(run_id=run_id, session_id=session_id, tenant=TENANT, user=USER)
 
 
-@asynccontextmanager
-async def _worker(address: str, queue: str, db: Database) -> AsyncIterator[Client]:
-    client = await connect_temporal(address)
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        activities = RunActivities(runs=RunStore(db=db))
-        async with build_worker(client, activities=activities, executor=executor, task_queue=queue):
-            yield client
-
-
 def test_a_run_records_itself_in_postgres(
     temporal_address: str, task_queue: str, app_database: Database, session_id: str
 ) -> None:
     run_id = f"run-{uuid.uuid4()}"
 
-    async def run_once() -> RunEnd:
-        async with _worker(temporal_address, task_queue, app_database) as client:
+    async def run_once() -> RunProgress:
+        async with running_worker(temporal_address, task_queue, app_database) as client:
             handle = await start_run(client, _start(run_id, session_id), task_queue=task_queue)
-            return await asyncio.wait_for(handle.result(), RESULT_TIMEOUT_S)
+            return await progress_until(handle, lambda p: p.recorded)
 
-    assert asyncio.run(run_once()) == RunEnd(run_id=run_id, status="complete")
+    assert asyncio.run(run_once()).run_id == run_id
     run = RunStore(db=app_database).get(run_id)
     assert run is not None and run.tenant == TENANT
 
@@ -167,20 +162,48 @@ def test_five_concurrent_starts_are_one_workflow_and_one_runs_row(
     run_id = f"run-{uuid.uuid4()}"
 
     async def race() -> set[str | None]:
-        async with _worker(temporal_address, task_queue, app_database) as client:
+        async with running_worker(temporal_address, task_queue, app_database) as client:
             handles = await asyncio.gather(
                 *(
                     start_run(client, _start(run_id, session_id), task_queue=task_queue)
                     for _ in range(5)
                 )
             )
-            results = asyncio.gather(*(h.result() for h in handles))
-            await asyncio.wait_for(results, RESULT_TIMEOUT_S)
+            await asyncio.gather(*(progress_until(h, lambda p: p.recorded) for h in handles))
             return {h.first_execution_run_id for h in handles}
 
     assert len(asyncio.run(race())) == 1
     row = app_database.fetch_one("SELECT count(*) FROM runs WHERE run_id = %s", (run_id,))
     assert row == (1,)
+
+
+def test_the_worker_the_cli_serves_runs_what_it_is_handed(
+    temporal_address: str,
+    task_queue: str,
+    app_database_url: str,
+    app_database: Database,
+    session_id: str,
+) -> None:
+    """The entry point's own wiring, not a test-built worker: pool, stores, scorer,
+    guard. Served in-process and cancelled, since a real `agentstack-worker` process
+    would stop at preflight here without TabPFN's weights."""
+    run_id = f"run-{uuid.uuid4()}"
+
+    async def serve_one() -> RunProgress:
+        serving = asyncio.create_task(
+            worker_cli._serve(temporal_address, task_queue, app_database_url)
+        )
+        try:
+            client = await connect_temporal(temporal_address)
+            handle = await start_run(client, _start(run_id, session_id), task_queue=task_queue)
+            return await progress_until(handle, lambda p: p.recorded)
+        finally:
+            serving.cancel()
+            with suppress(asyncio.CancelledError):
+                await serving
+
+    assert asyncio.run(serve_one()).recorded
+    assert RunStore(db=app_database).get(run_id) is not None
 
 
 def test_the_worker_exits_nonzero_at_start_when_temporal_is_unreachable(
@@ -229,6 +252,7 @@ REFUSAL_TYPES: dict[str, type[Exception]] = {
         ApprovalRequired,
         ApprovalStale,
         ApproverNotAuthorized,
+        OutcomeNotAuthorized,
     )
 }
 
@@ -345,7 +369,10 @@ def test_the_production_worker_installs_the_guard_and_declares_all_it_registers(
     async def configured() -> dict[str, object]:
         client = await connect_temporal(temporal_address)
         with ThreadPoolExecutor(max_workers=1) as executor:
-            activities = RunActivities(runs=RunStore(db=Database.__new__(Database)))
+            db = Database.__new__(Database)  # never queried: this only reads the config
+            activities = RunActivities(
+                runs=RunStore(db=db), cycles=CycleStore(db=db), scorer=NoScoring()
+            )
             worker = build_worker(client, activities=activities, executor=executor)
             return dict(worker.config())
 

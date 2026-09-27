@@ -16,6 +16,8 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from agentstack.interfaces import preflight_cli
+from agentstack.prediction.engine import TabPFNScorer
+from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import TemporalUnavailable, connect, temporal_address
@@ -59,7 +61,13 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
         open_pool(url, min_size=1, max_size=MAX_ACTIVITIES) as pool,
         ThreadPoolExecutor(max_workers=MAX_ACTIVITIES, thread_name_prefix="activity") as executor,
     ):
-        activities = RunActivities(runs=RunStore(db=Database(pool=pool)))
+        db = Database(pool=pool)
+        activities = RunActivities(
+            runs=RunStore(db=db),
+            cycles=CycleStore(db=db),
+            # The scorer preflight just proved can load its weights.
+            scorer=TabPFNScorer(),
+        )
         worker = build_worker(
             client, activities=activities, executor=executor, task_queue=task_queue
         )

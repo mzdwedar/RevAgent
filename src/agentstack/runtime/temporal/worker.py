@@ -28,7 +28,7 @@ def build_worker(
         client,
         task_queue=task_queue,
         workflows=[ExperimentWorkflow],
-        activities=[activities.ensure_run],
+        activities=[activities.ensure_run, activities.evaluate_cycle],
         activity_executor=executor,
         interceptors=[DeclaredActivitiesOnly()],
     )

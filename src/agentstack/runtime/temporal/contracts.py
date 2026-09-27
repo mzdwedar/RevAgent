@@ -19,6 +19,7 @@ TASK_QUEUE = "experiment-runs"
 # strings, never to `activities.py`: importing it would drag the gateway and the
 # driver into the sandbox, and the sandbox would not object (E4).
 ENSURE_RUN = "ensure_run"
+EVALUATE_CYCLE = "evaluate_cycle"
 
 
 def workflow_id(run_id: str) -> str:
@@ -44,3 +45,46 @@ class RunStart:
 class RunEnd:
     run_id: str
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class Trigger:
+    """A parsed trigger, as strings.
+
+    `policy.triggers.TriggerEvent` is the real type, but contract 6 keeps workflow code
+    away from `policy`, so this carries the same fields and the activity rebuilds the
+    event. The kind is a string here: authority is decided in the activity, by
+    `cycles.evaluate`, never by the workflow reading it.
+    """
+
+    kind: str
+    experiment_id: str
+    data_as_of: str
+    tenant: str
+    source: str = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class CycleResult:
+    """What one trigger came to. A verdict, not evidence: the cohort and its reason
+    stay in Postgres and the trace.
+
+    `outcome` is None when the cycle was refused, and `refusal` then names the type.
+    """
+
+    experiment_id: str
+    data_as_of: str
+    kind: str
+    outcome: str | None
+    experiment_version: str | None = None
+    refusal: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunProgress:
+    """Where the run is, for whoever asks. Read by query, so it's never history."""
+
+    run_id: str
+    recorded: bool
+    pending_triggers: int
+    cycles: tuple[CycleResult, ...]
