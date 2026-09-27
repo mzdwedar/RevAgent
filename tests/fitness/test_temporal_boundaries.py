@@ -22,19 +22,29 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from temporalio import activity
 from temporalio.client import Client
+from temporalio.worker import Worker
 
+from agentstack.execution.gateway import UnresolvedEffect
+from agentstack.execution.surfaces import SandboxViolation, SurfaceRefused
 from agentstack.interfaces import worker_cli
+from agentstack.policy.approval import ApprovalRequired, ApprovalStale
+from agentstack.policy.approvers import ApproverNotAuthorized
+from agentstack.policy.decisions import PolicyDenied
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal import client as temporal_client
 from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import RunEnd, RunStart, workflow_id
+from agentstack.runtime.temporal.interceptors import DECLARED, DeclaredActivitiesOnly
+from agentstack.runtime.temporal.retry import REFUSALS, RETRY, UNDECLARED
 from agentstack.runtime.temporal.worker import build_worker
 from agentstack.storage.database import Database
 from tests.conftest import connect_temporal
 
 from .conftest import TENANT, USER
+from .temporal_probes import CallOnce
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPORAL = ROOT / "src" / "agentstack" / "runtime" / "temporal"
@@ -85,15 +95,17 @@ def test_stack_guard_flags_contract_6_if_it_is_removed() -> None:
     assert lost == {_contract_6()["name"]}
 
 
-def test_workflow_code_imports_only_temporalio_its_contracts_and_the_standard_library() -> None:
+def test_workflow_code_imports_only_temporalio_its_own_side_and_the_standard_library() -> None:
     """Stricter than contract 6: a list of what may come in, not of what may not.
 
     A new layer added next year would not be in the contract's list, and would be in
     workflow code the day someone imports it.
     """
     allowed_roots = {"__future__", "temporalio", *sys.stdlib_module_names}
+    # The workflow side, each file held to this same list.
+    own_side = {"workflows.py", "contracts.py", "retry.py"}
     offenders: list[str] = []
-    for name in ("workflows.py", "contracts.py"):
+    for name in sorted(own_side):
         tree = ast.parse((TEMPORAL / name).read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -103,7 +115,7 @@ def test_workflow_code_imports_only_temporalio_its_contracts_and_the_standard_li
             else:
                 continue
             for module in modules:
-                if module == "agentstack.runtime.temporal.contracts":
+                if f"{module.removeprefix('agentstack.runtime.temporal.')}.py" in own_side:
                     continue
                 if module.split(".")[0] not in allowed_roots:
                     offenders.append(f"{name} imports {module}")
@@ -201,3 +213,137 @@ def test_the_worker_runs_the_real_preflight_by_default(monkeypatch: pytest.Monke
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
 
     assert worker_cli.main([]) == 1
+
+
+# --- rule 2: a refusal is an answer, and asking again repeats it (criterion 35) ---
+
+# The real classes, imported from where they're raised. The policy holds their names,
+# because workflow code may not import them.
+REFUSAL_TYPES: dict[str, type[Exception]] = {
+    cls.__name__: cls
+    for cls in (
+        UnresolvedEffect,
+        SurfaceRefused,
+        SandboxViolation,
+        PolicyDenied,
+        ApprovalRequired,
+        ApprovalStale,
+        ApproverNotAuthorized,
+    )
+}
+
+
+def test_the_policy_names_every_refusal_and_only_real_ones() -> None:
+    assert set(REFUSALS) == set(REFUSAL_TYPES)
+    assert set(RETRY.non_retryable_error_types or ()) == {*REFUSALS, UNDECLARED}
+
+
+def test_every_activity_the_workflow_runs_uses_the_one_policy() -> None:
+    tree = ast.parse((TEMPORAL / "workflows.py").read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"execute_activity", "start_activity"}
+    ]
+    assert calls, "the workflow runs no activities"
+    for call in calls:
+        policies = [k.value for k in call.keywords if k.arg == "retry_policy"]
+        assert len(policies) == 1, ast.unparse(call)
+        assert isinstance(policies[0], ast.Name) and policies[0].id == "RETRY", ast.unparse(call)
+
+
+def test_each_refusal_is_attempted_exactly_once(temporal_address: str, task_queue: str) -> None:
+    attempts: dict[str, int] = dict.fromkeys(REFUSAL_TYPES, 0)
+
+    @activity.defn(name="refuse")
+    def refuse(name: str) -> None:
+        attempts[name] += 1
+        raise REFUSAL_TYPES[name](f"probe: {name}")
+
+    async def run_all() -> list[str]:
+        client = await connect_temporal(temporal_address)
+        with ThreadPoolExecutor(max_workers=len(REFUSAL_TYPES)) as executor:
+            async with Worker(
+                client,
+                task_queue=task_queue,
+                workflows=[CallOnce],
+                activities=[refuse],
+                activity_executor=executor,
+            ):
+                outcomes = asyncio.gather(
+                    *(
+                        client.execute_workflow(
+                            CallOnce.run,
+                            args=["refuse", name],
+                            id=f"refusal-{name}-{uuid.uuid4()}",
+                            task_queue=task_queue,
+                        )
+                        for name in REFUSAL_TYPES
+                    )
+                )
+                return await asyncio.wait_for(outcomes, RESULT_TIMEOUT_S)
+
+    outcomes = asyncio.run(run_all())
+
+    assert [o.split(":")[0] for o in outcomes] == list(REFUSAL_TYPES)
+    assert attempts == dict.fromkeys(REFUSAL_TYPES, 1)
+
+
+# --- rule 5: registered is not declared (criterion 37) ---
+
+
+def test_an_undeclared_activity_is_refused_before_it_runs(
+    temporal_address: str, task_queue: str
+) -> None:
+    """E4: registered beside the real activities, it would reach a surface directly."""
+    reached: list[str] = []
+
+    @activity.defn(name="rogue_rollout")
+    def rogue_rollout(experiment_id: str) -> None:
+        reached.append(experiment_id)
+
+    async def run_it() -> str:
+        client = await connect_temporal(temporal_address)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            async with Worker(
+                client,
+                task_queue=task_queue,
+                workflows=[CallOnce],
+                activities=[rogue_rollout],
+                activity_executor=executor,
+                interceptors=[DeclaredActivitiesOnly()],
+            ):
+                result = client.execute_workflow(
+                    CallOnce.run,
+                    args=["rogue_rollout", "exp-1"],
+                    id=f"rogue-{uuid.uuid4()}",
+                    task_queue=task_queue,
+                )
+                return await asyncio.wait_for(result, RESULT_TIMEOUT_S)
+
+    assert asyncio.run(run_it()) == f"{UNDECLARED}:non_retryable=True"
+    assert reached == []
+
+
+def test_the_production_worker_installs_the_guard_and_declares_all_it_registers(
+    temporal_address: str,
+) -> None:
+    async def configured() -> dict[str, object]:
+        client = await connect_temporal(temporal_address)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            activities = RunActivities(runs=RunStore(db=Database.__new__(Database)))
+            worker = build_worker(client, activities=activities, executor=executor)
+            return dict(worker.config())
+
+    config = asyncio.run(configured())
+
+    interceptors = config["interceptors"]
+    assert isinstance(interceptors, list)
+    assert any(isinstance(i, DeclaredActivitiesOnly) for i in interceptors)
+    registered = config["activities"]
+    assert isinstance(registered, list)
+    # Where `@activity.defn` records the name a worker registers the function under.
+    names = {getattr(fn, "__temporal_activity_definition").name for fn in registered}
+    assert names <= set(DECLARED), f"registered but undeclared: {names - set(DECLARED)}"

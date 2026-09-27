@@ -915,13 +915,31 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - Not yet covered: `worker_cli._serve`, the poll loop itself (78% of the file). The
     durability tests start it as a real process from T36.
 
-- [ ] **T35 — The one RetryPolicy + declared-activity interceptor** · layer 3 · *S*
+- [x] **T35 — The one RetryPolicy + declared-activity interceptor** · layer 3 · *S*
   - Acceptance: `retry.py`: refusals (`UnresolvedEffect`, `ApprovalStale`,
     `ApprovalRequired`, `PolicyDenied`, `SandboxViolation`, `ApproverNotAuthorized`,
     `SurfaceRefused`) are non-retryable; `interceptors.py` refuses undeclared activities.
   - Verify: `test_temporal_boundaries`: each refusal type → exactly one attempt (C35);
     an undeclared activity is refused non-retryably (C37).
   - Files: `runtime/temporal/{retry,interceptors,worker}.py`, test.
+  - **Done.** 14 tests in the file now. The policy holds type **names**, because the
+    workflow uses it and contract 6 forbids it a path to `execution` or `policy`. The
+    test resolves each name to the real class, so a rename fails the build instead of
+    turning a refusal back into a retry. `retry.py` joins the workflow side's
+    allow-list test.
+  - Checked against a mutant: with the refusals dropped from the list, the test fails.
+    The seven refusals spin until the bounded wait gives up.
+  - An AST test makes every `execute_activity` in `workflows.py` pass `RETRY`, so
+    there's only one policy.
+  - `DECLARED` is separate from what's registered, which is E4's whole point. A test
+    registers `rogue_rollout` on a worker with the guard: `UndeclaredActivity`,
+    non-retryable, body never ran. Another asserts the production worker installs the
+    guard and declares everything it registers.
+  - **Open, for Checkpoint I:** (a) `OutcomeNotAuthorized` (`policy/triggers.py`) is
+    a refusal too, and it belongs on the list when T36 makes `evaluate_cycle` an
+    activity. (b) Attempts are unbounded for everything that *isn't* a refusal. That's
+    right for an outage, and it's how the T34 foreign-key bug spun silently. It needs
+    a decision.
 
 ### ✅ Checkpoint I — foundation, nothing can act yet
 - [ ] `check_task.sh`, `lint-imports`, `stack_guard`, `tests/infra` green; coverage risk closed
