@@ -11,6 +11,7 @@ radius you can reason about; `send_email` does not.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -65,6 +66,19 @@ class Idempotency(Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class Fixed:
+    """A payload value the tool always writes, and no request under it may vary.
+
+    `because` is what the refusal says. A halt whose payload names 5% is not a halt
+    with a typo, it is a rollout wearing a halt's name, and the audit record should
+    say so in those words rather than as a key/value diff.
+    """
+
+    value: Any
+    because: str
+
+
+@dataclass(frozen=True, slots=True)
 class ToolSpec:
     name: str
     description: str
@@ -79,6 +93,16 @@ class ToolSpec:
     reversal_note: str = ""
     stages: frozenset[str] = field(default_factory=lambda: frozenset({"default"}))
     tenants: frozenset[str] | None = None
+    # What binds a request to this spec, beyond its name and surface (both always
+    # checked). `verb` is the action the surface serves this tool's resource as - the
+    # registry derives it from the resource's suffix, so a resource that ends in
+    # `/rollout` *is* a rollout whatever tool prepared it. Declared here so the gateway
+    # can refuse a request whose resource names a different act than the tool that was
+    # authorised (H2), before policy or approval look at it.
+    verb: str | None = None
+    # Payload values this tool's prepare always writes. The gateway refuses a request
+    # that varies one, whatever was approved: `halt_rollout` fixes `percentage` at 0.
+    fixed_payload: Mapping[str, Fixed] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.description:
@@ -89,6 +113,11 @@ class ToolSpec:
             raise ValueError(f"{self.name}: a resource scope is required (Part 6)")
         if not self.stages:
             raise ValueError(f"{self.name}: declare the stages this tool is exposed in")
+        if self.surface is Surface.REGISTRY and not self.verb:
+            raise ValueError(
+                f"{self.name}: a registry tool declares the verb its resource names - the "
+                "surface takes the act from the resource, so the spec has to say which act"
+            )
         if self.side_effecting:
             if self.idempotency is Idempotency.NONE:
                 raise ValueError(

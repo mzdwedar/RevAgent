@@ -24,7 +24,7 @@ from agentstack.policy.approval import (
     GrantedBy,
     require_approval,
 )
-from agentstack.policy.decisions import PolicyDenied
+from agentstack.policy.decisions import PolicyDenied, decide
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.precommit import PreCommitPolicy
 from agentstack.runtime.run import Run
@@ -374,14 +374,31 @@ def test_the_halt_tool_cannot_express_a_percentage() -> None:
 
 
 def test_a_non_zero_halt_is_refused_before_the_surface_and_audited(stack: Stack, run: Run) -> None:
-    """Refused by the authority decision, which runs before approval and containment,
-    so the registry is never asked - and the refusal names the rule that made it."""
+    """Refused by the binding check - the halt spec fixes `percentage` at 0 - which runs
+    before policy, approval and containment, so the registry is never asked, and the
+    refusal names the rule that made it. (It was `halt.only_zeroes` inside `decide`
+    until H2 made fixed values a declaration every spec can make.)"""
     with pytest.raises(PolicyDenied, match="sets exposure to zero"):
         halt(stack, run, halt_to(5))
 
     assert stack.registry_client.read("acme/experiments/", {"limit": 50}) == {"experiments": []}
     denied = [r for r in stack.audit.for_run(run.run_id) if r.outcome == "denied"]
-    assert [r.policy_decision for r in denied] == ["halt.only_zeroes"]
+    assert [r.policy_decision for r in denied] == ["binding.payload"]
+
+
+@pytest.mark.parametrize("percentage", [5, 100, False])
+def test_decide_itself_denies_a_non_zero_halt(stack: Stack, run: Run, percentage: int) -> None:
+    """The gateway's binding check reaches it first, but the authority decision holds
+    it on its own, for any caller that asks `decide` directly - from the spec's declared
+    fixed value, not from a branch on the tool's name."""
+    decision = decide(
+        envelope=envelope(stack, run, EXPERIMENT_SCOPES | {"experiments:halt"}),
+        spec=HALT,
+        request=halt_to(percentage),
+    )
+
+    assert (decision.allowed, decision.rule) == (False, "binding.payload")
+    assert "sets exposure to zero" in decision.reason
 
 
 def test_no_approval_turns_a_non_zero_halt_into_a_permitted_one(stack: Stack, run: Run) -> None:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -194,6 +195,89 @@ def _registry_resource(resource: str, verb: dict[str | None, str]) -> tuple[str,
     return match["tenant"], match["experiment"], verb[match["suffix"]]
 
 
+def resource_verb(surface: Surface, resource: str, *, writes: bool) -> str | None:
+    """The act `surface` would perform for `resource`, or None if it names none.
+
+    The gateway asks this before policy, so a request is held to the verb its spec
+    declares (`ToolSpec.verb`) by the *same* parse the client will use - two parsers
+    would be two opinions about what a resource means, and the gap between them is where
+    a draft becomes a rollout. Only the registry reads its act from the resource; other
+    surfaces name none, and a spec on them declares none.
+    """
+    if surface is not Surface.REGISTRY:
+        return None
+    try:
+        return _registry_resource(resource, _COMMITS if writes else _READS)[2]
+    except SurfaceRefused:
+        return None
+
+
+# --- what each act's payload must be ---
+#
+# The resource says which act; the payload says what it is done with. The schema
+# validator holds the model's proposals to shape, but the surface is not only reached
+# through a validated proposal - a request built any other way, an operator's script,
+# the next client - and a rollout with no percentage is a row `get_rollout_history`
+# cannot read (C1). So the surface holds each act to its own shape, exactly: a key
+# missing, a key extra or a value of the wrong kind is `SurfaceRefused`, and nothing
+# applied. `migrations/0013` holds the percentages again in the store.
+
+
+def _text(value: Any) -> bool:
+    """A string that says something - the store's `revision_says_something`."""
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _string(value: Any) -> bool:
+    return isinstance(value, str)
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _percentage(value: Any) -> bool:
+    """A whole percentage, 0 to 100. `True` is an int in Python and is not one."""
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100
+
+
+def _zero(value: Any) -> bool:
+    return _percentage(value) and value == 0
+
+
+_SHAPES: dict[str, dict[str, Callable[[Any], bool]]] = {
+    "draft": {"experiment_version": _text, "hypothesis": _text, "variant": _text},
+    "rollout": {
+        "experiment_version": _text,
+        "percentage": _percentage,
+        "targeting_model_version": _text,
+        "risk_threshold": _number,
+    },
+    # A blank hypothesis is a string here and refused below with its own reason, the
+    # same one the store's CHECK gives.
+    "revise": {"experiment_version": _text, "hypothesis": _string},
+    "discard": {"experiment_version": _text, "reason": _string},
+    "abstention": {"experiment_version": _text, "explanation": _string},
+    "halt": {"experiment_version": _text, "percentage": _zero, "reason": _string},
+}
+
+
+def _shaped(resource: str, action: str, payload: dict[str, Any]) -> None:
+    """Refuse a payload that is not exactly this act's shape. Checked before any state
+    is read or written, so a refusal here provably applied nothing."""
+    shape = _SHAPES[action]
+    if set(payload) != set(shape):
+        raise SurfaceRefused(
+            f"{resource}: a {action} carries exactly {sorted(shape)}, "
+            f"not {sorted(payload)}; nothing applied"
+        )
+    wrong = sorted(key for key, holds in shape.items() if not holds(payload[key]))
+    if wrong:
+        raise SurfaceRefused(
+            f"{resource}: a {action} with this {wrong} is malformed; nothing applied"
+        )
+
+
 def _list_limit(query: dict[str, Any]) -> int:
     return max(1, min(int(query.get("limit", LIST_DEFAULT)), LIST_LIMIT))
 
@@ -213,11 +297,12 @@ class RegistryClient:
     """The experiment registry, in process.
 
     The fake the fitness suite can inspect without a database, held to the same
-    contract as `PostgresRegistryClient`. It still does not validate arguments - a
-    surface that rejected a malformed draft would make the schema validator look
-    unnecessary, and criterion 19 is that nothing malformed gets this far. It *does*
-    hold the state preconditions, because those are the surface's to answer, and a fake
-    that accepted a rollout of nothing would let a test pass that production fails.
+    contract as `PostgresRegistryClient`. It does not validate *arguments* - that is the
+    schema validator's job, and criterion 19 is that nothing malformed gets this far on
+    the proposal path. It does hold each act's payload to its shape (`_shaped`), because
+    the proposal path is not the only one that reaches a surface, and it holds the state
+    preconditions, because those are the surface's to answer: a fake that accepted a
+    rollout of nothing would let a test pass that production fails.
     """
 
     drafts: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -272,6 +357,7 @@ class RegistryClient:
 
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
         tenant, experiment, action = _registry_resource(resource, _COMMITS)
+        _shaped(resource, action, payload)
         base = f"{tenant}/experiments/{experiment}"
         if action == "draft":
             if base in self.drafts:
@@ -415,6 +501,7 @@ class PostgresRegistryClient:
 
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
         tenant, experiment, action = _registry_resource(resource, _COMMITS)
+        _shaped(resource, action, payload)
         if action == "draft":
             return self._draft(tenant, experiment, payload)
         if action == "revise":

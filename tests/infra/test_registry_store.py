@@ -655,3 +655,117 @@ def test_a_halted_version_cannot_be_rolled_out_again(client: Any) -> None:
 
     assert len(client.rollouts) == 1
     assert client.read(DRAFT_AT, {})["status"] == "halted"
+
+
+# --- each act's payload is held to its shape (C1) ---
+#
+# The resource names the act; the payload must be that act's, exactly. The C1 exploit
+# wrote a draft's payload to `/rollout`, and the rollout event it left had no
+# percentage - a row `get_rollout_history` then raised a KeyError on. Both clients
+# refuse such a payload before touching anything, and the store refuses the row.
+
+NEW_DRAFT_AT = f"{TENANT}/experiments/exp-9"
+
+MALFORMED: dict[str, tuple[str, str, dict[str, object]]] = {
+    "a draft's payload, sent as a rollout": ("live", ROLLOUT_AT, DRAFT_PAYLOAD),
+    "a rollout with no percentage": (
+        "live",
+        ROLLOUT_AT,
+        {k: v for k, v in rollout_payload().items() if k != "percentage"},
+    ),
+    "a rollout past 100": ("live", ROLLOUT_AT, rollout_payload(150)),
+    "a rollout below 0": ("live", ROLLOUT_AT, rollout_payload(-5)),
+    "a rollout to True": ("live", ROLLOUT_AT, {**rollout_payload(), "percentage": True}),
+    "a rollout to 10.5": ("live", ROLLOUT_AT, {**rollout_payload(), "percentage": 10.5}),
+    "a rollout with a string risk": (
+        "live",
+        ROLLOUT_AT,
+        {**rollout_payload(), "risk_threshold": "high"},
+    ),
+    "a rollout with an extra key": ("live", ROLLOUT_AT, {**rollout_payload(), "cohort": "all"}),
+    "a halt to 5%": ("live", HALT_AT, {**halt_payload(), "percentage": 5}),
+    "a halt with no percentage": ("live", HALT_AT, {"experiment_version": VERSION, "reason": "r"}),
+    "a draft with no variant": (
+        "draft",
+        NEW_DRAFT_AT,
+        {"experiment_version": VERSION, "hypothesis": "h"},
+    ),
+    "a draft with a blank hypothesis": (
+        "draft",
+        NEW_DRAFT_AT,
+        {**DRAFT_PAYLOAD, "hypothesis": " "},
+    ),
+    "a revision with a variant": ("draft", REVISION_AT, {**revise_payload(), "variant": "x"}),
+    "a discard with no reason": ("draft", DISCARD_AT, {"experiment_version": VERSION}),
+    "an abstention that is a number": (
+        "live",
+        ABSTENTION_AT,
+        {**abstention_payload(), "explanation": 7},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(MALFORMED))
+def test_a_malformed_payload_is_refused_and_changes_nothing(client: Any, case: str) -> None:
+    state, resource, payload = MALFORMED[case]
+    bring_to(client, state)
+
+    def everything() -> tuple[Any, ...]:
+        return observed(client), client.read(LIST_AT, {"limit": 50}), list(client.rollouts)
+
+    before = everything()
+
+    with pytest.raises(SurfaceRefused, match="nothing applied"):
+        client.commit(resource, payload)
+
+    assert everything() == before
+
+
+@pytest.mark.parametrize(
+    ("kind", "payload"),
+    [
+        ("rollout", "{}"),
+        ("rollout", '{"percentage": 150}'),
+        ("rollout", '{"percentage": -1}'),
+        ("rollout", '{"percentage": 10.5}'),
+        ("rollout", '{"percentage": "10"}'),
+        ("rollout", '{"percentage": true}'),
+        ("halt", "{}"),
+        ("halt", '{"percentage": 5}'),
+        ("halt", '{"percentage": "0"}'),
+    ],
+)
+def test_the_store_refuses_an_exposure_event_without_its_percentage(
+    app_database: Database, kind: str, payload: str
+) -> None:
+    """`migrations/0013`: the store's copy of the clients' shape rule, for the writer
+    that is not a client."""
+    seed_draft(app_database)
+
+    with pytest.raises(IntegrityViolation) as caught:
+        event(app_database, kind, payload)
+    assert (
+        caught.value.constraint
+        == {
+            "rollout": "rollout_names_a_whole_percentage",
+            "halt": "halt_names_zero",
+        }[kind]
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "payload"),
+    [
+        ("rollout", '{"percentage": 0}'),
+        ("rollout", '{"percentage": 100}'),
+        ("halt", '{"percentage": 0}'),
+    ],
+)
+def test_the_store_accepts_an_exposure_event_at_its_bounds(
+    app_database: Database, kind: str, payload: str
+) -> None:
+    seed_draft(app_database)
+
+    event(app_database, kind, payload)
+
+    assert app_database.fetch_one("SELECT count(*) FROM registry_events") == (1,)

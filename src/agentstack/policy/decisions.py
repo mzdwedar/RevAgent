@@ -50,23 +50,71 @@ def decide(
             "tenant.boundary",
             f"resource {request.resource} is outside tenant {envelope.tenant}",
         )
-    if refusal := halt_only_zeroes(spec, request):
-        return Decision(False, "halt.only_zeroes", refusal)
+    # Also in `bound_to`, which the gateway runs first. Held here too because `decide` is
+    # the authority decision any caller can ask, and "a halt that names anything but zero
+    # is denied by `decide`" is a written bar. Declarative now: the spec says which
+    # values it fixes, and no `spec.name ==` branch lives in generic policy.
+    if refusal := fixed_payload_refusal(spec, request):
+        return refusal
     return Decision(True, "allow", f"{envelope.principal} may {spec.name} on {request.resource}")
 
 
-def halt_only_zeroes(spec: ToolSpec, request: ActionRequest) -> str | None:
-    """A halt sets exposure to zero, and nothing else.
+def bound_to(spec: ToolSpec, request: ActionRequest, *, verb: str | None) -> Decision | None:
+    """Is `request` an instance of `spec` at all? A refusal, or None when it is.
 
-    `halt_rollout` has no percentage argument, so its own prepare cannot name another
-    number. This holds for a request built any other way. It is here, not in the
-    `PRE_COMMIT` rule set, because there a refusal only escalates to a human, and an
-    existing grant skips the rules altogether. A halt to 5% is a rollout wearing a
-    halt's name, and no approval makes it one.
+    `decide` judges the spec: its identity, its scope, its tenant. That judgement is
+    worth nothing if the request it lets through is some other act - a request built
+    as a rollout, handed to the gateway beside the abstention spec, passed every check
+    `decide` knows how to make, under a scope that annotates, on a tier no human sees.
+    So before anything asks whether the spec is permitted, this asks whether the request
+    is the spec's: its tool, its surface, the verb its resource names, and every payload
+    value the spec fixes.
+
+    `verb` is what the execution surface reads the resource as, supplied by the gateway
+    because only layer 7 knows how its surfaces parse a resource. It is compared, never
+    interpreted, here.
+
+    It can only refuse. Reading the payload - model-shaped data - is safe here for that
+    reason: nothing in it can make a request *more* permitted, only fail to be the spec's.
+
+    It runs before approval as well as before `decide`, for the reason `halt_rollout`
+    first needed it: a rule no approval may override cannot live where an approval is
+    consulted. A halt to 5% that a distracted human approved is still not a halt.
     """
-    if spec.name != "halt_rollout" or request.payload.get("percentage") == 0:
-        return None
-    return (
-        f"a halt sets exposure to zero; this one names {request.payload.get('percentage')!r}, "
-        "which only a rollout, with a human's approval, may do"
-    )
+    if request.tool != spec.name:
+        return Decision(
+            False,
+            "binding.tool",
+            f"the request was prepared by {request.tool!r} and presented under {spec.name!r}; "
+            "a spec authorises its own tool's requests and no other",
+        )
+    if request.surface is not spec.surface:
+        return Decision(
+            False,
+            "binding.surface",
+            f"{spec.name} acts on {spec.surface.value}; this request names {request.surface.value}",
+        )
+    if spec.verb is not None and verb != spec.verb:
+        return Decision(
+            False,
+            "binding.verb",
+            f"{spec.name} is a {spec.verb}; its resource {request.resource} names "
+            f"{verb or 'nothing the surface serves'}",
+        )
+    return fixed_payload_refusal(spec, request)
+
+
+def fixed_payload_refusal(spec: ToolSpec, request: ActionRequest) -> Decision | None:
+    """Refuse a request that varies a value its spec fixes - `halt_rollout`'s zero."""
+    for key, fixed in spec.fixed_payload.items():
+        actual = request.payload.get(key)
+        # `type(...) is` as well as `==`: `False == 0` and `0.0 == 0` in Python, and a
+        # fixed value that a boolean satisfies is not fixed.
+        if type(actual) is not type(fixed.value) or actual != fixed.value:
+            return Decision(
+                False,
+                "binding.payload",
+                f"{spec.name} fixes {key} at {fixed.value!r} and this request names "
+                f"{actual!r}: {fixed.because}",
+            )
+    return None

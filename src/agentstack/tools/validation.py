@@ -7,7 +7,7 @@ is a KeyError and a garbage number is a ValueError - both of which escape the tu
 uncaught.
 
 This is a deliberately small subset of JSON Schema: object types, `required`,
-`properties` with primitive type names, `enum`, `minimum`/`maximum`, and
+`properties` with primitive type names, `enum`, `minimum`/`maximum`, `format`, and
 `additionalProperties` defaulting to false. That is what the tool catalog declares.
 It is not a dependency because the subset a capability surface needs is this small -
 if a tool ever needs `oneOf` or `$ref`, reach for jsonschema then and say so in an ADR.
@@ -15,7 +15,8 @@ if a tool ever needs `oneOf` or `$ref`, reach for jsonschema then and say so in 
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from agentstack.tools.spec import ToolSpec
@@ -28,6 +29,41 @@ _TYPES: dict[str, type | tuple[type, ...]] = {
     "array": list,
     "object": dict,
 }
+
+
+# One segment of a resource path: starts alphanumeric, then letters, digits and `._:-`.
+# No `/`, so an id cannot add a segment - and the registry takes the act a resource
+# names from its last segment, so `experiment_id=exp-9/rollout` would otherwise turn a
+# draft into a rollout under the draft tool's grant (C1). No leading `.`, so `..` is
+# not an id either. Bounded, because an id is a key, not a document.
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+
+def _is_id(value: Any) -> bool:
+    return isinstance(value, str) and _ID.fullmatch(value) is not None
+
+
+def _is_cents(value: Any) -> bool:
+    """`cents` names the unit of an integer amount. The declared `integer` type already
+    holds the shape; the format is there for the reader and the approval prompt, so it
+    adds no check of its own - and says so here, rather than by being silently skipped."""
+    return isinstance(value, int)
+
+
+# Every `format` the catalog declares, and what a value must be to meet it. A format
+# not in this table is refused rather than waved through: a declared constraint nothing
+# enforces is exactly what `format: id` was (C1). `tests/fitness/test_request_binding.py`
+# holds every declared format to this table, so the refusal never fires on a tool that
+# ships - it fires on the one that would have shipped unchecked.
+_FORMATS: dict[str, tuple[Callable[[Any], bool], str]] = {
+    "id": (_is_id, "a single id: letters, digits and ._:- with no '/'"),
+    "cents": (_is_cents, "a whole number of cents"),
+}
+
+
+def known_formats() -> frozenset[str]:
+    """The formats this validator enforces. Read by the fitness suite."""
+    return frozenset(_FORMATS)
 
 
 class InvalidToolArguments(ValueError):
@@ -87,8 +123,18 @@ def validate_arguments(spec: ToolSpec, arguments: Mapping[str, Any]) -> dict[str
 
 
 def _within_bounds(spec: ToolSpec, name: str, declared: Mapping[str, Any], value: Any) -> None:
-    """`enum`, `minimum` and `maximum`: a bound a schema declares and nothing enforces is
-    a budget in name only - `limit: 5000` would reach the surface looking validated."""
+    """`enum`, `minimum`, `maximum` and `format`: a bound a schema declares and nothing
+    enforces is a budget in name only - `limit: 5000` would reach the surface looking
+    validated, and so would `experiment_id: exp-9/rollout`."""
+    fmt = declared.get("format")
+    if fmt is not None:
+        if fmt not in _FORMATS:
+            raise InvalidToolArguments(
+                f"{spec.name}: {name} declares format {fmt!r}, which nothing enforces"
+            )
+        meets, meaning = _FORMATS[fmt]
+        if not meets(value):
+            raise InvalidToolArguments(f"{spec.name}: {name} must be {meaning}, got {value!r}")
     allowed = declared.get("enum")
     if allowed is not None and value not in allowed:
         raise InvalidToolArguments(f"{spec.name}: {name} must be one of {allowed}, got {value!r}")
