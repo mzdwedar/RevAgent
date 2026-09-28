@@ -8,16 +8,21 @@ still settles it.
 
 These run on Temporal's time-skipping test server, so the deadline is the real one
 (36h by default) and not a shortened stand-in.
+
+A run lives for weeks, so it also continues as new every hundred cycles (T46). That is
+Temporal's bookkeeping, and the record must not be able to tell.
 """
 
 from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 import pytest
+from temporalio.client import Client, WorkflowHandle
 
 from agentstack.interfaces import operator_cli
 from agentstack.interfaces.triggers import parse_trigger
@@ -25,13 +30,14 @@ from agentstack.interfaces.wiring import Stack, build_stack, run_for_trigger
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import (
+    RunEnd,
     RunProgress,
     RunStart,
     Trigger,
     TriggerArrived,
     TriggerWaitIntent,
 )
-from agentstack.runtime.temporal.workflows import ExperimentWorkflow
+from agentstack.runtime.temporal.workflows import CONTINUE_EVERY, ExperimentWorkflow
 from agentstack.runtime.waits import WaitStore
 from agentstack.storage.database import Database
 from tests.fitness.test_trigger_to_candidate import RULE, WATERMARK, StubScorer
@@ -222,3 +228,116 @@ def test_the_satisfy_activity_rerun_converges(app_database: Database, run_start:
     wait = WaitStore(db=app_database).get(parked.wait_id)
     assert wait is not None and wait.satisfied
     assert wait.payload["data_as_of"] == WATERMARK
+
+
+CYCLES = 250
+# Handed over before any worker polls, so the first execution meets all of them at once.
+QUEUED_AHEAD = 150
+
+
+async def executions(
+    client: Client, handle: WorkflowHandle[ExperimentWorkflow, RunEnd]
+) -> list[RunStart]:
+    """What each of Temporal's executions of this run was started with, first to
+    current, following each history to the execution it continued as."""
+    run_id = handle.result_run_id
+    starts: list[RunStart] = []
+    while run_id:
+        history = await client.get_workflow_handle(handle.id, run_id=run_id).fetch_history()
+        started = history.events[0].workflow_execution_started_event_attributes
+        [start] = await client.data_converter.decode(started.input.payloads, [RunStart])
+        starts.append(start)
+        continued = history.events[-1].workflow_execution_continued_as_new_event_attributes
+        run_id = continued.new_execution_run_id
+    return starts
+
+
+def test_continuing_as_new_is_invisible_to_the_record(
+    app_database: Database, run_start: RunStart
+) -> None:
+    """Criterion 44: 250 cycles, three executions, one run, one record.
+
+    150 triggers are queued before a worker polls, so the first handoff, at 100, carries
+    50 the run hasn't evaluated. The run then parks its first trigger wait, and the other
+    100 arrive while it runs, so the second handoff carries the wait count: a reset
+    would park `…-trigger-0` again and be handed back a wait long since satisfied.
+
+    Each trigger names a batch the snapshot on disk isn't, so the cycle abstains before
+    scoring: this is about the handoff, not about what a cycle concludes.
+
+    The worker is never stopped mid-test: the time-skipping server never moves a stopped
+    worker's sticky task back to the shared queue, and the run would sit there.
+    """
+    queue = f"timers-{uuid.uuid4()}"
+    experiment = f"exp-{uuid.uuid4().hex[:6]}"
+    batches = [
+        Trigger(
+            kind="data_arrival",
+            experiment_id=experiment,
+            data_as_of=f"fixture:batch-{n}",
+            tenant=run_start.tenant,
+            source="test",
+        )
+        for n in range(CYCLES)
+    ]
+
+    def evaluated(count: int) -> Callable[[RunProgress], bool]:
+        return lambda p: p.cycles_before + len(p.cycles) == count and p.waiting_on is not None
+
+    async def run_through_the_handoffs() -> tuple[RunProgress, RunProgress, list[RunStart]]:
+        async with time_skipping() as env:
+            handle = await start_run(env.client, run_start, task_queue=queue)
+            for batch in batches[:QUEUED_AHEAD]:
+                await handle.signal(ExperimentWorkflow.trigger, batch)
+            async with worker_on(env.client, queue, app_database, trigger_deadline=DEADLINE):
+                parked = await progress_until(handle, evaluated(QUEUED_AHEAD), timeout=60)
+                for batch in batches[QUEUED_AHEAD:]:
+                    await handle.signal(ExperimentWorkflow.trigger, batch)
+                last = await progress_until(handle, evaluated(CYCLES), timeout=60)
+                return parked, last, await executions(env.client, handle)
+
+    parked, last, starts = asyncio.run(run_through_the_handoffs())
+
+    # Temporal's side: three executions, each started with what the one before carried.
+    assert len(starts) == 1 + CYCLES // CONTINUE_EVERY, "continued as new at 100 and 200"
+    assert {start.run_id for start in starts} == {run_start.run_id}
+    assert starts[0].carried is None
+    handoff = starts[1].carried
+    assert handoff is not None
+    assert (handoff.cycles_before, handoff.waits_parked) == (100, 0)
+    assert handoff.pending == tuple(batches[100:QUEUED_AHEAD]), "in the order they arrived"
+    assert handoff.last_watermark == "fixture:batch-99"
+    later = starts[2].carried
+    assert later is not None and later.cycles_before == 200 and later.waits_parked >= 1
+
+    # The run's side: one run, as progress reports it.
+    assert (parked.run_id, last.run_id) == (run_start.run_id, run_start.run_id)
+    assert (parked.cycles_before, len(parked.cycles)) == (100, 50)
+    assert parked.waiting_on == f"wait-{run_start.run_id}-trigger-0"
+    assert (last.cycles_before, len(last.cycles)) == (200, 50)
+    assert {cycle.outcome for cycle in last.cycles} == {"abstain"}
+
+    # The record, which is what the run is audited from. Temporal's history never is.
+    assert app_database.fetch_all("SELECT run_id FROM runs") == [(run_start.run_id,)], (
+        "one run, recorded once, however many executions ensured it"
+    )
+    settled = app_database.fetch_one(
+        "SELECT count(*), count(DISTINCT data_as_of) FROM trigger_cycles "
+        "WHERE experiment_id = %s AND outcome = 'abstain' AND settled_at IS NOT NULL",
+        (experiment,),
+    )
+    assert settled == (CYCLES, CYCLES), "every trigger evaluated once, none lost in a handoff"
+    rows = app_database.fetch_all(
+        "SELECT wait_id, satisfied, state_snapshot FROM waits WHERE run_id = %s",
+        (run_start.run_id,),
+    )
+    # How many waits the live second half parks depends on how fast its triggers land;
+    # what may not vary is that they form one sequence with one pending wait at its end.
+    waits = sorted(rows, key=lambda row: int(str(row[0]).rsplit("-", 1)[1]))
+    assert [row[0] for row in waits] == [
+        f"wait-{run_start.run_id}-trigger-{n}" for n in range(len(waits))
+    ], "one sequence of waits across every execution, no number parked twice"
+    assert waits[0][1:] == (True, "fixture:batch-149")
+    assert all(satisfied for _, satisfied, _ in waits[:-1])
+    assert waits[-1][1:] == (False, "fixture:batch-249"), "one wait pending, after the last batch"
+    assert last.waiting_on == waits[-1][0], "and the run is on the wait the record says"
