@@ -18,15 +18,30 @@ prompt injection a menu with the irreversible item on it. (They once shared a si
 approval is granted against a specific frozen cohort, and a rollout that re-derived the
 cohort at execution time could roll out to a different population than the one a human
 saw (criterion 14).
+
+**A write is keyed on the state it moves from.** A rollout names the rollout event it
+follows, a revision the revision it rewords, an abstention the last event it read.
+Keyed on its target alone, a write that went back to where the experiment had been -
+10%, then 25%, then 10% again - got the first write's key, and a human-approved
+ramp-down was answered as a duplicate while exposure stayed at 25%. Keyed on where it
+starts, a retry is still one effect, a return is a new one, and two writes prepared
+against the same state cannot both land: the store holds the same identity unique, and
+checks in the statement that writes that the state it names is still the latest.
+
+The prior state is an argument, read by the model from `get_experiment` or
+`get_rollout_history`, because a `prepare_*` function does no I/O. It gives the model
+no reach: a stale or invented position matches nothing at the store, and nothing
+applies.
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from typing import Any
 
-from agentstack.tools.action import ActionRequest
-from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
+from agentstack.tools.action import ActionRequest, idempotency_key
+from agentstack.tools.spec import ActsAs, Approval, Fixed, Idempotency, Surface, ToolSpec
 
 # One stage per half of the lifecycle, so the exposure filter separates them. A drafting
 # turn sees drafting tools, an evaluation turn sees what may stop an experiment, and a
@@ -34,6 +49,96 @@ from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSp
 DRAFT_STAGE = "draft"
 EVALUATION_STAGE = "evaluation"
 ROLLOUT_STAGE = "rollout"
+EXPERIMENT_STAGES = frozenset({DRAFT_STAGE, EVALUATION_STAGE, ROLLOUT_STAGE})
+
+# The four states an experiment can be in (migrations/0012). A read may filter by one;
+# no tool may name one as a target - a transition is a tool, not an argument.
+STATUSES = ["draft", "live", "halted", "discarded"]
+
+# An id becomes one segment of a resource path (`{tenant}/experiments/{experiment}/...`),
+# and the registry reads the act from the path's last segment. `format: id` is enforced
+# by the validator as a single segment, so `exp-9/rollout` is refused as an argument
+# rather than read by the surface as a rollout (C1).
+_ID = {"type": "string", "format": "id"}
+# A position in the registry's own history, as a read returned it. An integer, not an
+# id string: it counts rather than names, and it cannot carry prose.
+_PRIOR = {"type": "integer", "minimum": 0}
+
+
+def experiment_resource(tenant: str, experiment_id: str) -> str:
+    """The resource root one experiment's requests live under. Every prepare below
+    names this path or one beneath it, which is what lets a run be bound to it."""
+    return f"{tenant}/experiments/{experiment_id}"
+
+
+def _read(
+    name: str,
+    description: str,
+    properties: dict[str, Any],
+    required: list[str],
+    stages: frozenset[str],
+    verb: str,
+) -> ToolSpec:
+    """A registry read: no effect, no approval, one scope for all of them.
+
+    What it returns includes model-authored prose (hypotheses), so it enters the next
+    turn's context as untrusted - the read is safe, its content is not.
+    """
+    return ToolSpec(
+        name=name,
+        description=description,
+        input_schema={
+            "type": "object",
+            "properties": {"tenant": _ID, **properties},
+            "required": ["tenant", *required],
+        },
+        acts_as=ActsAs.DELEGATED,
+        scope="experiments:read",
+        surface=Surface.REGISTRY,
+        side_effecting=False,
+        reversible=True,
+        approval=Approval.NONE,
+        idempotency=Idempotency.NATURAL,
+        stages=stages,
+        verb=verb,
+    )
+
+
+GET = _read(
+    "get_experiment",
+    "Read one experiment: its status, current version, variant, latest hypothesis and "
+    "that hypothesis's revision_no.",
+    {"experiment_id": _ID},
+    ["experiment_id"],
+    EXPERIMENT_STAGES,
+    "experiment",
+)
+
+LIST = _read(
+    "list_experiments",
+    "List this tenant's experiments, optionally only those in one status. At most 50.",
+    {
+        "status": {"type": "string", "enum": STATUSES},
+        # Bounded in the schema, so one read cannot flood the context window.
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+    },
+    [],
+    EXPERIMENT_STAGES,
+    "list",
+)
+
+# Not on the draft stage: a drafting turn has nothing live to look back on, and every
+# tool on a stage is one more thing an injection can ask for.
+HISTORY = _read(
+    "get_rollout_history",
+    "Read one experiment's rollouts and halts, oldest first, each with its event_id; its "
+    "current exposure; latest_rollout_event, which a next rollout follows; and "
+    "latest_event, the last thing recorded about it of any kind.",
+    {"experiment_id": _ID},
+    ["experiment_id"],
+    frozenset({EVALUATION_STAGE, ROLLOUT_STAGE}),
+    "history",
+)
 
 DRAFT = ToolSpec(
     name="create_experiment_draft",
@@ -44,9 +149,9 @@ DRAFT = ToolSpec(
     input_schema={
         "type": "object",
         "properties": {
-            "tenant": {"type": "string", "format": "id"},
-            "experiment_id": {"type": "string", "format": "id"},
-            "experiment_version": {"type": "string", "format": "id"},
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
             "hypothesis": {"type": "string"},
             "variant": {"type": "string"},
         },
@@ -59,13 +164,14 @@ DRAFT = ToolSpec(
         ],
     },
     acts_as=ActsAs.DELEGATED,
-    scope="experiments:write",
+    scope="experiments:draft",
     surface=Surface.REGISTRY,
     side_effecting=True,
     reversible=True,
     approval=Approval.PRE_COMMIT,
     idempotency=Idempotency.KEY,
     stages=frozenset({DRAFT_STAGE}),
+    verb="draft",
 )
 
 ROLLOUT = ToolSpec(
@@ -76,14 +182,19 @@ ROLLOUT = ToolSpec(
     input_schema={
         "type": "object",
         "properties": {
-            "tenant": {"type": "string", "format": "id"},
-            "experiment_id": {"type": "string", "format": "id"},
-            "experiment_version": {"type": "string", "format": "id"},
-            "percentage": {"type": "integer"},
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            # Bounded, so 150% is refused as an argument rather than stored as a fact.
+            "percentage": {"type": "integer", "minimum": 0, "maximum": 100},
             # The cohort predicate. Required, so a rollout cannot be prepared without
             # naming the population an approval was granted against.
-            "targeting_model_version": {"type": "string", "format": "id"},
+            "targeting_model_version": _ID,
             "risk_threshold": {"type": "number"},
+            # The state the rollout moves from: `latest_rollout_event` from
+            # get_rollout_history, 0 before the first. The approval binds it with the
+            # rest, so a human approves "from here to there", never a bare target.
+            "prior_rollout_event": _PRIOR,
         },
         "required": [
             "tenant",
@@ -92,6 +203,7 @@ ROLLOUT = ToolSpec(
             "percentage",
             "targeting_model_version",
             "risk_threshold",
+            "prior_rollout_event",
         ],
     },
     acts_as=ActsAs.DELEGATED,
@@ -107,7 +219,239 @@ ROLLOUT = ToolSpec(
         "not unsee the offer or refund what it cost"
     ),
     stages=frozenset({ROLLOUT_STAGE}),
+    verb="rollout",
 )
+
+
+# --- the draft lifecycle: reword it, or throw it away ---
+#
+# Both name the version, so a call prepared against one frozen cohort cannot land on
+# another, and neither can reach anything but a draft: the store's `WHERE status =
+# 'draft'` is on the same statement as the change.
+
+REVISE = ToolSpec(
+    name="revise_draft_hypothesis",
+    description=(
+        "Reword a draft experiment's hypothesis. The variant and the cohort are unchanged; "
+        "only drafts can be revised."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            "hypothesis": {"type": "string"},
+            # The revision this one rewords: `revision_no` from get_experiment. A draft
+            # starts at revision 1.
+            "prior_revision": {"type": "integer", "minimum": 1},
+        },
+        # No variant: rewording the reason cannot change what customers would see.
+        "required": [
+            "tenant",
+            "experiment_id",
+            "experiment_version",
+            "hypothesis",
+            "prior_revision",
+        ],
+    },
+    acts_as=ActsAs.DELEGATED,
+    scope="experiments:draft",
+    surface=Surface.REGISTRY,
+    side_effecting=True,
+    reversible=True,
+    approval=Approval.PRE_COMMIT,
+    idempotency=Idempotency.KEY,
+    stages=frozenset({DRAFT_STAGE}),
+    verb="revise",
+)
+
+DISCARD = ToolSpec(
+    name="discard_experiment_draft",
+    description=(
+        "Discard a draft experiment that should not go ahead. Only drafts can be discarded."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            "reason": {"type": "string"},
+        },
+        "required": ["tenant", "experiment_id", "experiment_version", "reason"],
+    },
+    acts_as=ActsAs.DELEGATED,
+    scope="experiments:draft",
+    surface=Surface.REGISTRY,
+    side_effecting=True,
+    reversible=True,
+    approval=Approval.PRE_COMMIT,
+    idempotency=Idempotency.KEY,
+    stages=frozenset({DRAFT_STAGE}),
+    verb="discard",
+)
+
+
+# --- the evaluation record ---
+
+ABSTAIN = ToolSpec(
+    name="record_abstention",
+    description=(
+        "Record why this evaluation took no action on an experiment. Changes no status "
+        "and exposes nothing."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            "explanation": {"type": "string"},
+            # What this evaluation read: `latest_event` from get_rollout_history. Nothing
+            # a run can reach names the trigger cycle that woke it, so the record it saw
+            # is what tells one cycle's abstention from the next one's.
+            "prior_event": _PRIOR,
+        },
+        "required": [
+            "tenant",
+            "experiment_id",
+            "experiment_version",
+            "explanation",
+            "prior_event",
+        ],
+    },
+    acts_as=ActsAs.DELEGATED,
+    # Its own scope: appending a note is a smaller blast radius than halting, and a
+    # grant to annotate must not imply a grant to stop anything.
+    scope="experiments:annotate",
+    surface=Surface.REGISTRY,
+    side_effecting=True,
+    reversible=True,
+    approval=Approval.PRE_COMMIT,
+    idempotency=Idempotency.KEY,
+    stages=frozenset({EVALUATION_STAGE}),
+    verb="abstention",
+)
+
+
+HALT = ToolSpec(
+    name="halt_rollout",
+    description=(
+        "Stop exposing a live experiment's variant to new customers. Sets exposure to "
+        "zero; it cannot set any other percentage."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            "reason": {"type": "string"},
+        },
+        # No percentage: a halt that could name a number is a rollout with a nicer name.
+        "required": ["tenant", "experiment_id", "experiment_version", "reason"],
+    },
+    acts_as=ActsAs.DELEGATED,
+    scope="experiments:halt",
+    surface=Surface.REGISTRY,
+    side_effecting=True,
+    reversible=True,
+    # Stopping exposure is the safe direction: a guardrail breach must not wait on Slack
+    # (assumption 3). A rule decides, and the rule only ever sees zero.
+    approval=Approval.PRE_COMMIT,
+    idempotency=Idempotency.KEY,
+    stages=frozenset({EVALUATION_STAGE}),
+    verb="halt",
+    fixed_payload={
+        "percentage": Fixed(
+            0,
+            "a halt sets exposure to zero, and only a rollout, with a human's approval, "
+            "may name any other percentage",
+        )
+    },
+)
+
+
+def prepare_halt(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    version = arguments["experiment_version"]
+    return ActionRequest(
+        tool=HALT.name,
+        surface=HALT.surface,
+        resource=f"{tenant}/experiments/{experiment}/halt",
+        # The fixed values come from the spec, so what prepare writes and what the gateway
+        # holds a halt to cannot drift apart.
+        payload={
+            "experiment_version": version,
+            **{key: fixed.value for key, fixed in HALT.fixed_payload.items()},
+            "reason": arguments["reason"],
+        },
+        # One halt per version: halting twice is a retry, not a second effect.
+        idempotency_key=idempotency_key("halt", tenant, experiment, version),
+    )
+
+
+def prepare_abstain(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    version = arguments["experiment_version"]
+    explanation = arguments["explanation"]
+    prior = arguments["prior_event"]
+    return ActionRequest(
+        tool=ABSTAIN.name,
+        surface=ABSTAIN.surface,
+        resource=f"{tenant}/experiments/{experiment}/abstention",
+        payload={"experiment_version": version, "explanation": explanation, "prior_event": prior},
+        # Keyed on what the evaluation read before what it said. "Insufficient sample"
+        # is what every early cycle says, and keyed on the words alone the second cycle
+        # to say it left no record. The words stay in the key so that two explanations
+        # prepared against one read are two keys: one lands, and the other is refused
+        # rather than answered with the first one's receipt.
+        idempotency_key=idempotency_key(
+            "abstain", tenant, experiment, version, prior, _digest(explanation)
+        ),
+    )
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def prepare_revise(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    version = arguments["experiment_version"]
+    hypothesis = arguments["hypothesis"]
+    prior = arguments["prior_revision"]
+    return ActionRequest(
+        tool=REVISE.name,
+        surface=REVISE.surface,
+        resource=f"{tenant}/experiments/{experiment}/revision",
+        payload={"experiment_version": version, "hypothesis": hypothesis, "prior_revision": prior},
+        # The revision it rewords, then the words. Keyed on the words alone, going back
+        # to an earlier wording (A, B, A) got the first revision's key, and the draft
+        # stayed at B. Hashed, so the key stays short whatever the model wrote.
+        idempotency_key=idempotency_key(
+            "revise", tenant, experiment, version, prior, _digest(hypothesis)
+        ),
+    )
+
+
+def prepare_discard(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    version = arguments["experiment_version"]
+    return ActionRequest(
+        tool=DISCARD.name,
+        surface=DISCARD.surface,
+        resource=f"{tenant}/experiments/{experiment}/discard",
+        payload={"experiment_version": version, "reason": arguments["reason"]},
+        # One discard per version, whatever the reason says: discarding twice is a
+        # retry, not a second effect.
+        idempotency_key=idempotency_key("discard", tenant, experiment, version),
+    )
 
 
 def prepare_draft(arguments: Mapping[str, Any]) -> ActionRequest:
@@ -127,7 +471,7 @@ def prepare_draft(arguments: Mapping[str, Any]) -> ActionRequest:
         # Keyed on the frozen version, not on a uuid. Drafting the same candidate for
         # the same frozen cohort twice is one draft; drafting against a different
         # cohort is a different candidate and must not deduplicate into the first.
-        idempotency_key=f"draft:{tenant}:{experiment}:{version}",
+        idempotency_key=idempotency_key("draft", tenant, experiment, version),
     )
 
 
@@ -136,6 +480,9 @@ def prepare_rollout(arguments: Mapping[str, Any]) -> ActionRequest:
     experiment = arguments["experiment_id"]
     version = arguments["experiment_version"]
     percentage = arguments["percentage"]
+    model = arguments["targeting_model_version"]
+    threshold = arguments["risk_threshold"]
+    prior = arguments["prior_rollout_event"]
     return ActionRequest(
         tool=ROLLOUT.name,
         surface=ROLLOUT.surface,
@@ -143,11 +490,63 @@ def prepare_rollout(arguments: Mapping[str, Any]) -> ActionRequest:
         payload={
             "experiment_version": version,
             "percentage": percentage,
-            "targeting_model_version": arguments["targeting_model_version"],
-            "risk_threshold": arguments["risk_threshold"],
+            "targeting_model_version": model,
+            "risk_threshold": threshold,
+            "prior_rollout_event": prior,
         },
-        # The percentage is in the key: rolling out to 10% and later to 25% are two
-        # different effects, and the second must not be swallowed as a retry of the
-        # first. The version is in it for the same reason as the draft.
-        idempotency_key=f"rollout:{tenant}:{experiment}:{version}:{percentage}",
+        # From where, to where, for whom. The prior event first: 10%, 25%, then 10%
+        # again is three moves, and keyed on the percentage alone the approved ramp-down
+        # got the first move's key and was answered as a duplicate. Then the whole
+        # target - percentage *and* cohort - because two rollouts approved against the
+        # same state must be two keys: one lands, and the other is refused rather than
+        # handed a receipt for a population nobody approved.
+        idempotency_key=idempotency_key(
+            "rollout",
+            tenant,
+            experiment,
+            version,
+            prior,
+            percentage,
+            _digest(f"{model}@{float(threshold)!r}"),
+        ),
+    )
+
+
+def prepare_get(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    return ActionRequest(
+        tool=GET.name,
+        surface=GET.surface,
+        resource=f"{tenant}/experiments/{experiment}",
+        payload={},
+        idempotency_key=idempotency_key("get", tenant, experiment),
+    )
+
+
+def prepare_list(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    query: dict[str, Any] = {"limit": arguments.get("limit", 20)}
+    if "status" in arguments:
+        query["status"] = arguments["status"]
+    return ActionRequest(
+        tool=LIST.name,
+        surface=LIST.surface,
+        # The trailing slash is the collection, and it sits inside the `{tenant}/experiments/`
+        # prefix the sandbox already allows - listing does not widen containment.
+        resource=f"{tenant}/experiments/",
+        payload=query,
+        idempotency_key=idempotency_key("list", tenant, query.get("status", "*"), query["limit"]),
+    )
+
+
+def prepare_history(arguments: Mapping[str, Any]) -> ActionRequest:
+    tenant = arguments["tenant"]
+    experiment = arguments["experiment_id"]
+    return ActionRequest(
+        tool=HISTORY.name,
+        surface=HISTORY.surface,
+        resource=f"{tenant}/experiments/{experiment}/history",
+        payload={},
+        idempotency_key=idempotency_key("history", tenant, experiment),
     )

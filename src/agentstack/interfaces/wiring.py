@@ -7,6 +7,7 @@ the backend chosen in ADR-0002 is a change to this file and to nothing else.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -19,7 +20,7 @@ from agentstack.control_plane.session import SessionView
 from agentstack.control_plane.stores import SessionStore, TranscriptStore, WorkingStateStore
 from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
-from agentstack.execution.surfaces import RecordingClient, RegistryClient, Sandbox
+from agentstack.execution.surfaces import PostgresRegistryClient, RecordingClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.slack import Notifier, RecordingNotifier
 from agentstack.interfaces.slack_callback import ReplayGuard
@@ -47,6 +48,11 @@ VERSIONS = VersionStamp(
     retrieval="static-v1",
 )
 
+# How many earlier reads a turn is shown. A handful, most recent: enough to act on what
+# was just read, not so many that old reads crowd out the question (list reads are
+# themselves capped at 50 rows).
+OBSERVATIONS_IN_CONTEXT = 5
+
 
 @dataclass(slots=True)
 class Stack:
@@ -63,7 +69,7 @@ class Stack:
     steps: StepLedger
     waits: WaitStore
     client: RecordingClient
-    registry_client: RegistryClient
+    registry_client: PostgresRegistryClient
     # Where an approval question goes. A recorder by default: a stack built in a
     # test must not post to a real channel, and one built for the walkthrough has
     # no workspace to post to.
@@ -104,7 +110,9 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     waits = WaitStore(db=db)
     runs = RunStore(db=db)
     client = RecordingClient()
-    registry_client = RegistryClient()
+    # The registry is ours and outlives the process (T25). The API client beside it is
+    # still the reference fake: the rollout credential is an iteration-2 debt.
+    registry_client = PostgresRegistryClient(db=db)
     notifier = RecordingNotifier()
     replay_guard = ReplayGuard(db=db)
     approvers = ApproverDirectory(db=db)
@@ -213,11 +221,23 @@ def handle(
             channel=event.channel,
         )
     )
+    earlier = stack.transcripts.recent(
+        view.session_id, kind="observation", limit=OBSERVATIONS_IN_CONTEXT
+    )
     result = run_turn(
         run=run,
         envelope=envelope_for(view, scopes=scopes),
         message=event.text,
         deps=stack.deps,
+        observations=[(e.body, e.at) for e in earlier],
     )
+    # What the turn read is part of the record before it is part of any prompt: the
+    # transcript holds it, and the next turn's context is derived from there.
+    for observation in result.observations:
+        stack.transcripts.append(
+            session_id=view.session_id,
+            kind="observation",
+            body=json.dumps(observation, sort_keys=True),
+        )
     stack.transcripts.append(session_id=view.session_id, kind="agent", body=result.text)
     return result

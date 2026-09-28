@@ -12,6 +12,8 @@ the easiest to satisfy.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from agentstack.interfaces.wiring import Stack, envelope_for
@@ -22,13 +24,14 @@ from agentstack.policy.approval import (
     GrantedBy,
     require_approval,
 )
+from agentstack.policy.decisions import PolicyDenied, decide
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.precommit import PreCommitPolicy
 from agentstack.runtime.run import Run
 from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.catalog import LOOKUP, REFUND, _refund
-from agentstack.tools.experiments import DRAFT, prepare_draft
+from agentstack.tools.experiments import DRAFT, HALT, prepare_draft, prepare_halt
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 
 from .conftest import SCOPES
@@ -49,7 +52,7 @@ def draft_request(tenant: str = "acme") -> ActionRequest:
     )
 
 
-EXPERIMENT_SCOPES = SCOPES | {"experiments:write", "experiments:rollout"}
+EXPERIMENT_SCOPES = SCOPES | {"experiments:draft", "experiments:rollout"}
 
 
 def envelope(
@@ -335,3 +338,108 @@ def test_a_pre_commit_action_is_audited_through_the_gateway(stack: Stack, run: R
     assert len(audited) == 1
     assert audited[0].policy_decision == "approval.policy:pre_commit.reversible_within_tenant"
     assert audited[0].approval_id
+
+
+# --- spec criterion 6: a halt can only zero ---
+
+HALT_ARGS = {
+    "tenant": "acme",
+    "experiment_id": "exp-7",
+    "experiment_version": "exp:abc123",
+    "reason": "churn rose in the variant",
+}
+
+
+def halt_to(percentage: int) -> ActionRequest:
+    """A halt request built by hand, the one way to give a halt a number: its tool has
+    no percentage argument, so its own prepare only ever writes zero."""
+    honest = prepare_halt(HALT_ARGS)
+    return replace(honest, payload={**honest.payload, "percentage": percentage})
+
+
+def halt(stack: Stack, run: Run, request: ActionRequest) -> None:
+    stack.deps.gateway.execute(
+        request=request,
+        spec=HALT,
+        envelope=envelope(stack, run, EXPERIMENT_SCOPES | {"experiments:halt"}),
+        run_id=run.run_id,
+        state_snapshot="s",
+        tracer=Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions),
+    )
+
+
+def test_the_halt_tool_cannot_express_a_percentage() -> None:
+    assert "percentage" not in HALT.input_schema["properties"]
+    assert prepare_halt(HALT_ARGS).payload["percentage"] == 0
+
+
+def test_a_non_zero_halt_is_refused_before_the_surface_and_audited(stack: Stack, run: Run) -> None:
+    """Refused by the binding check - the halt spec fixes `percentage` at 0 - which runs
+    before policy, approval and containment, so the registry is never asked, and the
+    refusal names the rule that made it. (It was `halt.only_zeroes` inside `decide`
+    until H2 made fixed values a declaration every spec can make.)"""
+    with pytest.raises(PolicyDenied, match="sets exposure to zero"):
+        halt(stack, run, halt_to(5))
+
+    assert stack.registry_client.read("acme/experiments/", {"limit": 50}) == {"experiments": []}
+    denied = [r for r in stack.audit.for_run(run.run_id) if r.outcome == "denied"]
+    assert [r.policy_decision for r in denied] == ["binding.payload"]
+
+
+@pytest.mark.parametrize("percentage", [5, 100, False])
+def test_decide_itself_denies_a_non_zero_halt(stack: Stack, run: Run, percentage: int) -> None:
+    """The gateway's binding check reaches it first, but the authority decision holds
+    it on its own, for any caller that asks `decide` directly - from the spec's declared
+    fixed value, not from a branch on the tool's name."""
+    decision = decide(
+        envelope=envelope(stack, run, EXPERIMENT_SCOPES | {"experiments:halt"}),
+        spec=HALT,
+        request=halt_to(percentage),
+    )
+
+    assert (decision.allowed, decision.rule) == (False, "binding.payload")
+    assert "sets exposure to zero" in decision.reason
+
+
+def test_no_approval_turns_a_non_zero_halt_into_a_permitted_one(stack: Stack, run: Run) -> None:
+    """In the PRE_COMMIT rule set a refusal would only escalate, and an existing grant
+    skips the rules. A person approving exactly this request changes nothing."""
+    request = halt_to(5)
+    stack.approvals.grant(
+        run_id=run.run_id,
+        request=request,
+        state_snapshot="s",
+        approver="a distracted human",
+        summary="looked fine",
+    )
+
+    with pytest.raises(PolicyDenied, match="sets exposure to zero"):
+        halt(stack, run, request)
+
+
+def test_a_zero_halt_proceeds_on_policy(stack: Stack, run: Run) -> None:
+    """The safe direction does not wait on anyone (assumption 3)."""
+    stack.registry_client.commit(
+        "acme/experiments/exp-7",
+        {
+            "experiment_version": "exp:abc123",
+            "hypothesis": "a discount retains at-risk customers",
+            "variant": "20-percent-off",
+        },
+    )
+    stack.registry_client.commit(
+        "acme/experiments/exp-7/rollout",
+        {
+            "experiment_version": "exp:abc123",
+            "percentage": 10,
+            "targeting_model_version": "tabpfn-3.5",
+            "risk_threshold": 0.61,
+            "prior_rollout_event": 0,
+        },
+    )
+
+    halt(stack, run, prepare_halt(HALT_ARGS))
+
+    assert stack.registry_client.read("acme/experiments/exp-7", {})["status"] == "halted"
+    committed = [r for r in stack.audit.for_run(run.run_id) if r.outcome == "committed"]
+    assert committed[0].policy_decision.startswith("approval.policy:")

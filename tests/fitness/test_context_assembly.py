@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -10,7 +11,7 @@ from agentstack.context.assemble import assemble
 from agentstack.context.items import ContextItem, Scope, Trust
 from agentstack.context.retrieval import Candidate
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.wiring import Stack, handle
+from agentstack.interfaces.wiring import OBSERVATIONS_IN_CONTEXT, Stack, handle
 from agentstack.runtime.run import Run
 
 from .conftest import SCOPES
@@ -108,6 +109,28 @@ def test_the_transcript_is_the_record_and_the_bundle_is_derived(
     assert result.bundle.fingerprint() in {
         s.attributes.get("fingerprint") for s in result.tracer.spans
     }, "the assembled view must be inspectable in the trace"
+
+
+def test_earlier_reads_enter_context_bounded_and_most_recent(stack: Stack, run: Run) -> None:
+    """Reads go to the transcript first and into context from there, a handful at a time:
+    a session that read a hundred things must not hand its next turn a hundred items."""
+    look = InboundEvent(
+        channel="test",
+        tenant=run.tenant,
+        user_id=run.user,
+        session_id=run.session_id,
+        text="lookup_subscription tenant=acme customer_id=c-42",
+    )
+    for _ in range(OBSERVATIONS_IN_CONTEXT + 2):
+        handle(stack, look, scopes=SCOPES, run=run)
+
+    last = handle(stack, look, scopes=SCOPES, run=run)
+
+    recorded = [e for e in stack.transcripts.for_session(run.session_id) if e.kind == "observation"]
+    shown = [i for i in last.bundle.items if i.kind == "observation"]
+    assert len(recorded) == OBSERVATIONS_IN_CONTEXT + 3, "the transcript keeps every read"
+    assert [json.loads(i.text)["read_index"] for i in shown] == [3, 4, 5, 6, 7]
+    assert all(i.trust is Trust.UNTRUSTED for i in shown)
 
 
 def test_memory_freshness_is_enforced_at_recall_time() -> None:

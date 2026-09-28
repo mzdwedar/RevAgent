@@ -40,6 +40,15 @@ def killed_while_parked(
 ) -> dict[str, Any]:
     """Park a run on a human approval in a worker, then kill the worker."""
     stack = build_stack(app_database, checkpointer)
+    # The draft an earlier turn wrote, in the shared registry every process sees.
+    stack.registry_client.commit(
+        f"{TENANT}/experiments/{ARGS['experiment_id']}",
+        {
+            "experiment_version": ARGS["experiment_version"],
+            "hypothesis": "a discount retains at-risk customers",
+            "variant": "20-percent-off",
+        },
+    )
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
     stack.approver_directory.add(
         tenant=TENANT, slack_user_id="UANA", principal="ana@acme", added_by="ops"

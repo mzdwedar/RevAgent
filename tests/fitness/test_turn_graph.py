@@ -219,6 +219,9 @@ def test_the_context_carries_the_dependencies_not_the_state() -> None:
         "envelope",
         "deps",
         "instructions",
+        # Earlier reads, handed in per invocation from the transcript (T26). An input,
+        # like the message, so it is context - a resumed turn is handed them again.
+        "observations",
         "carried",
     }
     assert "gateway" not in TurnState.__annotations__

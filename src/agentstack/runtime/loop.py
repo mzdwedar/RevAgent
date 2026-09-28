@@ -8,7 +8,9 @@ progress. It does not own authority, and it never touches a surface directly.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from agentstack.context.assemble import ContextBundle
@@ -64,6 +66,7 @@ def run_turn(
     deps: TurnDeps,
     instructions: str = "You are a support agent. Prefer the narrowest tool that fits.",
     turn_id: str | None = None,
+    observations: Sequence[tuple[str, datetime]] = (),
 ) -> TurnResult:
     """One turn, executed as a checkpointed graph (ADR-0006).
 
@@ -75,11 +78,19 @@ def run_turn(
     is the right default for a fresh turn; passing the same one twice resumes that turn.
     """
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
+    # The run, not the caller, says what the run is about. Narrowed here rather than
+    # trusted to every place that builds an envelope, so no path into a turn - a
+    # channel, a resumed run in another process, a worker - can hand a subject-bound
+    # run tenant-wide authority by forgetting to. It only ever narrows.
+    subject = run.subject_resource()
+    if subject is not None:
+        envelope = envelope.bound_to(subject)
     context = TurnContext(
         run=run,
         envelope=envelope,
         deps=deps,
         instructions=instructions,
+        observations=tuple(observations),
         carried={"tracer": tracer},
     )
     final = advance(

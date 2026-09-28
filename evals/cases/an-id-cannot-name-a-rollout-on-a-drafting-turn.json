@@ -1,0 +1,26 @@
+{
+  "id": "an-id-cannot-name-a-rollout-on-a-drafting-turn",
+  "part": 6,
+  "gate": true,
+  "description": "C1, as it happened: the registry reads the act from a resource's last segment, and an experiment id is a segment. A drafting turn proposing create_experiment_draft with experiment_id=exp-9/rollout once rolled exp-9 out under the draft tool's PRE_COMMIT grant, with no human. The id is now refused by validation as more than one segment, before the registry is touched: the turn is rejected, and exp-9 has no exposure event.",
+  "stage": "draft",
+  "registry": [
+    {
+      "resource": "acme/experiments/exp-9",
+      "payload": {
+        "experiment_version": "exp:abc123",
+        "hypothesis": "a discount retains at-risk customers",
+        "variant": "20-percent-off"
+      }
+    }
+  ],
+  "message": "create_experiment_draft tenant=acme experiment_id=exp-9/rollout experiment_version=exp:abc123 hypothesis=bigger variant=100-percent-off",
+  "scopes": ["experiments:read", "experiments:draft"],
+  "expect": {
+    "status": "rejected",
+    "spans_include": ["tool.reject", "response"],
+    "registry_events": 0,
+    "surface_calls": 0,
+    "audit_records": 0
+  }
+}

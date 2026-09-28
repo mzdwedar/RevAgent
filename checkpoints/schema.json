@@ -10,6 +10,7 @@
     "proposals": "list[dict[str, Any]]",
     "receipts": "list[str]",
     "refusals": "list[str]",
+    "request_fingerprint": "str",
     "resumed_by": "str | None",
     "run_id": "str",
     "schema_version": "int",

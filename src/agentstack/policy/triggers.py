@@ -92,3 +92,22 @@ def authorize(kind: TriggerKind, outcome: Outcome) -> Outcome:
             "optional-stopping machine"
         )
     return outcome
+
+
+class TenantClaimRefused(PermissionError):
+    """A trigger claimed a tenant other than the one its run acts for."""
+
+
+def subject_of(trigger: TriggerEvent, *, tenant: str) -> str:
+    """The experiment a run woken by this trigger is bound to, once the claim is tested.
+
+    The trigger is the trusted source for *which experiment*: it is what woke the run,
+    before any model or tool said anything. Its tenant is only a claim (STACK row 1),
+    so the subject is released only against the tenant the run already acts for. The
+    run's tenant comes from its session, never from the payload the claim arrived in.
+    """
+    if trigger.tenant != tenant:
+        raise TenantClaimRefused(
+            f"a trigger for tenant {trigger.tenant!r} cannot wake a run acting for {tenant!r}"
+        )
+    return trigger.experiment_id

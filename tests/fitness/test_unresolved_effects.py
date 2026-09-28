@@ -23,6 +23,7 @@ import pytest
 
 from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.idempotency import ClaimState, IdempotencyLedger
+from agentstack.execution.surfaces import SurfaceRefused
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, build_stack, envelope_for, handle
 from agentstack.observability.spans import Tracer
@@ -119,6 +120,86 @@ def test_reconciliation_settles_the_key_and_the_retry_deduplicates(
     assert result.deduplicated is True
     assert result.receipt == "receipt-reconciled"
     assert len(stack.client.calls) == 1
+
+
+# --- refused is not unresolved (T24) ---
+#
+# "The surface refused before acting" and "the answer was lost" look identical from
+# inside the gateway only if the surface cannot say which one happened. A guarded write
+# that matched no row can: nothing applied. Treating that as unresolved would leave a
+# key nobody needs to reconcile, and block the legitimate call that comes after it.
+
+
+def _refused_turn(stack: Stack, event: InboundEvent, run: Run) -> Any:
+    parked = handle(stack, event, scopes=SCOPES, run=run)
+    approve_and_resume(stack, parked, run)
+    stack.client.refuse_before_effect = True
+    return handle(stack, event, scopes=SCOPES, run=run)
+
+
+def test_a_refused_effect_releases_its_claim(stack: Stack, event: InboundEvent, run: Run) -> None:
+    _refused_turn(stack, event, run)
+
+    assert stack.client.calls == [], "a refusal is a surface that did not act"
+    assert stack.ledger.unresolved_keys() == (), (
+        "a refusal left a claim someone would have to reconcile for nothing"
+    )
+
+
+def test_a_refused_effect_is_audited_as_refused_not_unresolved(
+    stack: Stack, event: InboundEvent, run: Run
+) -> None:
+    _refused_turn(stack, event, run)
+
+    outcomes = {(r.outcome, r.policy_decision) for r in stack.audit.for_run(run.run_id)}
+    assert ("refused", "surface.refused") in outcomes
+    assert not any(outcome == "unresolved" for outcome, _ in outcomes)
+
+
+def test_the_turn_answers_a_refusal_instead_of_crashing(
+    stack: Stack, event: InboundEvent, run: Run
+) -> None:
+    result = _refused_turn(stack, event, run)
+
+    assert result.status == "rejected"
+    assert "tool.reject" in result.tracer.names()
+    assert "refused" in result.text
+
+
+def test_after_a_refusal_the_same_effect_can_still_happen_once(
+    stack: Stack, event: InboundEvent, run: Run
+) -> None:
+    """The key was released, so a later call - the state has moved on, the precondition
+    now holds - acts. It acts once."""
+    _refused_turn(stack, event, run)
+    stack.client.refuse_before_effect = False
+
+    handle(stack, event, scopes=SCOPES, run=run)
+    handle(stack, event, scopes=SCOPES, run=run)
+
+    assert len(stack.client.calls) == 1
+
+
+def test_the_gateway_reraises_the_refusal_to_its_caller(
+    stack: Stack, event: InboundEvent, run: Run
+) -> None:
+    """The runtime turns it into an answer; a caller without a turn still sees it."""
+    parked = handle(stack, event, scopes=SCOPES, run=run)
+    approve_and_resume(stack, parked, run)
+    stack.client.refuse_before_effect = True
+    request = parked.pending_request
+    view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
+    tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)
+
+    with pytest.raises(SurfaceRefused):
+        stack.deps.gateway.execute(
+            request=request,
+            spec=REFUND,
+            envelope=envelope_for(view, scopes=SCOPES),
+            run_id=run.run_id,
+            state_snapshot=parked.pending_wait.state_snapshot,
+            tracer=tracer,
+        )
 
 
 def test_an_unresolved_claim_survives_the_process_that_made_it(
