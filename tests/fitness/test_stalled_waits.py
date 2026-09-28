@@ -16,14 +16,15 @@ from typing import Any
 
 import pytest
 
-from agentstack.context.frozen_cohorts import FrozenCohortStore
+from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.targeting import Cohort, TargetingRule
 from agentstack.interfaces import operator_cli
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.slack import RecordingNotifier
 from agentstack.interfaces.triggers import parse_trigger
-from agentstack.interfaces.wiring import ChannelAsker, Stack, build_stack, handle
+from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, Stack, build_stack, handle
 from agentstack.runtime.cycles import UNSETTLED_AFTER, CycleStore
+from agentstack.runtime.drafting import intended_rollout
 from agentstack.runtime.run import Run
 from agentstack.runtime.temporal.contracts import AskIntent
 from agentstack.runtime.waits import (
@@ -34,6 +35,8 @@ from agentstack.runtime.waits import (
     resume,
 )
 from agentstack.storage.database import Database, IntegrityViolation
+from agentstack.tools.action import ActionRequest
+from agentstack.tools.experiments import ROLLOUT, prepare_rollout
 from tests.temporal_support import activities_for
 
 from .conftest import SCOPES, TENANT
@@ -51,13 +54,21 @@ def park_trigger(stack: Stack, run: Run, timeout: timedelta = WEEK) -> Wait:
     )
 
 
-def park_approval(stack: Stack, run: Run) -> Wait:
+def park_approval(
+    stack: Stack, run: Run, *, summary: str | None = "roll_out_variant_to_percentage — IRREVERSIBLE"
+) -> Wait:
+    """What a rollout turn parks: the frozen cohort's rollout, its fingerprint and the
+    action itself (A1: the wait holds what it asks about, and an ask reads it from there)."""
+    cohort = frozen(stack, run)
+    arguments = intended_rollout(cohort)
     return stack.waits.park(
         run_id=run.run_id,
         kind="human_approval",
         state_snapshot="fp-1",
-        action_fingerprint="fp-action-1",
-        approval_summary="roll_out_variant_to_percentage — IRREVERSIBLE",
+        action_fingerprint=prepare_rollout(arguments).fingerprint(),
+        approval_summary=summary,
+        action_tool=ROLLOUT.name,
+        action_arguments=arguments,
     )
 
 
@@ -263,12 +274,12 @@ def test_overdue_formats_hours_below_a_day() -> None:
 VERSION = "exp:abc123"
 
 
-def frozen(stack: Stack, run: Run) -> None:
+def frozen(stack: Stack, run: Run) -> FrozenCohort:
     """The cohort the question is about: an ask is sized from it, never from memory."""
     rule = TargetingRule(
         profile="test", risk_quantile=0.9, minimum_cohort=10, minimum_annual_value_at_risk_cents=1
     )
-    FrozenCohortStore(db=stack.runs.db).record(
+    return FrozenCohortStore(db=stack.runs.db).record(
         tenant=run.tenant,
         experiment_id="exp-7",
         cohort=Cohort(
@@ -296,7 +307,7 @@ class Asking:
         self.answer = answer
         self.asked: list[str] = []
 
-    def ask(self, *, run: Run, wait: Wait, cohort: Any, percentage: int) -> str:
+    def ask(self, *, run: Run, wait: Wait, cohort: Any, action: ActionRequest) -> str:
         if self.fail:
             raise RuntimeError("slack is down")
         if self.answer:
@@ -305,11 +316,12 @@ class Asking:
                 ResumeEvent(run.run_id, wait.wait_id, wait.state_snapshot, {"approved_by": "ana"}),
             )
         self.asked.append(wait.wait_id)
-        return self.inner.ask(run=run, wait=wait, cohort=cohort, percentage=percentage)
+        return self.inner.ask(run=run, wait=wait, cohort=cohort, action=action)
 
 
 def ask(stack: Stack, run: Run, wait: Wait, asker: Asking, *, asked: int) -> None:
-    activities_for(stack.runs.db, asker=asker).ask_approval(
+    # The turn host supplies the registry the wait's action is validated against again.
+    activities_for(stack.runs.db, asker=asker, turns=ExperimentTurns(stack)).ask_approval(
         AskIntent(
             run_id=run.run_id,
             wait_id=wait.wait_id,
@@ -406,13 +418,7 @@ def test_an_answer_landing_mid_reask_wins(stack: Stack, run: Run) -> None:
 def test_a_wait_that_does_not_say_what_it_asks_is_never_put(stack: Stack, run: Run) -> None:
     """An ask is built from the wait's recorded summary. Without one there is nothing a
     person could decide, so none is invented."""
-    wait = stack.waits.park(
-        run_id=run.run_id,
-        kind="human_approval",
-        state_snapshot="fp-1",
-        action_fingerprint="fp-action-1",
-    )
-    frozen(stack, run)
+    wait = park_approval(stack, run, summary=None)
 
     with pytest.raises(ValueError, match="does not say what it asks about"):
         ask(stack, run, wait, Asking(stack), asked=0)

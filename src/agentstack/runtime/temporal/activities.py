@@ -17,7 +17,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import NoReturn, Protocol
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -25,12 +25,19 @@ from temporalio.exceptions import ApplicationError
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.execution.gateway import UnresolvedEffect
+from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import SpanSink, Tracer
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind
 from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
-from agentstack.runtime.drafting import ROLLOUT_PERCENTAGE, draft_instruction, rollout_instruction
+from agentstack.runtime.drafting import (
+    PROPOSAL_DEVIATES,
+    draft_instruction,
+    rollout_admission,
+    rollout_deviation,
+    rollout_instruction,
+)
 from agentstack.runtime.graph import finished_turn, turn_thread
 from agentstack.runtime.loop import TurnDeps
 from agentstack.runtime.loop import run_turn as take_turn
@@ -43,6 +50,7 @@ from agentstack.runtime.temporal.contracts import (
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
+    NOT_ANSWERED,
     PARK_TRIGGER_WAIT,
     ROLLOUT,
     RUN_TURN,
@@ -82,10 +90,19 @@ HEARTBEAT_EVERY_S = 5.0
 
 NO_TURN_HOST = "NoTurnHost"
 NO_ASKER = "NoAsker"
-# The answered wait names an action no checkpointed proposal of its turn prepares to.
+# The answered wait holds no action that is still valid and matches its fingerprint.
 NOTHING_APPROVED = "NothingApproved"
 # The surface can't describe the resource, so no approval can be checked against it now.
 WORLD_UNREADABLE = "WorldUnreadable"
+# The wait's action is not the rollout its frozen cohort gets: never asked, never acted.
+DEVIATES = "ProposalDeviates"
+# The wait holds no action fit to be asked about.
+NOTHING_TO_ASK = "NothingToAsk"
+
+
+class RecordedActionUnusable(ValueError):
+    """The wait's recorded action is missing, no longer valid, or not the one its
+    fingerprint names."""
 
 
 class TurnHost(Protocol):
@@ -110,9 +127,13 @@ class Asker(Protocol):
 
     Everything the question says comes from the record (the wait and the frozen cohort),
     so the process that asks needn't be the one that parked it. Returns the message id.
+
+    `action` is the one the wait holds, validated again and held to its fingerprint: what
+    the person is told is what an approval binds and what commits. Nothing the question
+    says about the rollout (its percentage above all) may come from anywhere else.
     """
 
-    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, percentage: int) -> str: ...
+    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, action: ActionRequest) -> str: ...
 
 
 class RunActivities:
@@ -128,6 +149,7 @@ class RunActivities:
         scorer: ChurnScorer,
         trigger_deadline: timedelta,
         traces: SpanSink,
+        audit: AuditSink,
         rule: TargetingRule | None = None,
         turns: TurnHost | None = None,
         asker: Asker | None = None,
@@ -135,6 +157,9 @@ class RunActivities:
         # Required: an activity's caller is the workflow, which never holds spans (they
         # would be history). Without a sink, every span a turn or a commit emits is lost.
         self._traces = traces
+        # Required too: a refusal at the ask or the act that never reaches the gateway
+        # is still an accountability event, and the gateway can't record what it never saw.
+        self._audit = audit
         self._asker = asker
         self._runs = runs
         self._cycles = cycles
@@ -273,13 +298,28 @@ class RunActivities:
             return _outcome(done)
 
         message = self._instruction(intent, run, cycle)
+        envelope = turns.envelope(run)
+        # A rollout turn is told the frozen cohort's rollout and admitted to propose that
+        # and nothing else: a proposal that differs is refused before it is parked, so
+        # nobody is ever asked about it (A1, C1).
+        admit = (
+            rollout_admission(
+                cohort=self._frozen(run.tenant, cycle),
+                audit=self._audit,
+                run=run,
+                principal=envelope.principal,
+            )
+            if intent.stage == ROLLOUT
+            else None
+        )
         with _heartbeating():
             result = take_turn(
                 run=run,
-                envelope=turns.envelope(run),
+                envelope=envelope,
                 message=message,
                 deps=turns.deps,
                 turn_id=turn_id,
+                admit=admit,
             )
         # Tagged with this run and its session, as every span is: never with Temporal's ids.
         self._traces.export(result.tracer.spans)
@@ -327,6 +367,12 @@ class RunActivities:
         is the silent expiry this exists to prevent. So the question is posted first and
         the re-ask recorded after, only moving forward, and an answer that landed while
         it was being put wins.
+
+        The question is about the action the wait holds, and only if that action is the
+        frozen cohort's rollout. The headline's percentage and headcount are that
+        action's, never a constant beside it: what the person reads is what an approval
+        binds and what commits (A1, C1). A wait holding anything else is refused here,
+        audited, and never put.
         """
         if self._asker is None:
             raise ApplicationError(
@@ -334,18 +380,40 @@ class RunActivities:
                 type=NO_ASKER,
                 non_retryable=True,
             )
-        run = self._runs.get(intent.run_id)
+        recorded = self._runs.get(intent.run_id)
         wait = self._waits.get(intent.wait_id)
-        assert run is not None and wait is not None  # parked by this run's turn
+        assert recorded is not None and wait is not None  # parked by this run's turn
         if wait.satisfied:
             return AskResult(answered=True)  # answered before it could be asked again
         cohort = self._cohorts.get(
-            tenant=run.tenant,
+            tenant=recorded.tenant,
             experiment_id=intent.experiment_id,
             experiment_version=intent.experiment_version,
         )
         assert cohort is not None  # the rollout was proposed from it
-        self._asker.ask(run=run, wait=wait, cohort=cohort, percentage=ROLLOUT_PERCENTAGE)
+        run = dataclasses.replace(recorded, stage=ROLLOUT)
+        tracer = self._tracer(run)
+        try:
+            try:
+                request, _ = self._recorded(run, wait)
+            except RecordedActionUnusable as exc:
+                self._refuse(
+                    run, wait, tracer, span="ask.refuse", kind=NOTHING_TO_ASK, reason=str(exc)
+                )
+            deviates = rollout_deviation(request, cohort)
+            if deviates is not None:
+                self._refuse(
+                    run,
+                    wait,
+                    tracer,
+                    span="ask.refuse",
+                    kind=DEVIATES,
+                    reason=deviates,
+                    request=request,
+                )
+            self._asker.ask(run=run, wait=wait, cohort=cohort, action=request)
+        finally:
+            self._traces.export(tracer.spans)
         if intent.asked > 0:
             self._waits.record_asked(
                 intent.wait_id,
@@ -358,13 +426,20 @@ class RunActivities:
     def commit(self, intent: CommitIntent) -> CommitOutcome:
         """The irreversible act: what the person was asked about, through the gateway.
 
-        Nothing is carried to here but ids (ADR-0008 rule 3). The action is the one the
-        rollout turn proposed, read from its checkpoint and held to the fingerprint the
-        wait recorded. The snapshot is the world as the surface describes it *now*, so
-        an approval given against a world that has since moved is `ApprovalStale`. The
-        envelope is minted for this act. Whether it may happen at all is the gateway's
-        to decide: a "no", an outsider's click or a forged wake-up leaves no human
-        approval, and the gateway refuses. That refusal is audited and not retried.
+        Nothing is carried to here but ids (ADR-0008 rule 3). The wait is read first: a
+        run woken while its wait is still unanswered (a stray or forged signal) acts on
+        nothing, records the wake and says `not_answered`, and the run goes back to
+        waiting (A1, H2). No run advances past an unsatisfied wait.
+
+        The action is the one the wait holds (0015), validated against the tool's schema
+        again, held to the fingerprint the wait recorded and to the frozen cohort the
+        rollout is for. It is never rebuilt from a turn's checkpoint, whose shape can
+        change under a parked approval (A1, H4). The snapshot is the world as the surface
+        describes it *now*, so an approval given against a world that has since moved is
+        `ApprovalStale`. The envelope is minted for this act. Whether it may happen at
+        all is the gateway's to decide: a "no" leaves no human approval, and the gateway
+        refuses. Every refusal, the gateway's or this activity's own, is audited and has
+        a span, and none is retried.
 
         An effect of unknown outcome is not retried either (E2). The run parks a
         reconcile wait, and once someone has settled the claim against the surface, the
@@ -375,25 +450,64 @@ class RunActivities:
         wait = self._waits.get(intent.wait_id)
         assert recorded is not None and wait is not None  # parked by this run's turn
         run = dataclasses.replace(recorded, stage=ROLLOUT)
-        request, spec = self._approved(run, intent, wait)
-        tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=turns.deps.versions)
+        tracer = self._tracer(run)
         # Exported however the act ends: a refusal is the trace someone will want most.
         try:
-            return self._act(turns, run, request, spec, tracer)
+            if not wait.satisfied:
+                return self._not_answered(run, wait, tracer)
+            request, spec = self._approved(run, intent, wait, tracer)
+            return self._act(turns, run, wait, request, spec, tracer)
         finally:
             self._traces.export(tracer.spans)
 
+    def _tracer(self, run: Run) -> Tracer:
+        return Tracer(
+            run_id=run.run_id, session_id=run.session_id, versions=self._host().deps.versions
+        )
+
+    def _not_answered(self, run: Run, wait: Wait, tracer: Tracer) -> CommitOutcome:
+        """Woken for a wait nobody answered. Recorded, because a forged wake-up is worth
+        knowing about, and then nothing: no gateway, no surface, no refusal to retry."""
+        with tracer.span("commit.not_answered", wait=wait.wait_id):
+            pass
+        self._audit.write(
+            run_id=run.run_id,
+            principal=run.user,
+            tenant=run.tenant,
+            action_fingerprint=wait.action_fingerprint or "",
+            surface="approval",
+            resource=wait.wait_id,
+            policy_decision="wait.unsatisfied",
+            approval_id=None,
+            outcome=NOT_ANSWERED,
+            wait_id=wait.wait_id,
+            state_snapshot=wait.state_snapshot,
+        )
+        return CommitOutcome(status=NOT_ANSWERED, wait_id=wait.wait_id)
+
     def _act(
-        self, turns: TurnHost, run: Run, request: ActionRequest, spec: ToolSpec, tracer: Tracer
+        self,
+        turns: TurnHost,
+        run: Run,
+        wait: Wait,
+        request: ActionRequest,
+        spec: ToolSpec,
+        tracer: Tracer,
     ) -> CommitOutcome:
         gateway = turns.deps.gateway
         world = gateway.observe(request=request, tracer=tracer)
         if world is None:
-            raise ApplicationError(
-                f"{request.resource} can't be described by its surface now, so no approval "
-                "can be checked against it at the act",
-                type=WORLD_UNREADABLE,
-                non_retryable=True,
+            self._refuse(
+                run,
+                wait,
+                tracer,
+                span="commit.refuse",
+                kind=WORLD_UNREADABLE,
+                reason=(
+                    f"{request.resource} can't be described by its surface now, so no "
+                    "approval can be checked against it at the act"
+                ),
+                request=request,
             )
         try:
             result = gateway.execute(
@@ -416,33 +530,99 @@ class RunActivities:
         return CommitOutcome(status="deduplicated" if result.deduplicated else "committed")
 
     def _approved(
-        self, run: Run, intent: CommitIntent, wait: Wait
+        self, run: Run, intent: CommitIntent, wait: Wait, tracer: Tracer
     ) -> tuple[ActionRequest, ToolSpec]:
-        """The proposal this wait asked about, as the rollout turn checkpointed it.
+        """The action this wait asked about, from the wait itself, and only if it is still
+        the frozen cohort's rollout: what commits is what the person was shown, or
+        nothing, and the refusal is audited here because the gateway never sees it."""
+        try:
+            request, spec = self._recorded(run, wait)
+        except RecordedActionUnusable as exc:
+            self._refuse(
+                run, wait, tracer, span="commit.refuse", kind=NOTHING_APPROVED, reason=str(exc)
+            )
+        cycle = self._cycles.get(
+            TriggerEvent(
+                kind=TriggerKind(intent.kind),
+                experiment_id=intent.experiment_id,
+                data_as_of=intent.data_as_of,
+                tenant=run.tenant,
+            )
+        )
+        assert cycle is not None  # the rollout turn followed the cycle that settled
+        deviates = rollout_deviation(request, self._frozen(run.tenant, cycle))
+        if deviates is not None:
+            self._refuse(
+                run,
+                wait,
+                tracer,
+                span="commit.refuse",
+                kind=DEVIATES,
+                reason=deviates,
+                request=request,
+            )
+        return request, spec
 
-        Prepared again, against what this run may use now, and held to the fingerprint
-        the wait recorded: what commits is what the person was shown, or nothing.
+    def _recorded(self, run: Run, wait: Wait) -> tuple[ActionRequest, ToolSpec]:
+        """The action the wait holds, prepared again against what this run may use now.
+
+        Validated against the tool's schema a second time (the record is data, and data
+        outlives the code that wrote it) and held to the fingerprint the wait recorded
+        beside it, which is what the approval is bound to.
         """
         deps = self._host().deps
-        turn_id = _turn_id(ROLLOUT, intent.experiment_id, intent.data_as_of, intent.kind)
-        state = finished_turn(deps.graph, turn_thread(run.run_id, turn_id)) or {}
-        proposals = state.get("proposals") or []
-        assert isinstance(proposals, list)
+        if wait.action_tool is None or wait.action_arguments is None:
+            raise RecordedActionUnusable(
+                f"{wait.wait_id} does not hold the action it asked about; nothing to act on"
+            )
         exposed = deps.registry.expose_for(tenant=run.tenant, stage=run.stage)
-        for proposal in proposals:
-            try:
-                request = deps.registry.prepare(
-                    str(proposal["tool"]), proposal["arguments"], exposed=exposed
-                )
-            except (InvalidToolArguments, ToolNotExposed):
-                continue
-            if request.fingerprint() == wait.action_fingerprint:
-                return request, deps.registry.spec(request.tool)
-        raise ApplicationError(
-            f"{wait.wait_id} asked about an action its turn never proposed; nothing to commit",
-            type=NOTHING_APPROVED,
-            non_retryable=True,
+        try:
+            request = deps.registry.prepare(
+                wait.action_tool, wait.action_arguments, exposed=exposed
+            )
+        except (InvalidToolArguments, ToolNotExposed) as exc:
+            raise RecordedActionUnusable(
+                f"{wait.wait_id} holds an action this run can no longer prepare: {exc}"
+            ) from exc
+        if request.fingerprint() != wait.action_fingerprint:
+            raise RecordedActionUnusable(
+                f"{wait.wait_id} holds an action that is not the one its fingerprint names; "
+                "an approval binds the fingerprint, so this one approves nothing"
+            )
+        return request, deps.registry.spec(request.tool)
+
+    def _refuse(
+        self,
+        run: Run,
+        wait: Wait,
+        tracer: Tracer,
+        *,
+        span: str,
+        kind: str,
+        reason: str,
+        request: ActionRequest | None = None,
+    ) -> NoReturn:
+        """Refuse at the ask or the act, before the gateway: a span, an audit record, and
+        one non-retryable failure. The gateway audits its own refusals; these it never
+        sees, and an unaudited refusal of an irreversible act is a hole in the trail."""
+        with tracer.span(span, refusal=kind, wait=wait.wait_id, reason=reason):
+            pass
+        self._audit.write(
+            run_id=run.run_id,
+            principal=run.user,
+            tenant=run.tenant,
+            action_fingerprint=(
+                request.fingerprint() if request is not None else wait.action_fingerprint or ""
+            ),
+            surface=request.surface.value if request is not None else "approval",
+            resource=request.resource if request is not None else wait.wait_id,
+            policy_decision=PROPOSAL_DEVIATES if kind == DEVIATES else f"refused:{kind}",
+            approval_id=None,
+            outcome="refused",
+            wait_id=wait.wait_id,
+            state_snapshot=wait.state_snapshot,
         )
+        raise ApplicationError(reason, type=kind, non_retryable=True)
 
 
 def _turn_id(stage: str, experiment_id: str, data_as_of: str, kind: str) -> str:

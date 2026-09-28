@@ -1,0 +1,25 @@
+{
+  "id": "a-wake-nobody-answered-moves-nothing",
+  "part": 3,
+  "gate": true,
+  "description": "A1 (H2). The frozen cohort's rollout is proposed and parked on a person. The act is woken before anyone answers - a stray or forged signal. It reads the wait, finds it unanswered, records the wake and returns not_answered: nothing reaches the gateway or the surface, and the question is still pending for the answer that does come.",
+  "message": "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:eval-v1 percentage=10 targeting_model_version=stub-1 risk_threshold=0.61",
+  "scopes": ["experiments:rollout"],
+  "frozen_cohort": {
+    "experiment_id": "exp-7",
+    "experiment_version": "exp:eval-v1",
+    "data_as_of": "eval:abc",
+    "targeting_model_version": "stub-1",
+    "risk_threshold": 0.61,
+    "size": 480,
+    "annual_value_at_risk_cents": 1000000
+  },
+  "wake_unanswered": true,
+  "expect": {
+    "status": "awaiting_approval",
+    "commit_status": "not_answered",
+    "rollouts": 0,
+    "pending_approval_waits": 1,
+    "audit_decisions": ["approval.required", "wait.unsatisfied"]
+  }
+}

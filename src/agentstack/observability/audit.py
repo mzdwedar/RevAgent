@@ -25,11 +25,15 @@ class AuditRecord:
     approval_id: str | None
     outcome: str
     at: datetime
+    # Set when the record is about a wait: a person's answer to it, or a refusal at the
+    # act that never reached the gateway. The gateway's own records are about an action.
+    wait_id: str | None = None
+    state_snapshot: str | None = None
 
 
 _COLUMNS = (
     "run_id, principal, tenant, action_fingerprint, surface, resource, "
-    "policy_decision, approval_id, outcome, at"
+    "policy_decision, approval_id, outcome, at, wait_id, state_snapshot"
 )
 
 
@@ -56,10 +60,12 @@ class AuditSink:
         policy_decision: str,
         approval_id: str | None,
         outcome: str,
+        wait_id: str | None = None,
+        state_snapshot: str | None = None,
     ) -> AuditRecord:
         row = self.db.fetch_one(
             f"INSERT INTO audit.records ({_COLUMNS})"
-            f" VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+            f" VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
             (
                 run_id,
                 principal,
@@ -71,6 +77,8 @@ class AuditSink:
                 approval_id,
                 outcome,
                 datetime.now(UTC),
+                wait_id,
+                state_snapshot,
             ),
         )
         assert row is not None  # RETURNING on a successful insert always yields a row

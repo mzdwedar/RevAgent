@@ -63,6 +63,11 @@ class Wait:
     # and an approval wait is asked again; neither is allowed to lapse quietly.
     deadline: datetime | None = None
     reasks: int = 0
+    # The action itself: the tool and its validated arguments (0015). The fingerprint
+    # says *which* action; this is the action, so the process that commits it reads it
+    # from the record and not from a turn's checkpoint, whose shape can change under it.
+    action_tool: str | None = None
+    action_arguments: dict[str, Any] | None = None
 
 
 def approval_wait_id(run_id: str, action_fingerprint: str, state_snapshot: str) -> str:
@@ -94,7 +99,7 @@ class ResumeEvent:
 
 _COLUMNS = (
     "wait_id, run_id, kind, state_snapshot, created_at, satisfied, payload, "
-    "action_fingerprint, approval_summary, deadline, reasks"
+    "action_fingerprint, approval_summary, deadline, reasks, action_tool, action_arguments"
 )
 
 
@@ -112,6 +117,8 @@ class WaitStore:
         approval_summary: str | None = None,
         timeout: timedelta | None = None,
         wait_id: str | None = None,
+        action_tool: str | None = None,
+        action_arguments: dict[str, Any] | None = None,
     ) -> Wait:
         """Persist a wait, due `timeout` from now.
 
@@ -136,8 +143,8 @@ class WaitStore:
         wait_id = wait_id or f"wait-{uuid.uuid4()}"
         row = self.db.fetch_one(
             "INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at,"
-            "  action_fingerprint, approval_summary, deadline)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            "  action_fingerprint, approval_summary, deadline, action_tool, action_arguments)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)"
             f" ON CONFLICT (wait_id) DO NOTHING RETURNING {_COLUMNS}",
             (
                 wait_id,
@@ -148,6 +155,8 @@ class WaitStore:
                 action_fingerprint,
                 approval_summary,
                 None if timeout is None else now + timeout,
+                action_tool,
+                None if action_arguments is None else json.dumps(action_arguments),
             ),
         )
         if row is None:

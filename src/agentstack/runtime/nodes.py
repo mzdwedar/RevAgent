@@ -23,7 +23,7 @@ from agentstack.runtime.graph import TurnContext, TurnState
 from agentstack.runtime.snapshot import resource_snapshot, world_snapshot
 from agentstack.runtime.waits import approval_wait_id
 from agentstack.tools.registry import ToolNotExposed
-from agentstack.tools.validation import InvalidToolArguments
+from agentstack.tools.validation import InvalidToolArguments, validate_arguments
 
 
 class WrongRun(RuntimeError):
@@ -208,6 +208,16 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 pass
             refusals.append(str(exc))
             continue
+        # Well-formed and exposed is not the same as the one this turn was told to
+        # propose. A turn held to a record refuses anything else here, before the
+        # gateway, so it is never parked and never put to a person.
+        admit = ctx.carried.get("admit")
+        refused = admit(request) if admit is not None else None
+        if refused is not None:
+            with tracer.span("tool.reject", tool=tool, reason=refused):
+                pass
+            refusals.append(refused)
+            continue
         spec = deps.registry.spec(tool)
         # The world as its surface describes it, when it can: the same snapshot a commit
         # reads again at the act (T43). Otherwise what this turn knows on its own.
@@ -278,6 +288,10 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 # handles the answer may not be this one.
                 action_fingerprint=request.fingerprint(),
                 approval_summary=summary,
+                # And the action itself, validated: the record the act commits from, so
+                # no checkpoint has to be readable for a person's answer to count.
+                action_tool=request.tool,
+                action_arguments=validate_arguments(spec, proposal["arguments"]),
             )
             with tracer.span("response", status="awaiting_approval", wait=wait.wait_id):
                 pass

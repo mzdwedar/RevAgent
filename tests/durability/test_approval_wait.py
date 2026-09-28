@@ -21,6 +21,7 @@ import pytest
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.interfaces.slack import RecordingNotifier
 from agentstack.interfaces.wiring import Stack, build_stack, deliver
+from agentstack.policy.approvers import ApprovalReply
 from agentstack.runtime.drafting import ROLLOUT_PERCENTAGE, estimated_customers
 from agentstack.runtime.temporal.contracts import (
     REASK_EVERY,
@@ -147,7 +148,25 @@ def test_unanswered_for_three_days_it_is_asked_at_every_interval(
 
 
 def test_an_answer_stops_the_asking(stack: Stack, app_database: Database) -> None:
+    """An answer: recorded by layer 8, then signalled. A bare signal is not one (A1, H2):
+    the act finds the wait unanswered and the run goes on asking."""
+    stack.approver_directory.add(
+        tenant="acme", slack_user_id="UANA", principal="ana@acme", added_by="t41"
+    )
+
     async def answer_then_wait(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
+        cycle = parked.cycles[0]
+        stack.coordinator.apply(
+            ApprovalReply(
+                run_id=parked.run_id,
+                wait_id=parked.awaiting_approval or "",
+                experiment_version=cycle.experiment_version or "",
+                data_as_of=cycle.data_as_of,
+                approved=True,
+                slack_user_id="UANA",
+                channel="C1",
+            )
+        )
         await handle.signal(ExperimentWorkflow.answered, parked.awaiting_approval)
         answered = await progress_until(handle, lambda p: p.awaiting_approval is None)
         await env.sleep(2 * REASK_EVERY)

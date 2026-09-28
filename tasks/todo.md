@@ -1654,3 +1654,87 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   unverified), M6 (a stale approval at the act re-proposes or ends visibly), L1–L7.
   Merging with `main` (C2, H1, H3 there; `test_concurrency`) is its own task after these.
 - [ ] Human review
+
+- [x] **A1 — What a person is asked about is what commits** · layers 8, 3, 9, 10 · *M*
+  (audit findings C1, H2, H3, H4; added 2026-09-28)
+  - **C1 (critical). What the approver read was not what the approval bound.** The ask
+    headlined a constant `ROLLOUT_PERCENTAGE` and a headcount built from it, while the
+    approval and the act bound the fingerprint of whatever the model proposed. Nothing
+    held the proposal to the frozen cohort, and `percentage` is an unbounded integer.
+    So a proposal of 100%, or a looser threshold, would have been shown as "~4 customers
+    (10%)" and then rolled out as proposed.
+    - Kept from T43: the model's proposal is what commits. It now has to be the frozen
+      cohort's rollout first. `drafting.intended_rollout(cohort)` is the one rollout the
+      record allows, and the instruction is built from it. `rollout_deviation` compares a
+      prepared request with it by fingerprint and names each argument that differs.
+    - The rollout turn gets a `rollout_admission`, passed through `run_turn(admit=...)`
+      into `carried`, so `TurnContext` and the checkpoint shape don't change. `act`
+      refuses a deviating proposal after `prepare` and before the gateway, so no wait is
+      parked and nobody is asked. The refusal is a `tool.reject` span and an audit
+      record, `proposal.deviates`, under the agent.
+    - The ask and the act check the wait's action against the cohort again
+      (`ProposalDeviates`, audited, non-retryable). This catches a wait parked some
+      other way.
+    - The question is sized from the action the wait holds: `Asker.ask(action=...)`, and
+      `ChannelAsker` reads the percentage and version from its payload. No constant is
+      left in the ask.
+  - **H2. A stray `answered` signal moved the run past an unsatisfied wait.** `commit`
+    now reads the wait first. If it is unsatisfied, the activity writes a
+    `commit.not_answered` span and a `wait.unsatisfied` audit record, and returns
+    `not_answered`. Nothing reaches the gateway. The workflow spends that one wake and
+    goes back to the same question on the re-ask timer, without posting it again. A
+    later genuine yes commits.
+    - `test_commit.py:224` asserted that the wait was still unanswered *after the run had
+      moved on*, which enshrined the bug. It now asserts the correct behaviour (renamed
+      `test_a_wake_up_nobody_answered_moves_nothing_and_a_later_yes_still_commits`).
+      That is a fix, not a weakening.
+    - `test_approval_wait::test_an_answer_stops_the_asking` used a bare signal as the
+      "answer". It now records a real answer before signalling.
+  - **H3. A "no" left no accountability record.** `ApprovalCoordinator` has an audit sink
+    now, and writes a record for every answer: `human.approved`, `human.refused`,
+    `approver.not_authorized` for an outsider (under `slack:<claim>`, never promoted to
+    a person), and `answer.not_applicable` for a second click. Each names the approver,
+    wait id, fingerprint and snapshot. The records survive session deletion, which the
+    wait's payload doesn't.
+    - The commit activity audits its own refusals before the gateway, each with a
+      `commit.refuse` span: `NothingApproved`, `WorldUnreadable` and `ProposalDeviates`.
+      `NothingApproved` had neither before.
+    - `RunActivities` requires `audit`, just as it requires `traces`. Audit and traces
+      stay separate sinks.
+  - **H4. The approved action lived only in the LangGraph checkpoint.** `migrations/0015`
+    adds `waits.action_tool` and `waits.action_arguments` (both or neither), plus
+    `audit.records.wait_id` and `state_snapshot`. `act` parks the validated arguments
+    with the wait. `commit` reads them from the wait, prepares them again through the
+    registry (schema and exposure), and holds them to the recorded fingerprint. It
+    never reads the checkpoint. Approval waits parked before 0015 hold no action and
+    are refused at the act, with an audit record, rather than backfilled.
+  - **Found:**
+    - The workflow's reconcile loop has the same shape as H2. A stray signal naming a
+      reconcile wait makes `_act` commit again. The gateway answers `unresolved` and the
+      same reconcile wait is re-parked, but the wait id stays in `_answered`, so the loop
+      spins on activities without a timer. It is not fixed here because A2 edits the
+      same loop.
+    - `data/manifest.json` is not tracked on this branch, so a fresh worktree fails
+      `test_data_snapshot` until `data/` is present.
+    - `stack_guard` and `checkpoint_guard` with `--base main` report findings that come
+      from `main` being ahead of this branch (`request_fingerprint`, the envelope fields,
+      four CONSTRAINTS rows), not from this diff. Against the task base both are clean.
+  - Tests: **15 new** (727 collected, was 712).
+    - `test_proposal_admission.py` (8): four deviations never parked or asked, and
+      audited; the headline equals the payload that commits; the asker sizes the question
+      from the action; the ask refuses a deviating wait; the commit refuses one even when
+      approved.
+    - `test_commit.py`: a wait not holding its action whole is not committed (×3, which
+      replaces the "never proposed" test); the act commits with no checkpoint at all;
+      the rewritten :224 test; `WorldUnreadable` and a "no" are now audited.
+    - `test_slack_answer.py`: every answer is a record that outlives the session (×3);
+      a second click is a record.
+    - `test_stalled_waits.py` now parks what a turn parks (the real rollout and its
+      action), with its assertions unchanged. The `refused_at_the_act` history scenario
+      is now a stray wake, then a "no".
+    - Two gate evals: `a-deviating-rollout-never-reaches-a-person` (C1) and
+      `a-wake-nobody-answered-moves-nothing` (H2), bringing the total to 15/15.
+  - **Mutation-checked:** each fix reverted alone (11 reverts) fails its test on an
+    assertion or a refusal; both evals fail under their reverts.
+  - Histories re-recorded; the old four replayed against the new code first.
+    `check_task.sh` and `check_full.sh` green. Changed-line coverage 96.7%, project 98%.

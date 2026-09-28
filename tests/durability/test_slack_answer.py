@@ -20,8 +20,9 @@ import pytest
 
 from agentstack.interfaces.slack_callback import expected_signature
 from agentstack.interfaces.wiring import Stack, answer
+from agentstack.observability.audit import AuditRecord
 from agentstack.policy.approvers import ApprovalReply, ApproverNotAuthorized
-from agentstack.runtime.approvals import Resolution
+from agentstack.runtime.approvals import ReplyNotApplicable, Resolution
 from agentstack.runtime.temporal.contracts import REASK_EVERY, RunProgress
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 from agentstack.runtime.waits import WaitStore
@@ -137,6 +138,87 @@ def test_a_refusal_is_an_answer_too(stack: Stack, app_database: Database) -> Non
     assert not resolution.approved and resolution.approval_id is None
     assert woken.answered == (parked.awaiting_approval,)
     assert approvals(app_database) == 0
+
+
+def answer_records(stack: Stack, run_id: str) -> list[AuditRecord]:
+    return [r for r in stack.audit.for_run(run_id) if r.surface == "approval"]
+
+
+@pytest.mark.parametrize(
+    ("user", "approve", "principal", "decision", "outcome"),
+    [
+        (APPROVER, True, "ana@acme", "human.approved", "approved"),
+        (APPROVER, False, "ana@acme", "human.refused", "refused"),
+        ("UEVE", True, "slack:UEVE", "approver.not_authorized", "refused"),
+    ],
+    ids=["a-yes", "a-no", "an-outsider"],
+)
+def test_every_answer_is_an_accountability_record_that_outlives_the_session(
+    stack: Stack,
+    app_database: Database,
+    user: str,
+    approve: bool,
+    principal: str,
+    decision: str,
+    outcome: str,
+) -> None:
+    """A1, H3. A "no" used to live only in `waits.payload`, which goes with the session,
+    and the audit trail held only the gateway's refusal under the agent's name: a
+    considered "no", a forged wake-up and an outsider's click left the same record. Each
+    answer is now its own record in the audit schema, naming who answered (as a principal,
+    or as a bare claim for an outsider), the wait, the fingerprint and the snapshot, and
+    deleting the session leaves it standing."""
+
+    async def click(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
+        try:
+            await answer(stack, env.client, **slack_click(parked, user=user, approve=approve))
+        except ApproverNotAuthorized:
+            progress: RunProgress = await handle.query(ExperimentWorkflow.progress)
+            return progress
+        # Answered: let the run act on it before the environment closes under it.
+        return await progress_until(handle, lambda p: len(p.commits) == 1)
+
+    run_id, parked, _ = propose_and_wait(stack, app_database, then=click)
+
+    wait = WaitStore(db=app_database).get(parked.awaiting_approval or "")
+    assert wait is not None
+    (record,) = answer_records(stack, run_id)
+    assert (record.principal, record.policy_decision, record.outcome) == (
+        principal,
+        decision,
+        outcome,
+    )
+    assert record.tenant == "acme" and record.wait_id == wait.wait_id
+    assert (record.action_fingerprint, record.state_snapshot) == (
+        wait.action_fingerprint,
+        wait.state_snapshot,
+    )
+    assert (record.approval_id is not None) == (decision == "human.approved")
+
+    run = stack.runs.get(run_id)
+    assert run is not None
+    app_database.execute("DELETE FROM sessions WHERE session_id = %s", (run.session_id,))
+    assert WaitStore(db=app_database).get(wait.wait_id) is None, "the operational record went"
+    assert answer_records(stack, run_id) == [record], "the accountability record did not"
+
+
+def test_an_answer_to_a_question_already_answered_is_on_the_record_too(
+    stack: Stack, app_database: Database
+) -> None:
+    """The second click on one question is refused, not a second decision, and the
+    attempt is recorded under the person who made it."""
+
+    async def twice(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
+        await answer(stack, env.client, **slack_click(parked))
+        with pytest.raises(ReplyNotApplicable, match="already answered"):
+            await answer(stack, env.client, **slack_click(parked, approve=False))
+        progress: RunProgress = await handle.query(ExperimentWorkflow.progress)
+        return progress
+
+    run_id, _, _ = propose_and_wait(stack, app_database, then=twice)
+
+    decided = [(r.policy_decision, r.outcome) for r in answer_records(stack, run_id)]
+    assert decided == [("human.approved", "approved"), ("answer.not_applicable", "refused")]
 
 
 def test_an_answer_whose_signal_was_lost_is_found_at_the_next_ask(

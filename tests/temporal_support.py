@@ -25,6 +25,7 @@ from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, Stack
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
+from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import CollectingSink, SpanSink
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cycles import CycleStore
@@ -145,6 +146,7 @@ def activities_for(
     traces: SpanSink | None = None,
 ) -> RunActivities:
     return RunActivities(
+        audit=AuditSink(db=db),
         runs=RunStore(db=db),
         cycles=CycleStore(db=db),
         cohorts=FrozenCohortStore(db=db),

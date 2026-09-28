@@ -38,6 +38,11 @@ ROLLOUT = "rollout"
 # `waits.APPROVAL_REASK_AFTER`, which is what the wait row's deadline is set from.
 REASK_EVERY = timedelta(hours=24)
 
+# A commit that found its wait unanswered: the run was woken by a signal nobody's answer
+# stands behind, acted on nothing, and goes back to waiting (A1, H2). Named here so the
+# workflow and the activity agree on it without the workflow importing the activity.
+NOT_ANSWERED = "not_answered"
+
 
 def workflow_id(run_id: str) -> str:
     """The one workflow per run. The server refuses a second start under the same id
@@ -219,11 +224,13 @@ class CommitIntent:
 
 @dataclass(frozen=True, slots=True)
 class CommitOutcome:
-    """How the act ended: `committed`, `deduplicated`, `unresolved` or `refused`.
+    """How the act ended: `committed`, `deduplicated`, `unresolved`, `refused` or
+    `not_answered`.
 
     `unresolved` names the reconcile wait the run parked: the effect may have applied,
-    and only the surface knows (E2). `refused` names the refusal type. The receipt stays
-    in the ledger and the audit trail.
+    and only the surface knows (E2). `refused` names the refusal type. `not_answered`
+    names the approval wait that was found unsatisfied: nothing was attempted, and the
+    run waits for it again. The receipt stays in the ledger and the audit trail.
     """
 
     status: str
