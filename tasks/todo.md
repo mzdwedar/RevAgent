@@ -1349,10 +1349,54 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     changed-line coverage 100% (11/11), `stack_guard` intact, `checkpoint_guard` safe.
     A fresh worktree still needs `data/manifest.json` copied in (T32's finding).
 
-- [ ] **T46 — Continue-as-new** · layer 3 · *S*
+- [x] **T46 — Continue-as-new** · layer 3 · *S*
   - Acceptance: every 100 cycles, carrying `run_id` and the current wait id.
   - Verify: time-skipping: 250 cycles → same `run_id`, same pending wait, one audit trail (C44).
   - Files: `runtime/temporal/workflows.py`, `tests/durability/test_timers.py`.
+  - **Done.** `CONTINUE_EVERY = 100` cycles per execution. **It continues only between
+    cycles**, at the top of the loop. That's the one point where the run holds nothing
+    open: `_propose` has returned, so any approval or reconcile wait is answered, the
+    trigger wait was satisfied before the cycle ran, and no activity is in flight. It
+    waits on `workflow.all_handlers_finished` first. Temporal's
+    `is_continue_as_new_suggested()` isn't used, because the spec fixes the count.
+  - **What carries** (`contracts.Carried`, ids and counts only): `run_id` (in `RunStart`),
+    `waits_parked` (so the next trigger wait is `…-trigger-{n}`, not `-0` again, which
+    would hand back a satisfied wait), `last_watermark` (the next wait's snapshot),
+    `pending` triggers in arrival order (placed *ahead* of anything signalled to the new
+    execution), and `cycles_before` (so `progress` can still say what the run did).
+    **What resets:** cycles, turns and commits (their record is in Postgres), `_answered`
+    (spent; a recurring wait id finds its answer from the row at the ask, as T42's
+    backstop does), and `waiting_on`/`overdue`/`awaiting`/`asks`/`reconciling`, which are
+    all empty at the safe point. The "current wait id" is carried as the wait sequence:
+    no wait is ever open across a handoff, so the next execution parks the next one.
+  - **`Carried` is a field on `RunStart`, not a second workflow argument.** The SDK drops
+    type hints when the argument count differs from the signature, so a defaulted second
+    parameter decoded every one-argument start as a `dict`. It would also have broken
+    replay of every history recorded so far. `ENSURE_RUN` is handed `RunStart` with
+    `carried=None`: every execution ensures the row, the upsert is idempotent, and the
+    pending triggers don't land in that activity's input. `RunProgress` gains
+    `cycles_before`.
+  - 1 test in `test_timers.py`, ~1.5s on the time-skipping server. 150 triggers are
+    queued before any worker polls, so the handoff at 100 carries exactly 50. The run
+    parks `trigger-0`, and the other 100 arrive live. Asserted: three executions, each
+    started with what the previous one carried (read from its start event, which proves
+    continue-as-new happened; it isn't audit); one `runs` row; 250 settled
+    `trigger_cycles`; waits numbered as one unbroken sequence with exactly one pending,
+    after `batch-249`, and the run is on it. **Mutation-checked:** without the wait
+    count, the pending wait assertion fails (`trigger-0` again, satisfied). Without
+    `pending`, the run stops at 100 cycles and never reaches 250.
+  - **Found writing it:** the time-skipping server never moves a stopped worker's sticky
+    task back to the shared queue (history ends at `WorkflowTaskScheduled`), so a test
+    that stops and restarts a worker hangs there. The test never stops its worker.
+  - **Not tested, stated:** a signal that lands *during* the handoff. The docstring
+    relies on Temporal's documented behaviour: the server refuses to close the run over
+    new events, and the task reruns with the signal. The unguarded workflow change is
+    T47's to record, like T43's.
+  - Verified against a throwaway Postgres on 5436: **676 passed**. `stack_guard` intact,
+    `checkpoint_guard` safe, changed-line coverage 100% (24/24). In the first
+    `check_task.sh` run, this test failed once inside the full suite, and the reason was
+    not captured. It then passed in the next gate run, a full-suite run, and 8 isolated
+    runs. Logged as a possible flake to watch. It is not explained.
 
 - [ ] **T47 — Replay guard** · layer 3 · *M*
   - Acceptance: `scripts/replay_guard.py` replays `tests/fixtures/histories/*` (recorded

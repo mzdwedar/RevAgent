@@ -56,6 +56,9 @@ class RunStart:
     user: str
     stage: str = "default"
     channel: str = "unknown"
+    # Set only when the run continues as new: what the next execution takes over. A field
+    # rather than a second argument, so a start with one argument still decodes.
+    carried: Carried | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +82,26 @@ class Trigger:
     data_as_of: str
     tenant: str
     source: str = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class Carried:
+    """What a run takes into its next execution when it continues as new (T46).
+
+    Counts, a watermark and trigger ids. Everything else is either in Postgres already
+    or empty at the moment a run may continue: no approval or reconcile wait is open, no
+    activity is in flight, and no trigger wait is parked.
+    """
+
+    # Names the next trigger wait. Reset, the new execution would park `…-trigger-0`
+    # again and be handed back the first wait, long since satisfied.
+    waits_parked: int
+    # What the next trigger wait waits *after*: its snapshot.
+    last_watermark: str
+    # Triggers handed over and not yet evaluated, in the order they arrived.
+    pending: tuple[Trigger, ...] = ()
+    # Cycles evaluated by earlier executions, so progress can say what the run did.
+    cycles_before: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,3 +252,5 @@ class RunProgress:
     # Every attempt at an act, in order, and the reconcile wait the run is parked on.
     commits: tuple[CommitOutcome, ...] = ()
     reconciling: str | None = None
+    # Cycles evaluated before the run last continued as new; `cycles` holds the rest.
+    cycles_before: int = 0

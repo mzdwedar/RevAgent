@@ -9,6 +9,7 @@ imported.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 
 from temporalio import workflow
@@ -27,6 +28,7 @@ from agentstack.runtime.temporal.contracts import (
     SATISFY_TRIGGER_WAIT,
     AskIntent,
     AskResult,
+    Carried,
     CommitIntent,
     CommitOutcome,
     CycleResult,
@@ -51,6 +53,9 @@ TURN_TIMEOUT = timedelta(seconds=120)
 HEARTBEAT_TIMEOUT = timedelta(seconds=15)
 # One surface call and its bookkeeping.
 ACT_TIMEOUT = timedelta(seconds=30)
+# SPEC-durable-runtime: a run lives for weeks, and Temporal caps a workflow's history.
+# Every CONTINUE_EVERY cycles the run starts a fresh history, carrying what it needs.
+CONTINUE_EVERY = 100
 
 
 @workflow.defn
@@ -78,17 +83,26 @@ class ExperimentWorkflow:
         self._answered: list[str] = []
         self._commits: list[CommitOutcome] = []
         self._reconciling: str | None = None
+        self._cycles_before = 0
 
     @workflow.run
     async def run(self, start: RunStart) -> RunEnd:
         self._run_id = start.run_id
+        if start.carried is not None:
+            self._take_over(start.carried)
         # The record first. Temporal knows the run exists; Postgres has to know too,
-        # because every wait, step and approval hangs off the `runs` row.
+        # because every wait, step and approval hangs off the `runs` row. Every execution
+        # ensures it, and after a continue-as-new it is already there.
         await workflow.execute_activity(
-            ENSURE_RUN, start, start_to_close_timeout=RECORD_TIMEOUT, retry_policy=RETRY
+            ENSURE_RUN,
+            replace(start, carried=None),
+            start_to_close_timeout=RECORD_TIMEOUT,
+            retry_policy=RETRY,
         )
         self._recorded = True
         while True:
+            if len(self._cycles) >= CONTINUE_EVERY:
+                await self._continue_as_new(start)
             if not self._pending:
                 await self._wait_for_trigger()
             trigger = self._pending.pop(0)
@@ -97,6 +111,36 @@ class ExperimentWorkflow:
             self._last_watermark = trigger.data_as_of
             if cycle.outcome == "propose":
                 await self._propose(cycle)
+
+    async def _continue_as_new(self, start: RunStart) -> None:
+        """Hand the run to a fresh execution: same workflow id, same `run_id`, same record.
+
+        Only called between cycles, which is the one point where the run holds nothing
+        open: its approval and reconcile waits were answered inside `_propose`, its
+        trigger wait was satisfied before the cycle ran, and no activity is in flight.
+        What is left is carried. What is dropped is either in Postgres already (turns,
+        commits) or spent: an answer that arrives now is for a wait nobody is on, and if
+        that wait comes round again, its ask reads the answer from the row.
+
+        A signal that lands while the handoff is being recorded is not lost: the server
+        refuses the continue, the task runs again with the signal applied, and the
+        trigger goes into `pending` with the rest.
+        """
+        await workflow.wait_condition(workflow.all_handlers_finished)
+        carried = Carried(
+            waits_parked=self._waits_parked,
+            last_watermark=self._last_watermark,
+            pending=tuple(self._pending),
+            cycles_before=self._cycles_before + len(self._cycles),
+        )
+        workflow.continue_as_new(replace(start, carried=carried))
+
+    def _take_over(self, carried: Carried) -> None:
+        self._waits_parked = carried.waits_parked
+        self._last_watermark = carried.last_watermark
+        # Ahead of anything already signalled to this execution: those arrived later.
+        self._pending[:0] = carried.pending
+        self._cycles_before = carried.cycles_before
 
     async def _propose(self, cycle: CycleResult) -> None:
         """SPEC.md: draft the experiment, then ask a person before rolling it out.
@@ -322,4 +366,5 @@ class ExperimentWorkflow:
             answered=tuple(self._answered),
             commits=tuple(self._commits),
             reconciling=self._reconciling,
+            cycles_before=self._cycles_before,
         )
