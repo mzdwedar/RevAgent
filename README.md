@@ -91,7 +91,7 @@ failure, so the loop fails closed whether or not anyone remembers to run them.
 | `src/agentstack/` | 11 packages across the ten layers, dependency direction enforced by six `.importlinter` contracts |
 | `migrations/` | versioned SQL; an applied migration is immutable, a version gap is refused |
 | `experiments/` | targeting thresholds, versioned — change a number here, not in code |
-| `tests/fitness/` | 42 tests, one per collapsed-boundary failure mode |
+| `tests/fitness/` | 43 tests, one per collapsed-boundary failure mode |
 | `tests/live/` | checks needing real datasets or the model; excluded from CI, declared in `CONSTRAINTS.md` |
 | `tests/durability/` | spawns real worker processes, kills them with SIGKILL, and a fresh one resumes the run from Temporal's history and the Postgres record |
 | `evals/` | 13 release gates that judge the path, not just the answer |

@@ -268,3 +268,82 @@ def test_a_turn_killed_after_the_model_answered_is_finished_without_asking_again
     committed = [r for r in stack.audit.for_run(run_id) if r.outcome == "committed"]
     assert len(committed) == 1
     print(f"turn finished by a fresh process {took:.1f}s after it started")
+
+
+def test_a_draft_whose_answer_died_with_its_worker_deduplicates_and_the_run_goes_on(
+    stack: Stack,
+    app_database: Database,
+    app_database_url: str,
+    temporal_address: str,
+    task_queue: str,
+    tmp_path: Path,
+) -> None:
+    """Audit finding H1: the draft commits and the ledger settles, then the worker is
+    killed before the step records it. The fresh process reruns the turn from its
+    checkpoint, and the rerun has to deduplicate.
+
+    It used to park a `human_approval` wait instead. The draft had been bound to the
+    registry's description of the experiment, which was nothing before the draft and
+    something after it, so the rerun read its own policy grant as stale before the
+    ledger was asked. The workflow saw no receipt and never asked anyone, and the
+    pending wait blocked every later turn of the run for good.
+    """
+    scorer_calls = tmp_path / "scorer-calls.txt"
+    reached = tmp_path / "past-the-gateway.txt"
+    queue = f"{task_queue}-{uuid.uuid4().hex[:6]}"
+    first = start_worker(
+        temporal_address,
+        queue,
+        app_database_url,
+        scorer_calls,
+        tmp_path / "first.ready",
+        "--hang-after-gateway",
+        str(reached),
+    )
+    second: subprocess.Popen[bytes] | None = None
+    try:
+
+        async def into_the_turn() -> str:
+            client = await connect_temporal(temporal_address)
+            return await deliver(stack, client, payload(WATERMARK), source="t", task_queue=queue)
+
+        run_id = asyncio.run(into_the_turn())
+        deadline = time.monotonic() + READY_TIMEOUT_S
+        while not reached.exists():
+            assert time.monotonic() < deadline, "the draft never reached the gateway"
+            time.sleep(0.1)
+        os.kill(first.pid, signal.SIGKILL)
+        first.wait(timeout=10)
+        # The window: the effect is in the registry and the ledger, and no step says so.
+        assert list(stack.registry_client.drafts) == ["acme/experiments/exp-7"]
+        assert stack.ledger.unresolved_keys() == ()
+        assert not any(r.status == "completed" for r in stack.steps.records_for(run_id))
+
+        second = start_worker(
+            temporal_address, queue, app_database_url, scorer_calls, tmp_path / "second.ready"
+        )
+
+        async def finished() -> RunProgress:
+            client = await connect_temporal(temporal_address)
+            handle = client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+            return await progress_until(
+                handle, lambda p: len(p.turns) == 2, timeout=TURN_RESUME_BOUND_S
+            )
+
+        progress = asyncio.run(finished())
+    finally:
+        for process in (first, second):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+    assert reached.read_text() == "create_experiment_draft", "killed after the draft's commit"
+    drafted, proposed = progress.turns
+    assert drafted.receipts == 1 and drafted.wait_id is None, drafted
+    assert proposed.status == "awaiting_approval", "the run went on to the rollout"
+    (pending,) = WaitStore(db=app_database).pending_for(run_id)
+    assert pending.wait_id == proposed.wait_id == progress.awaiting_approval
+    assert list(stack.registry_client.drafts) == ["acme/experiments/exp-7"]
+    drafts = [r for r in stack.audit.for_run(run_id) if not r.resource.endswith("/rollout")]
+    assert [r.outcome for r in drafts] == ["committed", "deduplicated"]
+    assert all(r.policy_decision != "approval.stale" for r in drafts)

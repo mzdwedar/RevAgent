@@ -18,11 +18,13 @@ from agentstack.context.items import Scope, Trust
 from agentstack.context.retrieval import Candidate, StaticRetriever
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.triggers import parse_trigger
-from agentstack.interfaces.wiring import Stack, build_stack, handle
+from agentstack.interfaces.wiring import Stack, build_stack, envelope_for, handle
 from agentstack.policy.triggers import Outcome as Outcome_
 from agentstack.policy.triggers import OutcomeNotAuthorized
 from agentstack.runtime.cycles import CycleStore, evaluate
-from agentstack.runtime.run import new_run
+from agentstack.runtime.loop import run_turn
+from agentstack.runtime.run import Run, new_run
+from agentstack.runtime.steps import StepLedger
 from agentstack.runtime.waits import ResumeEvent, resume
 from agentstack.storage.database import Database
 from agentstack.storage.provision import truncate_all
@@ -53,6 +55,11 @@ class Case:
     # delivered `deliveries` times and the cycle count is what is asserted.
     trigger: dict[str, Any] | None = None
     deliveries: int = 1
+    # The stage the run is on, which decides the tools its turn is shown.
+    stage: str = "default"
+    # The process dies after the surface applied the effect and the ledger settled it,
+    # before the step recorded it. The same turn is then run again by a fresh stack.
+    dies_before_step_completes: bool = False
     description: str = ""
 
     @staticmethod
@@ -125,10 +132,85 @@ def _run_trigger_case(case: Case, db: Database, started: float) -> Outcome:
     )
 
 
+class ProcessDied(RuntimeError):
+    """Stands in for the process ending between the effect and the step's record."""
+
+
+class DiesBeforeCompleting(StepLedger):
+    """A step ledger whose process dies as it goes to record a completed step."""
+
+    def _write(self, run_id: str, name: str, status: str, receipt: str | None) -> Any:
+        if status == "completed":
+            raise ProcessDied(f"the process died before {name} was recorded as complete")
+        return StepLedger._write(self, run_id, name, status, receipt)
+
+
+def _run_rerun_case(case: Case, db: Database, checkpointer: Any, started: float) -> Outcome:
+    """One turn whose process dies in the window after its effect, then the same turn
+    again in a fresh stack: the rerun an at-least-once runtime makes.
+
+    What is judged is the rerun: it must deduplicate against the ledger and finish, not
+    park a question about an act that already happened (audit finding H1).
+    """
+    failures: list[str] = []
+    first = _stack_for(case, db, checkpointer)
+    session = first.resolver.start(user_id=USER, tenant=TENANT)
+    run = first.runs.ensure(
+        new_run(
+            session_id=session.session_id,
+            tenant=TENANT,
+            user=USER,
+            stage=case.stage,
+            channel="eval",
+        )
+    )
+    first.deps.steps = DiesBeforeCompleting(db=db)
+    died = False
+    try:
+        _take_the_turn(first, run, case)
+    except ProcessDied:
+        died = True
+    if not died:
+        failures.append("the first attempt never reached the window it was meant to die in")
+
+    rerun = build_stack(db, checkpointer, tenant=TENANT)
+    result = _take_the_turn(rerun, run, case)
+    expect = case.expect
+    if "status" in expect and result.status != expect["status"]:
+        failures.append(f"status {result.status!r} != {expect['status']!r}")
+    drafts = len(rerun.registry_client.drafts)
+    if "registry_drafts" in expect and drafts != int(expect["registry_drafts"]):
+        failures.append(f"{drafts} drafts != {expect['registry_drafts']}")
+    if "pending_waits" in expect:
+        pending = [w.kind for w in rerun.waits.pending_for(run.run_id)]
+        if len(pending) != int(expect["pending_waits"]):
+            failures.append(f"pending waits {pending}, expected {expect['pending_waits']}")
+    if "audit_outcomes" in expect:
+        outcomes = [r.outcome for r in rerun.audit.for_run(run.run_id)]
+        if outcomes != list(expect["audit_outcomes"]):
+            failures.append(f"audit outcomes {outcomes} != {expect['audit_outcomes']}")
+    return Outcome(
+        case=case, passed=not failures, failures=failures, seconds=time.perf_counter() - started
+    )
+
+
+def _take_the_turn(stack: Stack, run: Run, case: Case) -> Any:
+    view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
+    return run_turn(
+        run=run,
+        envelope=envelope_for(view, scopes=frozenset(case.scopes)),
+        message=case.message,
+        deps=stack.deps,
+        turn_id=f"eval:{case.id}",
+    )
+
+
 def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
     started = time.perf_counter()
     if case.trigger is not None:
         return _run_trigger_case(case, db, started)
+    if case.dies_before_step_completes:
+        return _run_rerun_case(case, db, checkpointer, started)
     failures: list[str] = []
     stack = _stack_for(case, db, checkpointer)
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
