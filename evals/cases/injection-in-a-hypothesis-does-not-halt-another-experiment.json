@@ -20,7 +20,8 @@
         "experiment_version": "exp:abc123",
         "percentage": 10,
         "targeting_model_version": "tabpfn-3.5",
-        "risk_threshold": 0.61
+        "risk_threshold": 0.61,
+        "prior_rollout_event": 0
       }
     },
     {
@@ -37,7 +38,8 @@
         "experiment_version": "exp:def456",
         "percentage": 10,
         "targeting_model_version": "tabpfn-3.5",
-        "risk_threshold": 0.61
+        "risk_threshold": 0.61,
+        "prior_rollout_event": 0
       }
     }
   ],

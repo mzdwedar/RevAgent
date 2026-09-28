@@ -134,6 +134,14 @@ class Sandbox:
 # `SurfaceRefused`: the resource was not in the state the action needs, and nothing
 # applied. That is not schema validation - the validator has already passed the
 # arguments - it is "this resource, now", which only the surface can answer.
+#
+# A rollout, a revision and an abstention each name the state they move from (audit
+# C2): the rollout event it follows, the revision it rewords, the last event it read.
+# That is a compare-and-set - the named state must still be the latest, in the same
+# statement as the write - so of two writes prepared against one state exactly one
+# lands. When a write matches nothing and *this exact move* is already on record, that
+# is the effect having happened, not a refusal: the surface answers with its receipt
+# (audit M4). Anything else that matched nothing is `SurfaceRefused`.
 
 _REGISTRY_RESOURCE = re.compile(
     r"^(?P<tenant>[^/]+)/experiments/(?:(?P<experiment>[^/]+)(?:/(?P<suffix>[a-z_]+))?)?$"
@@ -169,10 +177,21 @@ _TRANSITIONS: dict[str, tuple[tuple[str, ...], str]] = {
 # The constraints a revision can meet, and what each means. The statement failed whole,
 # so each is provably nothing applied - a refusal, not an unknown outcome.
 _REVISION_REFUSALS = {
-    "one_row_per_revision": "this wording is already a revision",
-    "draft_revisions_pkey": "another revision landed first",
+    # The key is (version, revision_no), and revision_no is the prior plus one: two
+    # revisions of the same revision collide here (migrations/0015).
+    "draft_revisions_pkey": "another revision of the same revision landed first",
     "revision_says_something": "a revision must say something",
 }
+
+# The same, for events. Each index is one "from here, once" (migrations/0015).
+_EVENT_REFUSALS = {
+    "one_rollout_per_prior": "another rollout from the same state landed first",
+    "one_abstention_per_prior": "another abstention against the same record landed first",
+    "one_ending_per_version": "this version has already ended",
+}
+
+# The argument each move names its prior state by, and where the surface reads it.
+_PRIOR_OF = {"rollout": "prior_rollout_event", "abstention": "prior_event"}
 
 # One read cannot flood the context window (SPEC-registry.md, Budgets). The tool schema
 # refuses more; the surface clamps anyway, because the schema is not its only caller.
@@ -245,6 +264,16 @@ def _zero(value: Any) -> bool:
     return _percentage(value) and value == 0
 
 
+def _position(value: Any) -> bool:
+    """A place in the registry's history a move starts from (C2): 0 is "before any"."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _revision(value: Any) -> bool:
+    """A revision a rewording starts from. A draft is born at revision 1."""
+    return _position(value) and value >= 1
+
+
 _SHAPES: dict[str, dict[str, Callable[[Any], bool]]] = {
     "draft": {"experiment_version": _text, "hypothesis": _text, "variant": _text},
     "rollout": {
@@ -252,12 +281,13 @@ _SHAPES: dict[str, dict[str, Callable[[Any], bool]]] = {
         "percentage": _percentage,
         "targeting_model_version": _text,
         "risk_threshold": _number,
+        "prior_rollout_event": _position,
     },
     # A blank hypothesis is a string here and refused below with its own reason, the
     # same one the store's CHECK gives.
-    "revise": {"experiment_version": _text, "hypothesis": _string},
+    "revise": {"experiment_version": _text, "hypothesis": _string, "prior_revision": _revision},
     "discard": {"experiment_version": _text, "reason": _string},
-    "abstention": {"experiment_version": _text, "explanation": _string},
+    "abstention": {"experiment_version": _text, "explanation": _string, "prior_event": _position},
     "halt": {"experiment_version": _text, "percentage": _zero, "reason": _string},
 }
 
@@ -282,13 +312,22 @@ def _list_limit(query: dict[str, Any]) -> int:
     return max(1, min(int(query.get("limit", LIST_DEFAULT)), LIST_LIMIT))
 
 
-def _history(experiment: str, events: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
-    """Current exposure is derived from the latest rollout or halt, never stored as a
-    second truth beside the events it would have to agree with."""
+def _history(experiment: str, events: list[tuple[int, str, dict[str, Any]]]) -> dict[str, Any]:
+    """Every event this experiment has, oldest first, as (id, kind, payload).
+
+    Current exposure is derived from the latest rollout or halt, never stored as a
+    second truth beside the events it would have to agree with. The two positions are
+    what a next move names as its prior: `latest_rollout_event` for a rollout,
+    `latest_event` for an abstention - which is why abstentions and discards, not listed
+    as rollout history, still move the second.
+    """
+    exposure = [(i, kind, p) for i, kind, p in events if kind in _EXPOSURE_KINDS]
     return {
         "experiment_id": experiment,
-        "events": [{"kind": kind, **payload} for kind, payload in events],
-        "current_exposure": events[-1][1]["percentage"] if events else 0,
+        "events": [{"event_id": i, "kind": kind, **p} for i, kind, p in exposure],
+        "current_exposure": exposure[-1][2]["percentage"] if exposure else 0,
+        "latest_rollout_event": max((i for i, k, _ in events if k == "rollout"), default=0),
+        "latest_event": max((i for i, _, _ in events), default=0),
     }
 
 
@@ -331,16 +370,19 @@ class RegistryClient:
         if draft is None:
             return {}
         if action == "history":
-            return _history(
-                experiment,
-                [(k, p) for b, k, p in self.events if b == base and k in _EXPOSURE_KINDS],
-            )
+            return _history(experiment, self._events_of(base))
         return {
             "experiment_id": experiment,
             "status": self._status[base],
             **draft,
             "hypothesis": self.revisions[base][-1],
+            "revision_no": len(self.revisions[base]),
         }
+
+    def _events_of(self, base: str) -> list[tuple[int, str, dict[str, Any]]]:
+        """This experiment's events with their ids. An event's id is its position in the
+        whole registry, counted from 1, as a `bigserial` counts."""
+        return [(n, k, p) for n, (b, k, p) in enumerate(self.events, start=1) if b == base]
 
     def _list(self, tenant: str, query: dict[str, Any]) -> dict[str, Any]:
         prefix = f"{tenant}/experiments/"
@@ -367,24 +409,35 @@ class RegistryClient:
             self._status[base] = "draft"
             receipt = f"draft-{len(self.drafts)}"
         elif action == "revise":
-            self._current(base, payload, ("draft",))
             if not payload["hypothesis"].strip():
                 raise SurfaceRefused(f"{base}: a revision must say something")
-            if payload["hypothesis"] in self.revisions[base]:
-                raise SurfaceRefused(f"{base}: this wording is already a revision")
+            try:
+                self._current(base, payload, ("draft",))
+                if len(self.revisions[base]) != payload["prior_revision"]:
+                    raise SurfaceRefused(
+                        f"{base} is past revision {payload['prior_revision']}; nothing was revised"
+                    )
+            except SurfaceRefused:
+                return self._already_revised(base, payload)
             self.revisions[base].append(payload["hypothesis"])
             receipt = f"revision-{len(self.revisions[base])}"
-        elif action == "abstention":
-            self._current(base, payload, _ANY_STATE)
-            if (base, action, payload) in self.events:
-                raise SurfaceRefused(f"{resource}: this abstention is already recorded")
+        elif action in _PRIOR_OF:
+            # A rollout moves status and an abstention moves none; both are moves from a
+            # named prior, and both are the same compare-and-set.
+            allowed, becomes = _TRANSITIONS.get(action, (_ANY_STATE, ""))
+            try:
+                self._current(base, payload, allowed)
+                self._still_latest(base, action, payload)
+            except SurfaceRefused:
+                return self._already_moved(base, action, payload)
             self.events.append((base, action, dict(payload)))
-            receipt = f"abstention-{len(self.events)}"
+            self._status[base] = becomes or self._status[base]
+            receipt = f"{action}-{len(self.events)}"
         else:
             allowed, becomes = _TRANSITIONS[action]
             self._current(base, payload, allowed)
-            if (base, action, payload) in self.events:
-                raise SurfaceRefused(f"{resource}: this {action} already happened")
+            if any(b == base and k == action for b, k, _ in self.events):
+                raise SurfaceRefused(f"{resource}: this version has already ended")
             self.events.append((base, action, dict(payload)))
             self._status[base] = becomes
             receipt = f"{action}-{len(self.events)}"
@@ -400,10 +453,50 @@ class RegistryClient:
         if self._status[base] not in allowed:
             raise SurfaceRefused(f"{base} is {self._status[base]}; this action needs {allowed}")
 
+    def _still_latest(self, base: str, kind: str, payload: dict[str, Any]) -> None:
+        """The compare in compare-and-set: the prior this move names is still the latest.
+        A rollout follows rollouts; an abstention follows whatever was recorded last."""
+        prior = payload[_PRIOR_OF[kind]]
+        latest = max(
+            (n for n, k, _ in self._events_of(base) if kind != "rollout" or k == "rollout"),
+            default=0,
+        )
+        if latest != prior:
+            raise SurfaceRefused(
+                f"{base} has moved on from {prior} (now {latest}); nothing applied"
+            )
+
+    def _already_moved(self, base: str, kind: str, payload: dict[str, Any]) -> str:
+        """Matched nothing: if this exact move from this exact state is on record, it
+        happened, and its receipt is the answer. Otherwise nothing applied."""
+        for n, k, p in self._events_of(base):
+            if k == kind and p == payload:
+                return f"{kind}-{n}"
+        raise SurfaceRefused(
+            f"{base}: this {kind} does not follow the latest state, and nothing applied"
+        )
+
+    def _already_revised(self, base: str, payload: dict[str, Any]) -> str:
+        """The revision's own prior is `revision_no - 1`, so the exact move is a wording
+        at `prior + 1`."""
+        wordings = self.revisions.get(base, [])
+        draft = self.drafts.get(base, {})
+        at = payload["prior_revision"]
+        if (
+            draft.get("experiment_version") == payload["experiment_version"]
+            and 0 < at < len(wordings)
+            and wordings[at] == payload["hypothesis"]
+        ):
+            return f"revision-{at + 1}"
+        raise SurfaceRefused(
+            f"{base} is not a draft at revision {at} of version "
+            f"{payload['experiment_version']}; nothing was revised"
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class PostgresRegistryClient:
-    """The experiment registry, on the tables `migrations/0012` created.
+    """The experiment registry, on the tables `migrations/0012` created and `0015` re-keyed.
 
     Every write is **one statement**: the precondition is the `WHERE` of the same
     statement that changes the row, so "checked" and "changed" are the same instant, and
@@ -446,27 +539,28 @@ class PostgresRegistryClient:
         if action == "history":
             return self._history(tenant, experiment)
         row = self.db.fetch_one(
-            "SELECT e.status, e.current_version, v.variant,"
-            " (SELECT r.hypothesis FROM draft_revisions r"
-            "   WHERE (r.tenant, r.experiment_id, r.experiment_version)"
-            "       = (e.tenant, e.experiment_id, e.current_version)"
-            "   ORDER BY r.revision_no DESC LIMIT 1)"
+            "SELECT e.status, e.current_version, v.variant, r.hypothesis, r.revision_no"
             " FROM experiments e"
             " JOIN experiment_versions v"
             "   ON (v.tenant, v.experiment_id, v.experiment_version)"
             "    = (e.tenant, e.experiment_id, e.current_version)"
+            " JOIN LATERAL (SELECT hypothesis, revision_no FROM draft_revisions r"
+            "   WHERE (r.tenant, r.experiment_id, r.experiment_version)"
+            "       = (e.tenant, e.experiment_id, e.current_version)"
+            "   ORDER BY r.revision_no DESC LIMIT 1) r ON true"
             " WHERE e.tenant = %s AND e.experiment_id = %s",
             (tenant, experiment),
         )
         if row is None:
             return {}
-        status, version, variant, hypothesis = row
+        status, version, variant, hypothesis, revision_no = row
         return {
             "experiment_id": experiment,
             "status": status,
             "experiment_version": version,
             "hypothesis": hypothesis,
             "variant": variant,
+            "revision_no": revision_no,
         }
 
     def _list(self, tenant: str, query: dict[str, Any]) -> dict[str, Any]:
@@ -492,12 +586,14 @@ class PostgresRegistryClient:
             is None
         ):
             return {}
+        # Every kind, because `latest_event` counts abstentions and discards too; the
+        # rollout history itself is still only what changed exposure.
         rows = self.db.fetch_all(
-            "SELECT kind, payload FROM registry_events"
-            " WHERE tenant = %s AND experiment_id = %s AND kind = ANY(%s) ORDER BY id",
-            (tenant, experiment, list(_EXPOSURE_KINDS)),
+            "SELECT id, kind, payload FROM registry_events"
+            " WHERE tenant = %s AND experiment_id = %s ORDER BY id",
+            (tenant, experiment),
         )
-        return _history(experiment, [(kind, dict(payload)) for kind, payload in rows])
+        return _history(experiment, [(int(i), kind, dict(p)) for i, kind, p in rows])
 
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
         tenant, experiment, action = _registry_resource(resource, _COMMITS)
@@ -508,33 +604,115 @@ class PostgresRegistryClient:
             return self._revise(tenant, experiment, payload)
         if action == "abstention":
             return self._abstain(tenant, experiment, payload)
+        if action == "rollout":
+            return self._rollout(tenant, experiment, payload)
         return self._transition(tenant, experiment, action, payload)
 
-    def _abstain(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
-        """Append the explanation to the named version, whatever its state. No `UPDATE`:
-        a run stops because the policy said abstain, not because a row was written."""
+    def _move(
+        self,
+        tenant: str,
+        experiment: str,
+        kind: str,
+        payload: dict[str, Any],
+        statement: tuple[str, tuple[Any, ...]],
+    ) -> str:
+        """Run one move's statement. If it matched nothing, or collided with a move from
+        the same prior, the exact move already on record is the answer (audit M4) - the
+        prior is in the payload, so "the same payload" is "the same move from the same
+        state". Anything else is a refusal: the statement failed whole, nothing applied.
+
+        The lookup is a read after the write, not a second write: history is
+        insert-only, so a row it finds cannot stop being true.
+        """
         try:
-            row = self.db.fetch_one(
-                "INSERT INTO registry_events"
-                "  (tenant, experiment_id, experiment_version, kind, payload)"
-                " SELECT tenant, experiment_id, experiment_version, 'abstention', %s::jsonb"
-                " FROM experiment_versions"
-                " WHERE tenant = %s AND experiment_id = %s AND experiment_version = %s"
-                " RETURNING id",
-                (json.dumps(payload), tenant, experiment, payload["experiment_version"]),
-            )
+            row = self.db.fetch_one(*statement)
         except IntegrityViolation as exc:
-            if exc.constraint != "one_row_per_effect":
+            if exc.constraint not in _EVENT_REFUSALS:
                 raise
-            raise SurfaceRefused(
-                f"{tenant}/experiments/{experiment}: this abstention is already recorded"
-            ) from exc
-        if row is None:
-            raise SurfaceRefused(
-                f"{tenant}/experiments/{experiment} has no version "
-                f"{payload['experiment_version']}; nothing was recorded"
-            )
-        return f"abstention-{row[0]}"
+            row = None
+        if row is not None:
+            return f"{kind}-{row[0]}"
+        existing = self.db.fetch_one(
+            "SELECT id FROM registry_events"
+            " WHERE tenant = %s AND experiment_id = %s AND kind = %s AND payload = %s::jsonb"
+            " ORDER BY id LIMIT 1",
+            (tenant, experiment, kind, json.dumps(payload)),
+        )
+        if existing is not None:
+            return f"{kind}-{existing[0]}"
+        raise SurfaceRefused(
+            f"{tenant}/experiments/{experiment}: this {kind} does not follow the latest "
+            "state, or the experiment is not in a state it can move from; nothing applied"
+        )
+
+    def _abstain(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
+        """Append the explanation to the named version, whatever its state, if nothing has
+        been recorded since the event the evaluation read. No `UPDATE`: a run stops
+        because the policy said abstain, not because a row was written."""
+        prior = payload["prior_event"]
+        return self._move(
+            tenant,
+            experiment,
+            "abstention",
+            payload,
+            (
+                "INSERT INTO registry_events"
+                "  (tenant, experiment_id, experiment_version, kind, follows, payload)"
+                " SELECT v.tenant, v.experiment_id, v.experiment_version, 'abstention',"
+                "  %s, %s::jsonb"
+                " FROM experiment_versions v"
+                " WHERE v.tenant = %s AND v.experiment_id = %s AND v.experiment_version = %s"
+                "   AND %s = (SELECT coalesce(max(r.id), 0) FROM registry_events r"
+                "     WHERE (r.tenant, r.experiment_id) = (v.tenant, v.experiment_id))"
+                " RETURNING id",
+                (
+                    prior,
+                    json.dumps(payload),
+                    tenant,
+                    experiment,
+                    payload["experiment_version"],
+                    prior,
+                ),
+            ),
+        )
+
+    def _rollout(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
+        """The rollout is `_transition` with one more clause in the same `WHERE`: the
+        rollout it names as its prior is still the latest. Two rollouts approved against
+        one state can both pass that under read committed - neither sees the other's
+        uncommitted event - and `one_rollout_per_prior` refuses the second."""
+        allowed, becomes = _TRANSITIONS["rollout"]
+        prior = payload["prior_rollout_event"]
+        return self._move(
+            tenant,
+            experiment,
+            "rollout",
+            payload,
+            (
+                "WITH moved AS ("
+                "  UPDATE experiments e SET status = %s, updated_at = now()"
+                "  WHERE e.tenant = %s AND e.experiment_id = %s"
+                "    AND e.current_version = %s AND e.status = ANY(%s)"
+                "    AND %s = (SELECT coalesce(max(r.id), 0) FROM registry_events r"
+                "      WHERE (r.tenant, r.experiment_id) = (e.tenant, e.experiment_id)"
+                "        AND r.kind = 'rollout')"
+                "  RETURNING tenant, experiment_id, current_version)"
+                " INSERT INTO registry_events"
+                "  (tenant, experiment_id, experiment_version, kind, follows, payload)"
+                " SELECT tenant, experiment_id, current_version, 'rollout', %s, %s::jsonb"
+                " FROM moved RETURNING id",
+                (
+                    becomes,
+                    tenant,
+                    experiment,
+                    payload["experiment_version"],
+                    list(allowed),
+                    prior,
+                    prior,
+                    json.dumps(payload),
+                ),
+            ),
+        )
 
     def _draft(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
         # `ON CONFLICT DO NOTHING` on the experiment, and the version and revision are
@@ -595,11 +773,11 @@ class PostgresRegistryClient:
                 ),
             )
         except IntegrityViolation as exc:
-            if exc.constraint != "one_row_per_effect":
+            if exc.constraint != "one_ending_per_version":
                 raise
             # The statement failed as a whole, so the status update went with it.
             raise SurfaceRefused(
-                f"{tenant}/experiments/{experiment}/{kind}: this {kind} already happened"
+                f"{tenant}/experiments/{experiment}/{kind}: {_EVENT_REFUSALS[exc.constraint]}"
             ) from exc
         if row is None:
             raise SurfaceRefused(
@@ -609,13 +787,16 @@ class PostgresRegistryClient:
         return f"{kind}-{row[0]}"
 
     def _revise(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
-        """Append a wording to the current version of a draft - never a new version.
+        """Append a wording to the current version of a draft - never a new version - if
+        the draft is still at the revision the wording was written against.
 
         `FOR UPDATE` holds the experiment row for the statement: a discard racing this
         revise either lands first, and the re-checked `status = 'draft'` matches nothing,
-        or waits until the revision is in. Two revises racing for the same `revision_no`
-        collide on the key, and the loser's statement applied nothing.
+        or waits until the revision is in. The new `revision_no` is the prior plus one,
+        so two revises of the same revision collide on the key, and the loser's
+        statement applied nothing.
         """
+        prior = payload["prior_revision"]
         try:
             row = self.db.fetch_one(
                 "WITH e AS ("
@@ -625,24 +806,43 @@ class PostgresRegistryClient:
                 "  FOR UPDATE)"
                 " INSERT INTO draft_revisions"
                 "  (tenant, experiment_id, experiment_version, revision_no, hypothesis)"
-                " SELECT e.tenant, e.experiment_id, e.current_version,"
-                "  (SELECT max(r.revision_no) + 1 FROM draft_revisions r"
+                " SELECT e.tenant, e.experiment_id, e.current_version, %s + 1, %s"
+                " FROM e"
+                " WHERE %s = (SELECT max(r.revision_no) FROM draft_revisions r"
                 "    WHERE (r.tenant, r.experiment_id, r.experiment_version)"
-                "        = (e.tenant, e.experiment_id, e.current_version)),"
-                "  %s"
-                " FROM e RETURNING revision_no",
-                (tenant, experiment, payload["experiment_version"], payload["hypothesis"]),
+                "        = (e.tenant, e.experiment_id, e.current_version))"
+                " RETURNING revision_no",
+                (
+                    tenant,
+                    experiment,
+                    payload["experiment_version"],
+                    prior,
+                    payload["hypothesis"],
+                    prior,
+                ),
             )
         except IntegrityViolation as exc:
             if exc.constraint not in _REVISION_REFUSALS:
                 raise
-            raise SurfaceRefused(
-                f"{tenant}/experiments/{experiment}: {_REVISION_REFUSALS[exc.constraint]}; "
-                "nothing was changed"
-            ) from exc
-        if row is None:
-            raise SurfaceRefused(
-                f"{tenant}/experiments/{experiment} is not a draft at version "
-                f"{payload['experiment_version']}; nothing was revised"
-            )
-        return f"revision-{row[0]}"
+            if exc.constraint != "draft_revisions_pkey":
+                raise SurfaceRefused(
+                    f"{tenant}/experiments/{experiment}: {_REVISION_REFUSALS[exc.constraint]}; "
+                    "nothing was changed"
+                ) from exc
+            row = None
+        if row is not None:
+            return f"revision-{row[0]}"
+        # The exact move - this wording, from this revision - already on record is the
+        # effect having happened (audit M4). Anything else applied nothing.
+        existing = self.db.fetch_one(
+            "SELECT revision_no FROM draft_revisions"
+            " WHERE tenant = %s AND experiment_id = %s AND experiment_version = %s"
+            "   AND revision_no = %s + 1 AND hypothesis = %s",
+            (tenant, experiment, payload["experiment_version"], prior, payload["hypothesis"]),
+        )
+        if existing is not None:
+            return f"revision-{existing[0]}"
+        raise SurfaceRefused(
+            f"{tenant}/experiments/{experiment} is not a draft at revision {prior} of version "
+            f"{payload['experiment_version']}; nothing was revised"
+        )

@@ -263,6 +263,15 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
         actual = stack.registry_client.read(f"{TENANT}/experiments/{experiment}", {})["status"]
         if actual != status:
             failures.append(f"{experiment} is {actual!r}, expected {status!r}")
+    for experiment, exposure in expect.get("current_exposure", {}).items():
+        # What customers are exposed to now, read from the store - not from the run's
+        # own report, which is what said "success" while a ramp-down was dropped (C2).
+        history = stack.registry_client.read(f"{TENANT}/experiments/{experiment}/history", {})
+        if history.get("current_exposure") != exposure:
+            failures.append(
+                f"{experiment} is exposed at {history.get('current_exposure')!r}%, "
+                f"expected {exposure}%"
+            )
 
     seconds = time.perf_counter() - started
     budget = expect.get("max_seconds")

@@ -434,6 +434,7 @@ def test_a_zero_halt_proceeds_on_policy(stack: Stack, run: Run) -> None:
             "percentage": 10,
             "targeting_model_version": "tabpfn-3.5",
             "risk_threshold": 0.61,
+            "prior_rollout_event": 0,
         },
     )
 

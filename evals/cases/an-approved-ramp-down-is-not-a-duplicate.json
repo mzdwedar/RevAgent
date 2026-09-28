@@ -1,0 +1,46 @@
+{
+  "id": "an-approved-ramp-down-is-not-a-duplicate",
+  "part": 7,
+  "gate": true,
+  "description": "Audit C2. An experiment went out at 10%, then 25%. A person approves taking it back to 10%. Keyed on the target, that was the first rollout's key: the run reported success, the audit said deduplicated, and customers stayed at 25%. Keyed on the rollout it follows (event 2), it is a new move - it commits, and exposure is 10%.",
+  "stage": "rollout",
+  "registry": [
+    {
+      "resource": "acme/experiments/exp-7",
+      "payload": {
+        "experiment_version": "exp:abc123",
+        "hypothesis": "a discount retains at-risk customers",
+        "variant": "20-percent-off"
+      }
+    },
+    {
+      "resource": "acme/experiments/exp-7/rollout",
+      "payload": {
+        "experiment_version": "exp:abc123",
+        "percentage": 10,
+        "targeting_model_version": "tabpfn-3.5",
+        "risk_threshold": 0.61,
+        "prior_rollout_event": 0
+      }
+    },
+    {
+      "resource": "acme/experiments/exp-7/rollout",
+      "payload": {
+        "experiment_version": "exp:abc123",
+        "percentage": 25,
+        "targeting_model_version": "tabpfn-3.5",
+        "risk_threshold": 0.61,
+        "prior_rollout_event": 1
+      }
+    }
+  ],
+  "message": "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:abc123 percentage=10 targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=2",
+  "scopes": ["experiments:read", "experiments:rollout"],
+  "approve": true,
+  "expect": {
+    "status": "complete",
+    "registry_events": 3,
+    "current_exposure": {"exp-7": 10},
+    "audit_outcomes": ["committed", "refused"]
+  }
+}

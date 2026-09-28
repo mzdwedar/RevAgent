@@ -21,7 +21,9 @@ import pytest
 from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.surfaces import (
     PostgresRegistryClient,
+    RegistryClient,
     SurfaceClient,
+    SurfaceRefused,
     SurfaceTimeout,
 )
 from agentstack.interfaces.wiring import Stack, envelope_for
@@ -135,6 +137,29 @@ def test_every_write_names_the_version_it_was_prepared_against(spec: ToolSpec) -
     assert "experiment_version" in spec.input_schema["required"]
 
 
+def test_only_the_moves_that_start_from_a_state_name_one() -> None:
+    """Audit C2: a rollout, a revision and an abstention are keyed on where they start,
+    so each names it - and nothing else does. Each is one integer the model read back
+    from a registry read: bounded below, not a list, not an id string that could carry
+    a second experiment. A halt and a discard end a version once, and name no prior."""
+    priors = {
+        s.name: sorted(name for name in properties(s) if name.startswith("prior_"))
+        for s in WRITE_TOOLS
+    }
+
+    assert {name: names for name, names in priors.items() if names} == {
+        "roll_out_variant_to_percentage": ["prior_rollout_event"],
+        "revise_draft_hypothesis": ["prior_revision"],
+        "record_abstention": ["prior_event"],
+    }
+    for spec in WRITE_TOOLS:
+        for name in priors[spec.name]:
+            declared = properties(spec)[name]
+            assert declared["type"] == "integer"
+            assert declared["minimum"] >= 0
+            assert name in spec.input_schema["required"]
+
+
 def test_each_scope_is_one_blast_radius() -> None:
     """Five scopes, and a grant of one never implies another: drafting cannot halt,
     annotating cannot stop anything, and only the rollout scope reaches customers."""
@@ -235,6 +260,7 @@ SEED_ROLLOUT = {
     "percentage": 10,
     "targeting_model_version": "tabpfn-3.5",
     "risk_threshold": 0.61,
+    "prior_rollout_event": 0,
 }
 
 
@@ -294,8 +320,20 @@ def test_a_lost_answer_and_a_retry_leave_one_row(
         new_run(session_id=session.session_id, tenant=TENANT, user=USER, channel="test")
     )
     view = stack.resolver.resolve(session_id=run.session_id, user_id=USER, tenant=TENANT)
+    # The prior state a write names, read the way the model reads it (audit C2).
+    read = {
+        "prior_revision": stack.registry_client.read(EXPERIMENT_AT, {})["revision_no"],
+        "prior_event": stack.registry_client.read(f"{EXPERIMENT_AT}/history", {})["latest_event"],
+    }
+    named = build_registry().spec(tool).input_schema["properties"]
     request = prepare(
-        {"tenant": TENANT, "experiment_id": "exp-7", "experiment_version": VERSION, **arguments}
+        {
+            "tenant": TENANT,
+            "experiment_id": "exp-7",
+            "experiment_version": VERSION,
+            **arguments,
+            **{key: value for key, value in read.items() if key in named},
+        }
     )
     before = _history_rows(app_database)
 
@@ -319,3 +357,156 @@ def test_a_lost_answer_and_a_retry_leave_one_row(
         attempt()
 
     assert _history_rows(app_database) == before + 1
+
+
+# --- audit C2: a move is keyed on where it started, through the whole path ---
+#
+# The ledger and the store both used to hold "the same target" as "the same effect", so
+# an approved write back to an earlier state came back `deduplicated=True` with the
+# first write's receipt, and nothing moved. These go through `gateway.execute` - the
+# idempotency ledger and the surface together - over both clients.
+
+
+@pytest.fixture(params=["fake", "postgres"])
+def registry(request: pytest.FixtureRequest, stack: Stack) -> SurfaceClient:
+    """The client the gateway commits to. The ledger is Postgres either way."""
+    client: SurfaceClient = RegistryClient() if request.param == "fake" else stack.registry_client
+    stack.deps.gateway.surfaces[Surface.REGISTRY] = client
+    return client
+
+
+@dataclass(frozen=True)
+class Caller:
+    """Registry tools called the way `act` calls them: prepared, validated, executed."""
+
+    stack: Stack
+    client: SurfaceClient
+
+    def call(self, tool: str, **arguments: Any) -> tuple[str, bool]:
+        stack = self.stack
+        session = stack.resolver.start(user_id=USER, tenant=TENANT)
+        run = stack.runs.ensure(
+            new_run(session_id=session.session_id, tenant=TENANT, user=USER, channel="test")
+        )
+        view = stack.resolver.resolve(session_id=run.session_id, user_id=USER, tenant=TENANT)
+        registry = build_registry()
+        spec = registry.spec(tool)
+        request = registry.prepare(
+            tool,
+            {
+                "tenant": TENANT,
+                "experiment_id": "exp-7",
+                "experiment_version": VERSION,
+                **arguments,
+            },
+            exposed=(spec,),
+        )
+        if spec.approval is Approval.ALWAYS:
+            # A person said yes to exactly this request, which now names where it starts.
+            stack.approvals.grant(
+                run_id=run.run_id,
+                request=request,
+                state_snapshot="s",
+                approver="growth-oncall",
+                summary=f"{tool} {request.payload}",
+            )
+        result = stack.deps.gateway.execute(
+            request=request,
+            spec=spec,
+            envelope=envelope_for(view, scopes=REGISTRY_SCOPES),
+            run_id=run.run_id,
+            state_snapshot="s",
+            tracer=Tracer(
+                run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions
+            ),
+        )
+        return result.receipt, result.deduplicated
+
+    def history(self) -> dict[str, Any]:
+        return self.client.read(f"{EXPERIMENT_AT}/history", {})
+
+    def roll_out(self, percentage: int, prior: int | None = None) -> tuple[str, bool]:
+        return self.call(
+            "roll_out_variant_to_percentage",
+            percentage=percentage,
+            targeting_model_version="tabpfn-3.5",
+            risk_threshold=0.61,
+            prior_rollout_event=self.history()["latest_rollout_event"] if prior is None else prior,
+        )
+
+
+def test_an_approved_ramp_down_is_not_a_duplicate(stack: Stack, registry: SurfaceClient) -> None:
+    """The finding, reproduced and closed: 10%, 25%, back to 10%, each with a human's
+    grant. The third came back deduplicated with the first's receipt, still at 25%."""
+    registry.commit(EXPERIMENT_AT, SEED_DRAFT)
+    caller = Caller(stack, registry)
+
+    results = [caller.roll_out(pct) for pct in (10, 25, 10)]
+
+    assert [dedup for _, dedup in results] == [False, False, False]
+    assert len({receipt for receipt, _ in results}) == 3
+    history = caller.history()
+    assert [e["percentage"] for e in history["events"]] == [10, 25, 10]
+    assert history["current_exposure"] == 10
+
+
+def test_two_rollouts_approved_against_one_state_land_once(
+    stack: Stack, registry: SurfaceClient
+) -> None:
+    """Both approved, both from the state after 10%. The first moves exposure; the second
+    is refused with nothing applied - not answered with somebody else's receipt."""
+    registry.commit(EXPERIMENT_AT, SEED_DRAFT)
+    caller = Caller(stack, registry)
+    caller.roll_out(10)
+    prior = caller.history()["latest_rollout_event"]
+
+    caller.roll_out(25, prior=prior)
+    with pytest.raises(SurfaceRefused):
+        caller.roll_out(50, prior=prior)
+
+    history = caller.history()
+    assert [e["percentage"] for e in history["events"]] == [10, 25]
+    assert history["current_exposure"] == 25
+
+
+def test_a_draft_revised_back_to_its_first_wording_says_it(
+    stack: Stack, registry: SurfaceClient
+) -> None:
+    registry.commit(EXPERIMENT_AT, SEED_DRAFT)
+    caller = Caller(stack, registry)
+    first, second = SEED_DRAFT["hypothesis"], "a smaller discount retains them too"
+
+    results = [
+        caller.call(
+            "revise_draft_hypothesis",
+            hypothesis=wording,
+            prior_revision=registry.read(EXPERIMENT_AT, {})["revision_no"],
+        )
+        for wording in (second, first)
+    ]
+
+    assert [dedup for _, dedup in results] == [False, False]
+    after = registry.read(EXPERIMENT_AT, {})
+    assert (after["hypothesis"], after["revision_no"]) == (first, 3)
+
+
+def test_two_cycles_abstaining_for_the_same_reason_are_two_records(
+    stack: Stack, registry: SurfaceClient
+) -> None:
+    """ "Insufficient sample" is what every early cycle says. The second cycle to say it
+    was deduplicated into the first, and left no record."""
+    registry.commit(EXPERIMENT_AT, SEED_DRAFT)
+    caller = Caller(stack, registry)
+    caller.roll_out(10)
+
+    results = [
+        caller.call(
+            "record_abstention",
+            explanation="insufficient sample",
+            prior_event=caller.history()["latest_event"],
+        )
+        for _ in range(2)
+    ]
+
+    assert [dedup for _, dedup in results] == [False, False]
+    assert len({receipt for receipt, _ in results}) == 2

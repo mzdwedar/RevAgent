@@ -285,7 +285,7 @@ VERSION = "exp:abc123"
 HALT_SCOPES = frozenset({"experiments:halt"})
 
 
-def live_experiment(stack: Stack) -> None:
+def live_experiment(stack: Stack, *, rolled_out: bool = True) -> None:
     stack.registry_client.commit(
         EXPERIMENT_AT,
         {
@@ -294,6 +294,8 @@ def live_experiment(stack: Stack) -> None:
             "variant": "20-percent-off",
         },
     )
+    if not rolled_out:
+        return
     stack.registry_client.commit(
         f"{EXPERIMENT_AT}/rollout",
         {
@@ -301,6 +303,7 @@ def live_experiment(stack: Stack) -> None:
             "percentage": 10,
             "targeting_model_version": "tabpfn-3.5",
             "risk_threshold": 0.61,
+            "prior_rollout_event": 0,
         },
     )
 
@@ -385,3 +388,84 @@ def test_twenty_halts_at_the_store_itself_apply_once(stack: Stack, app_database:
     assert len(raised) == HALTS - 1
     assert all(isinstance(exc, SurfaceRefused) for exc in raised), Counter(map(repr, raised))
     assert halt_events(app_database) == 1
+
+
+# --- audit C2: twenty moves from one state, one move ------------------------------------
+#
+# Each write names the state it moves from, and the statement checks it is still the
+# latest. Under read committed, twenty statements that start together all see the same
+# latest; the unique index on (experiment, prior) is what leaves one. Different targets
+# on purpose, so no loser is the exact move on record and none may be answered with the
+# winner's receipt.
+
+MOVES = 20
+
+
+def events(app_database: Database, kind: str) -> int:
+    row = app_database.fetch_one("SELECT count(*) FROM registry_events WHERE kind = %s", (kind,))
+    assert row is not None
+    return int(row[0])
+
+
+def one_landed(receipts: list[str], raised: list[BaseException]) -> None:
+    assert len(receipts) == 1, receipts
+    assert len(raised) == MOVES - 1
+    assert all(isinstance(exc, SurfaceRefused) for exc in raised), Counter(map(repr, raised))
+
+
+def test_twenty_rollouts_from_one_state_land_once(stack: Stack, app_database: Database) -> None:
+    live_experiment(stack)
+    prior = stack.registry_client.read(f"{EXPERIMENT_AT}/history", {})["latest_rollout_event"]
+    receipts: list[str] = []
+
+    def roll_out(i: int) -> None:
+        receipts.append(
+            stack.registry_client.commit(
+                f"{EXPERIMENT_AT}/rollout",
+                {
+                    "experiment_version": VERSION,
+                    "percentage": 11 + i,
+                    "targeting_model_version": "tabpfn-3.5",
+                    "risk_threshold": 0.61,
+                    "prior_rollout_event": prior,
+                },
+            )
+        )
+
+    one_landed(receipts, at_once(MOVES, roll_out))
+    assert events(app_database, "rollout") == 2, "the seed and one of the twenty"
+
+
+def test_twenty_abstentions_against_one_read_land_once(
+    stack: Stack, app_database: Database
+) -> None:
+    live_experiment(stack)
+    prior = stack.registry_client.read(f"{EXPERIMENT_AT}/history", {})["latest_event"]
+    receipts: list[str] = []
+
+    def abstain(i: int) -> None:
+        receipts.append(
+            stack.registry_client.commit(
+                f"{EXPERIMENT_AT}/abstention",
+                {"experiment_version": VERSION, "explanation": f"look {i}", "prior_event": prior},
+            )
+        )
+
+    one_landed(receipts, at_once(MOVES, abstain))
+    assert events(app_database, "abstention") == 1
+
+
+def test_twenty_revisions_of_one_revision_land_once(stack: Stack, app_database: Database) -> None:
+    live_experiment(stack, rolled_out=False)
+    receipts: list[str] = []
+
+    def revise(i: int) -> None:
+        receipts.append(
+            stack.registry_client.commit(
+                f"{EXPERIMENT_AT}/revision",
+                {"experiment_version": VERSION, "hypothesis": f"wording {i}", "prior_revision": 1},
+            )
+        )
+
+    one_landed(receipts, at_once(MOVES, revise))
+    assert app_database.fetch_one("SELECT count(*) FROM draft_revisions") == (2,)

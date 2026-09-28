@@ -199,9 +199,15 @@ def ids(experiment: str = "exp-9") -> dict[str, str]:
     return {"tenant": TENANT, "experiment_id": experiment, "experiment_version": VERSION}
 
 
-ABSTENTION = prepare_abstain({**ids(), "explanation": "inside the noise band"})
+ABSTENTION = prepare_abstain({**ids(), "explanation": "inside the noise band", "prior_event": 0})
 ROLLOUT_AT_100 = prepare_rollout(
-    {**ids(), "percentage": 100, "targeting_model_version": "tabpfn-3.5", "risk_threshold": 0.61}
+    {
+        **ids(),
+        "percentage": 100,
+        "targeting_model_version": "tabpfn-3.5",
+        "risk_threshold": 0.61,
+        "prior_rollout_event": 0,
+    }
 )
 HALT_REQUEST = prepare_halt({**ids(), "reason": "churn rose"})
 
@@ -402,5 +408,7 @@ def test_a_drafting_turn_cannot_roll_out_through_an_experiment_id(
         "experiment_id": "exp-9",
         "events": [],
         "current_exposure": 0,
+        "latest_rollout_event": 0,
+        "latest_event": 0,
     }
     assert not [r for r in stack.audit.for_run(run.run_id) if r.outcome == "committed"]

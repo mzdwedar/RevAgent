@@ -23,6 +23,7 @@ from agentstack.storage.database import Database, IntegrityViolation
 TENANT = "acme"
 EXPERIMENT = "exp-7"
 VERSION = "exp:abc123"
+SEED_HYPOTHESIS = "a discount retains at-risk customers"
 
 
 def seed_draft(db: Database, *, experiment: str = EXPERIMENT, version: str = VERSION) -> None:
@@ -41,12 +42,18 @@ def seed_draft(db: Database, *, experiment: str = EXPERIMENT, version: str = VER
     )
 
 
-def event(db: Database, kind: str, payload: str = '{"percentage": 10}') -> None:
-    db.execute(
-        "INSERT INTO registry_events (tenant, experiment_id, experiment_version, kind, payload)"
-        " VALUES (%s, %s, %s, %s, %s::jsonb)",
-        (TENANT, EXPERIMENT, VERSION, kind, payload),
+def event(
+    db: Database, kind: str, payload: str = '{"percentage": 10}', follows: int | None = 0
+) -> int:
+    """One event, as raw SQL. `follows` is the state it moved from (migrations/0015)."""
+    row = db.fetch_one(
+        "INSERT INTO registry_events"
+        " (tenant, experiment_id, experiment_version, kind, payload, follows)"
+        " VALUES (%s, %s, %s, %s, %s::jsonb, %s) RETURNING id",
+        (TENANT, EXPERIMENT, VERSION, kind, payload, follows),
     )
+    assert row is not None
+    return int(row[0])
 
 
 def refused_by(constraint: str, db: Database, sql: str) -> None:
@@ -138,38 +145,79 @@ def test_history_cannot_be_deleted(app_database: Database, table: str) -> None:
 # --- the same effect twice is one row ---
 
 
-def test_the_same_effect_twice_is_refused(app_database: Database) -> None:
-    """The store's own copy of what the idempotency key means. The surface never sees
-    the key, so the identity of the effect - its kind and payload, per version - is what
-    it can hold unique."""
-    seed_draft(app_database)
-    event(app_database, "rollout")
-
-    with pytest.raises(IntegrityViolation) as caught:
-        event(app_database, "rollout")
-    assert caught.value.constraint == "one_row_per_effect"
-
-
-def test_a_different_effect_of_the_same_kind_is_a_second_row(app_database: Database) -> None:
-    """10% then 25% are two rollouts, exactly as their idempotency keys say."""
+def test_two_rollouts_from_the_same_state_are_refused(app_database: Database) -> None:
+    """The store's own copy of what the idempotency key means (migrations/0015). The
+    surface never sees the key, so it holds unique what the key is made of: where the
+    move started. Two rollouts from one prior - whatever they say - are a fork, and
+    history is a line."""
     seed_draft(app_database)
     event(app_database, "rollout", '{"percentage": 10}')
-    event(app_database, "rollout", '{"percentage": 25}')
+
+    with pytest.raises(IntegrityViolation) as caught:
+        event(app_database, "rollout", '{"percentage": 25}')
+    assert caught.value.constraint == "one_rollout_per_prior"
+
+
+def test_a_return_to_an_earlier_percentage_is_a_new_row(app_database: Database) -> None:
+    """Audit C2: 10%, 25%, then 10% again is three rollouts. 0012 keyed on the payload,
+    and the approved ramp-down collided with the first rollout."""
+    seed_draft(app_database)
+    first = event(app_database, "rollout", '{"percentage": 10}', follows=0)
+    second = event(app_database, "rollout", '{"percentage": 25}', follows=first)
+    event(app_database, "rollout", '{"percentage": 10}', follows=second)
 
     row = app_database.fetch_one("SELECT count(*) FROM registry_events")
-    assert row == (2,)
+    assert row == (3,)
 
 
-def test_the_same_revision_text_twice_is_refused(app_database: Database) -> None:
+def test_a_rollout_must_say_where_it_started(app_database: Database) -> None:
+    """A NULL is distinct in a unique index, so a rollout that named no prior would slip
+    past `one_rollout_per_prior` every time."""
     seed_draft(app_database)
 
-    refused_by(
-        "one_row_per_revision",
-        app_database,
+    with pytest.raises(IntegrityViolation) as caught:
+        event(app_database, "rollout", follows=None)
+    assert caught.value.constraint == "a_move_names_where_it_started"
+
+
+def test_a_version_ends_once(app_database: Database) -> None:
+    seed_draft(app_database)
+    event(app_database, "halt", '{"percentage": 0, "reason": "a"}', follows=None)
+
+    with pytest.raises(IntegrityViolation) as caught:
+        event(app_database, "halt", '{"percentage": 0, "reason": "b"}', follows=None)
+    assert caught.value.constraint == "one_ending_per_version"
+
+
+def test_two_revisions_of_the_same_revision_are_refused(app_database: Database) -> None:
+    """A revision's prior is its `revision_no` minus one, so the key is the fork check."""
+    seed_draft(app_database)
+    revise = (
         "INSERT INTO draft_revisions"
         " (tenant, experiment_id, experiment_version, revision_no, hypothesis)"
-        " VALUES ('acme', 'exp-7', 'exp:abc123', 2, 'a discount retains at-risk customers')",
+        " VALUES ('acme', 'exp-7', 'exp:abc123', 2, %s)"
     )
+    app_database.execute(revise, ("a smaller discount retains them too",))
+
+    with pytest.raises(IntegrityViolation) as caught:
+        app_database.execute(revise, ("a third wording",))
+    assert caught.value.constraint == "draft_revisions_pkey"
+
+
+def test_an_earlier_wording_can_come_back(app_database: Database) -> None:
+    """Audit C2: A, B, A is three revisions and the draft says A. 0012 held the wording
+    unique per version, and going back was refused or swallowed."""
+    seed_draft(app_database)
+    for no, text in [(2, "a smaller discount retains them too"), (3, SEED_HYPOTHESIS)]:
+        app_database.execute(
+            "INSERT INTO draft_revisions"
+            " (tenant, experiment_id, experiment_version, revision_no, hypothesis)"
+            " VALUES ('acme', 'exp-7', 'exp:abc123', %s, %s)",
+            (no, text),
+        )
+
+    row = app_database.fetch_one("SELECT count(*) FROM draft_revisions")
+    assert row == (3,)
 
 
 def test_tenants_do_not_share_an_experiment_id(app_database: Database) -> None:
@@ -203,13 +251,22 @@ DRAFT_PAYLOAD = {
 }
 
 
-def rollout_payload(percentage: int = 10, version: str = VERSION) -> dict[str, object]:
+def rollout_payload(
+    percentage: int = 10, version: str = VERSION, prior: int = 0, threshold: float = 0.61
+) -> dict[str, object]:
     return {
         "experiment_version": version,
         "percentage": percentage,
         "targeting_model_version": "tabpfn-3.5",
-        "risk_threshold": 0.61,
+        "risk_threshold": threshold,
+        "prior_rollout_event": prior,
     }
+
+
+def roll_out(client: Any, percentage: int, **kwargs: Any) -> str:
+    """A rollout from wherever the experiment is now, read the way the model reads it."""
+    prior = client.read(f"{DRAFT_AT}/history", {}).get("latest_rollout_event", 0)
+    return str(client.commit(ROLLOUT_AT, rollout_payload(percentage, prior=prior, **kwargs)))
 
 
 @pytest.fixture(params=["fake", "postgres"])
@@ -228,6 +285,8 @@ def test_a_draft_can_be_read_back(client: Any) -> None:
         "experiment_version": VERSION,
         "hypothesis": DRAFT_PAYLOAD["hypothesis"],
         "variant": DRAFT_PAYLOAD["variant"],
+        # What a revision names as its prior.
+        "revision_no": 1,
     }
     assert client.drafts == {DRAFT_AT: DRAFT_PAYLOAD}
 
@@ -258,11 +317,74 @@ def test_a_rollout_of_a_draft_makes_it_live(client: Any) -> None:
 
 def test_a_live_experiment_can_be_widened(client: Any) -> None:
     client.commit(DRAFT_AT, DRAFT_PAYLOAD)
-    client.commit(ROLLOUT_AT, rollout_payload(10))
+    roll_out(client, 10)
 
-    client.commit(ROLLOUT_AT, rollout_payload(25))
+    roll_out(client, 25)
 
     assert [p["percentage"] for _, p in client.rollouts] == [10, 25]
+
+
+# --- audit C2: a move is keyed on where it started ---
+
+
+def test_a_ramp_down_to_an_earlier_percentage_lands(client: Any) -> None:
+    """10%, 25%, then back to 10%, each approved by a person. Keyed on the target, the
+    third was the first one's duplicate and exposure stayed at 25%."""
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+    receipts = [roll_out(client, pct) for pct in (10, 25, 10)]
+
+    history = client.read(HISTORY_AT, {})
+    assert len(set(receipts)) == 3
+    assert [e["percentage"] for e in history["events"]] == [10, 25, 10]
+    assert history["current_exposure"] == 10
+
+
+def test_the_same_percentage_for_a_different_cohort_lands(client: Any) -> None:
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+    roll_out(client, 10)
+
+    roll_out(client, 10, threshold=0.7)
+
+    assert [p["risk_threshold"] for _, p in client.rollouts] == [0.61, 0.7]
+
+
+def test_two_rollouts_approved_against_one_state_land_once(client: Any) -> None:
+    """Both were prepared from the same history. The first lands; the second no longer
+    follows the latest rollout, and nothing of it applies."""
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+    roll_out(client, 10)
+    prior = client.read(HISTORY_AT, {})["latest_rollout_event"]
+
+    client.commit(ROLLOUT_AT, rollout_payload(25, prior=prior))
+    with pytest.raises(SurfaceRefused):
+        client.commit(ROLLOUT_AT, rollout_payload(50, prior=prior))
+
+    assert [p["percentage"] for _, p in client.rollouts] == [10, 25]
+    assert client.read(HISTORY_AT, {})["current_exposure"] == 25
+
+
+@pytest.mark.parametrize("prior", [7, 1000])
+def test_a_rollout_from_a_state_that_never_was_is_refused(client: Any, prior: int) -> None:
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+
+    with pytest.raises(SurfaceRefused):
+        client.commit(ROLLOUT_AT, rollout_payload(prior=prior))
+
+    assert client.rollouts == []
+    assert client.read(DRAFT_AT, {})["status"] == "draft"
+
+
+def test_history_names_each_event_and_the_positions_a_move_follows(client: Any) -> None:
+    client.commit(DRAFT_AT, DRAFT_PAYLOAD)
+    roll_out(client, 10)
+    first = client.read(HISTORY_AT, {})
+    client.commit(ABSTENTION_AT, abstention_payload(prior=first["latest_event"]))
+
+    after = client.read(HISTORY_AT, {})
+
+    assert [e["event_id"] for e in after["events"]] == [first["latest_rollout_event"]]
+    assert after["latest_rollout_event"] == first["latest_rollout_event"]
+    assert after["latest_event"] > first["latest_event"], "an abstention is a position too"
 
 
 def test_a_rollout_of_nothing_is_refused(client: Any) -> None:
@@ -284,14 +406,20 @@ def test_a_rollout_of_a_version_that_is_not_current_is_refused(client: Any) -> N
     assert client.read(DRAFT_AT, {})["status"] == "draft"
 
 
-def test_the_same_rollout_twice_is_refused_and_recorded_once(client: Any) -> None:
+def test_the_same_rollout_twice_is_answered_with_its_receipt_and_recorded_once(
+    client: Any,
+) -> None:
+    """Audit M4: the same move from the same state is on record, so it happened. Refusing
+    it would say "nothing applied" about an effect the store can prove applied."""
     client.commit(DRAFT_AT, DRAFT_PAYLOAD)
-    client.commit(ROLLOUT_AT, rollout_payload())
+    first = client.commit(ROLLOUT_AT, rollout_payload())
+    roll_out(client, 25)
 
-    with pytest.raises(SurfaceRefused):
-        client.commit(ROLLOUT_AT, rollout_payload())
+    again = client.commit(ROLLOUT_AT, rollout_payload())
 
-    assert len(client.rollouts) == 1
+    assert again == first
+    assert len(client.rollouts) == 2
+    assert client.read(HISTORY_AT, {})["current_exposure"] == 25, "the answer moved nothing"
 
 
 def test_a_resource_the_registry_does_not_serve_is_refused(client: Any) -> None:
@@ -348,7 +476,7 @@ def test_a_list_names_each_experiment_once(client: Any) -> None:
 def test_a_list_filters_by_status(client: Any) -> None:
     draft(client, "exp-1")
     draft(client, EXPERIMENT)
-    client.commit(ROLLOUT_AT, rollout_payload())
+    roll_out(client, 10)
 
     live = client.read(LIST_AT, {"status": "live", "limit": 20})["experiments"]
 
@@ -376,8 +504,8 @@ def test_a_list_is_clamped_at_the_surface(client: Any, asked: int, returned: int
 
 def test_history_is_in_order_and_derives_exposure(client: Any) -> None:
     draft(client, EXPERIMENT)
-    client.commit(ROLLOUT_AT, rollout_payload(10))
-    client.commit(ROLLOUT_AT, rollout_payload(25))
+    roll_out(client, 10)
+    roll_out(client, 25)
 
     history = client.read(HISTORY_AT, {})
 
@@ -393,6 +521,8 @@ def test_a_draft_has_an_empty_history(client: Any) -> None:
         "experiment_id": EXPERIMENT,
         "events": [],
         "current_exposure": 0,
+        "latest_rollout_event": 0,
+        "latest_event": 0,
     }
 
 
@@ -412,8 +542,16 @@ def halt_payload(version: str = VERSION) -> dict[str, object]:
     return {"experiment_version": version, "percentage": 0, "reason": "churn rose in the variant"}
 
 
-def revise_payload(hypothesis: str = REWORDED, version: str = VERSION) -> dict[str, object]:
-    return {"experiment_version": version, "hypothesis": hypothesis}
+def revise_payload(
+    hypothesis: str = REWORDED, version: str = VERSION, prior: int = 1
+) -> dict[str, object]:
+    return {"experiment_version": version, "hypothesis": hypothesis, "prior_revision": prior}
+
+
+def revise(client: Any, hypothesis: str) -> str:
+    """A revision of whatever the draft says now, read the way the model reads it."""
+    prior = client.read(DRAFT_AT, {})["revision_no"]
+    return str(client.commit(REVISION_AT, revise_payload(hypothesis, prior=prior)))
 
 
 def discard_payload(version: str = VERSION) -> dict[str, object]:
@@ -466,12 +604,39 @@ def test_a_revision_is_a_row_never_a_version(app_database: Database) -> None:
     ) == [(1, DRAFT_PAYLOAD["hypothesis"]), (2, REWORDED)]
 
 
-def test_the_same_wording_twice_is_one_revision(client: Any) -> None:
+def test_the_same_revision_twice_is_one_revision(client: Any) -> None:
+    """The same wording from the same revision is a move already made: its receipt is
+    the answer (audit M4), and there is still one row."""
     bring_to(client, "draft")
-    client.commit(REVISION_AT, revise_payload())
+    first = client.commit(REVISION_AT, revise_payload())
+
+    again = client.commit(REVISION_AT, revise_payload())
+
+    assert again == first
+    assert client.read(DRAFT_AT, {})["revision_no"] == 2
+
+
+def test_an_earlier_wording_can_be_revised_back_to(client: Any) -> None:
+    """Audit C2: A, B, A. Keyed on the wording, the third was refused or swallowed and
+    the draft stayed at B."""
+    bring_to(client, "draft")
+    receipts = [revise(client, REWORDED), revise(client, DRAFT_PAYLOAD["hypothesis"])]
+
+    after = client.read(DRAFT_AT, {})
+    assert len(set(receipts)) == 2
+    assert (after["hypothesis"], after["revision_no"]) == (DRAFT_PAYLOAD["hypothesis"], 3)
+
+
+def test_two_revisions_of_one_revision_land_once(client: Any) -> None:
+    """Both reworded revision 1. The first lands; the second was written against a
+    wording that is no longer the latest, and nothing of it applies."""
+    bring_to(client, "draft")
+    client.commit(REVISION_AT, revise_payload(REWORDED, prior=1))
 
     with pytest.raises(SurfaceRefused):
-        client.commit(REVISION_AT, revise_payload())
+        client.commit(REVISION_AT, revise_payload("a third wording", prior=1))
+
+    assert client.read(DRAFT_AT, {})["hypothesis"] == REWORDED
 
 
 def test_a_blank_revision_is_refused_not_left_unresolved(client: Any) -> None:
@@ -559,10 +724,19 @@ ABSTENTION_AT = f"{DRAFT_AT}/abstention"
 EVERY_STATE = ["draft", "live", "halted", "discarded"]
 
 
+NOISE = "the guardrail metric is inside its noise band"
+
+
 def abstention_payload(
-    explanation: str = "the guardrail metric is inside its noise band", version: str = VERSION
+    explanation: str = NOISE, version: str = VERSION, prior: int = 0
 ) -> dict[str, object]:
-    return {"experiment_version": version, "explanation": explanation}
+    return {"experiment_version": version, "explanation": explanation, "prior_event": prior}
+
+
+def abstain(client: Any, explanation: str = NOISE) -> str:
+    """An abstention by an evaluation that has just read the history."""
+    prior = client.read(HISTORY_AT, {})["latest_event"]
+    return str(client.commit(ABSTENTION_AT, abstention_payload(explanation, prior=prior)))
 
 
 def abstentions(client: Any, app_database: Database) -> int:
@@ -581,23 +755,57 @@ def test_an_abstention_is_recorded_in_every_state_and_moves_none(
     """Assumption 7: a record, not a transition. The run stops because the policy said
     abstain, not because a row was written - so writing one changes nothing it could see."""
     bring_to(client, state)
-    before = observed(client)
+    experiment, history = observed(client)
 
-    client.commit(ABSTENTION_AT, abstention_payload())
+    abstain(client)
 
+    after, history_after = observed(client)
     assert abstentions(client, app_database) == 1
-    assert observed(client) == before, "an abstention is not rollout history and moves no status"
+    assert after == experiment, "an abstention moves no status"
+    # The one thing it moves is the position a next abstention names: that is how the
+    # next cycle's record is told from this one's.
+    assert history_after["latest_event"] > history["latest_event"]
+    assert {**history_after, "latest_event": 0} == {**history, "latest_event": 0}, (
+        "an abstention is not rollout history and changes no exposure"
+    )
 
 
 def test_the_same_abstention_twice_is_recorded_once(client: Any, app_database: Database) -> None:
+    """The same explanation against the same read is one cycle's record, retried: its
+    receipt is the answer (audit M4)."""
     bring_to(client, "live")
-    client.commit(ABSTENTION_AT, abstention_payload())
+    prior = client.read(HISTORY_AT, {})["latest_event"]
+    first = client.commit(ABSTENTION_AT, abstention_payload(prior=prior))
+
+    again = client.commit(ABSTENTION_AT, abstention_payload(prior=prior))
+
+    assert again == first
+    abstain(client, "a later cycle, a different reason")
+    assert abstentions(client, app_database) == 2
+
+
+def test_a_later_cycle_saying_the_same_thing_is_recorded(
+    client: Any, app_database: Database
+) -> None:
+    """Audit C2: "insufficient sample" is what every early cycle says. Keyed on the
+    words, the second cycle to say it left no record."""
+    bring_to(client, "live")
+
+    receipts = [abstain(client, "insufficient sample"), abstain(client, "insufficient sample")]
+
+    assert len(set(receipts)) == 2
+    assert abstentions(client, app_database) == 2
+
+
+def test_two_abstentions_against_one_read_land_once(client: Any, app_database: Database) -> None:
+    bring_to(client, "live")
+    prior = client.read(HISTORY_AT, {})["latest_event"]
+    client.commit(ABSTENTION_AT, abstention_payload("one reason", prior=prior))
 
     with pytest.raises(SurfaceRefused):
-        client.commit(ABSTENTION_AT, abstention_payload())
+        client.commit(ABSTENTION_AT, abstention_payload("another reason", prior=prior))
 
-    client.commit(ABSTENTION_AT, abstention_payload("a later cycle, a different reason"))
-    assert abstentions(client, app_database) == 2
+    assert abstentions(client, app_database) == 1
 
 
 def test_an_abstention_on_a_version_that_does_not_exist_is_refused(

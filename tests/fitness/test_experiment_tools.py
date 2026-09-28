@@ -49,6 +49,7 @@ GOOD_ROLLOUT = {
     "percentage": 10,
     "targeting_model_version": "tabpfn-3.5",
     "risk_threshold": 0.61,
+    "prior_rollout_event": 0,
 }
 
 
@@ -190,6 +191,39 @@ def test_two_rollout_percentages_are_two_effects() -> None:
     twenty_five = prepare_rollout({**GOOD_ROLLOUT, "percentage": 25})
 
     assert ten.idempotency_key != twenty_five.idempotency_key
+
+
+def test_a_return_to_an_earlier_percentage_is_a_new_effect() -> None:
+    """Audit C2: 10%, 25%, back to 10%. The ramp-down starts from a later rollout, so it
+    is not the first rollout's retry - keyed on the target alone, it was."""
+    first = prepare_rollout(GOOD_ROLLOUT)
+    ramp_down = prepare_rollout({**GOOD_ROLLOUT, "prior_rollout_event": 2})
+
+    assert first.idempotency_key != ramp_down.idempotency_key
+    assert first.fingerprint() != ramp_down.fingerprint(), "an approval binds where it starts"
+
+
+def test_the_same_percentage_for_another_cohort_is_a_new_effect() -> None:
+    """Two rollouts from one state, one percentage, two cohorts: they must be two keys, or
+    the second is handed the first's receipt for a population nobody approved."""
+    other = prepare_rollout({**GOOD_ROLLOUT, "risk_threshold": 0.7})
+
+    assert prepare_rollout(GOOD_ROLLOUT).idempotency_key != other.idempotency_key
+
+
+def test_the_same_rollout_is_one_effect() -> None:
+    """A retry is still a retry: same state, same target, same key."""
+    assert (
+        prepare_rollout(GOOD_ROLLOUT).idempotency_key
+        == prepare_rollout(dict(GOOD_ROLLOUT)).idempotency_key
+    )
+
+
+def test_a_rollout_that_does_not_say_where_it_starts_cannot_be_prepared(stack: Stack) -> None:
+    arguments = {k: v for k, v in GOOD_ROLLOUT.items() if k != "prior_rollout_event"}
+
+    with pytest.raises(InvalidToolArguments):
+        stack.deps.registry.prepare(ROLLOUT.name, arguments, exposed=exposed(stack, ROLLOUT_STAGE))
 
 
 def test_the_same_draft_for_the_same_frozen_cohort_is_one_effect() -> None:

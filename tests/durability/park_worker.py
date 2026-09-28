@@ -31,6 +31,7 @@ ARGS = {
     "percentage": 10,
     "targeting_model_version": "tabpfn-3.5",
     "risk_threshold": 0.61,
+    "prior_rollout_event": 0,
 }
 WAIT_LIMIT_SECONDS = 60.0
 

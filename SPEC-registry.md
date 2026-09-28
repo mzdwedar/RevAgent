@@ -107,14 +107,16 @@ model's good behaviour.
 | `get_experiment` | `tenant`, `experiment_id` |
 | `list_experiments` | `tenant`, `status` (enum of the four states, optional), `limit` (integer, 1–50, default 20) |
 | `get_rollout_history` | `tenant`, `experiment_id` |
-| `revise_draft_hypothesis` | `tenant`, `experiment_id`, `experiment_version`, `hypothesis` |
+| `revise_draft_hypothesis` | `tenant`, `experiment_id`, `experiment_version`, `hypothesis`, `prior_revision` (integer ≥ 1) |
 | `discard_experiment_draft` | `tenant`, `experiment_id`, `experiment_version`, `reason` |
-| `record_abstention` | `tenant`, `experiment_id`, `experiment_version`, `explanation` |
+| `record_abstention` | `tenant`, `experiment_id`, `experiment_version`, `explanation`, `prior_event` (integer ≥ 0) |
 | `halt_rollout` | `tenant`, `experiment_id`, `experiment_version`, `reason` |
+| `roll_out_variant_to_percentage` | `tenant`, `experiment_id`, `experiment_version`, `percentage`, `targeting_model_version`, `risk_threshold`, `prior_rollout_event` (integer ≥ 0) |
 
 Every write names `experiment_version`, so a call prepared against one frozen cohort
 cannot land on a different one. Unknown arguments are refused by the existing
-validator (`tools/validation.py`).
+validator (`tools/validation.py`). The three `prior_*` arguments are added by the C2
+fix (§ Revised in the build).
 
 ---
 
@@ -168,7 +170,8 @@ tests/infra/test_registry_store.py                  preconditions, atomicity, id
 - **No `idempotency_key` column.** `SurfaceClient.commit(resource, payload)` never
   receives the key. The store instead holds unique what the key is made of: kind +
   payload per version (`one_row_per_effect`), wording per version
-  (`one_row_per_revision`).
+  (`one_row_per_revision`). *Superseded by the C2 fix:* those are target identities,
+  and the store now holds unique the state a move starts from (`migrations/0015`).
 - **No `run_id` / `approval_id` columns.** Who did what, under which approval, is the
   audit trail's record (`audit.records`); the registry is what exists. The registry is
   also not hung off `sessions`, so an experiment customers saw outlives the session
@@ -397,6 +400,43 @@ its task.
 - **A blank revision is a refusal.** The store's `revision_says_something` check fails
   the statement whole, so nothing applied. It would otherwise have stranded the claim
   as an unresolved effect.
+- **A write is keyed on the state it moves from (audit C2).** Keys and store indexes
+  were the target: `rollout:{t}:{e}:{v}:{pct}`, `revise:…:{digest}`,
+  `abstain:…:{digest}`, and `one_row_per_effect` / `one_row_per_revision` on the
+  payload and wording. A target can be reached twice, so a human-approved ramp-down
+  10 → 25 → 10 came back `deduplicated` with the first receipt at 25%; a draft
+  reworded A → B → A stayed at B; and a later cycle abstaining "insufficient sample"
+  left no record. Now each of the three names its prior, read back from a registry
+  read, because a `prepare_*` does no I/O:
+
+  | Tool | Prior argument | Read from | Key |
+  |---|---|---|---|
+  | rollout | `prior_rollout_event` | `get_rollout_history.latest_rollout_event` (0: none) | `rollout:{t}:{e}:{v}:{prior}:{pct}:{digest(model@threshold)}` |
+  | revise | `prior_revision` | `get_experiment.revision_no` | `revise:{t}:{e}:{v}:{prior}:{digest(hypothesis)}` |
+  | abstain | `prior_event` | `get_rollout_history.latest_event` (0: none) | `abstain:{t}:{e}:{v}:{prior}:{digest(explanation)}` |
+
+  The target stays in the key after the prior, so two writes prepared against one
+  state are two keys: one lands, the other is `SurfaceRefused`, never handed the
+  first's receipt. The history read gives each event its `event_id`. `migrations/0015`
+  adds `registry_events.follows`, replaces `one_row_per_effect` with
+  `one_rollout_per_prior`, `one_abstention_per_prior` and `one_ending_per_version`,
+  and drops `one_row_per_revision` (a revision's prior is its `revision_no - 1`, so
+  the primary key already forks at most once). Each write's `WHERE` checks the prior is
+  still the latest; the indexes refuse the second of two racing statements. When a
+  write matches nothing and the exact move is already on record, the surface answers
+  with its receipt (audit M4) instead of refusing an effect it can prove applied.
+  Halt and discard are unchanged: each ends a version once.
+
+  *Why not the trigger cycle for abstentions:* a cycle is `(experiment, data_as_of,
+  kind)` in `trigger_cycles`, and nothing links an evaluation run to it - `runs` has
+  no cycle id and the model is never shown one. A cycle id the model typed would be an
+  unchecked claim; the history position is one the store can check.
+
+  *Parked runs:* a rollout proposal checkpointed before this change has no
+  `prior_rollout_event`. On resume the validator refuses it (`tool.reject`) - the
+  approval it waited on named no starting state, so nothing commits under it. It is
+  not a `TurnState` change, so `checkpoint_guard` has nothing to flag; the run ends
+  rejected and must be proposed again.
 - **Still open:** redrafting an existing experiment id under a new version (assumption
   6's relaunch path). `create_experiment_draft` refuses any experiment id that already
   exists, and no tool owns relaunching yet (T25).

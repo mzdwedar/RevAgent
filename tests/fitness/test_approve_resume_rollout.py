@@ -39,6 +39,7 @@ ROLLOUT_ARGS = {
     "percentage": 10,
     "targeting_model_version": "tabpfn-3.5",
     "risk_threshold": 0.61,
+    "prior_rollout_event": 0,
 }
 
 
@@ -283,7 +284,7 @@ READ_SCOPES = frozenset({"experiments:read", "experiments:rollout"})
 ROLL_OUT = (
     "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 "
     "experiment_version=exp:5cbf2762 percentage=10 "
-    "targeting_model_version=tabpfn-3.5 risk_threshold=0.61"
+    "targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=0"
 )
 LOOK_AT_HISTORY = "get_rollout_history tenant=acme experiment_id=exp-7"
 
