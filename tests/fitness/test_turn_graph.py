@@ -368,14 +368,14 @@ def test_the_checkpoint_pool_commits_as_it_goes() -> None:
     assert "search_path=langgraph" in checkpoints.checkpoint_url("postgresql://h/d")
 
 
-def test_opening_a_checkpointer_before_migrating_says_so(app_database_url: str) -> None:
+def test_opening_a_checkpointer_before_migrating_says_so() -> None:
     """Postgres answers "no schema has been selected to create in", which names neither
     the schema nor the migration that makes it. The checkpointer looks like
     infrastructure that comes before migrations and is the one piece that comes after."""
     from agentstack.storage import checkpoints
-    from agentstack.storage.provision import rebuild_database
+    from tests.conftest import rebuild
 
-    url = rebuild_database(app_database_url, "checkpoint_order_test")
+    url = rebuild("checkpoint_order_test")  # never migrated, unlike the suite's own
 
     with pytest.raises(checkpoints.CheckpointSchemaMissing, match="agentstack-migrate up"):
         checkpoints.open_checkpointer(url)

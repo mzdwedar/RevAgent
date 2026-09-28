@@ -1576,6 +1576,33 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     bullet, false since T8, replaced by the real state and the open reconcile gaps.
   - `stack_guard`: the bar is intact.
 
+- [x] **Per-run test databases** · layer 10 · *S* (added 2026-09-28, owed since T22)
+  - **Why:** every run on a machine rebuilt the same `agentstack_app_test`, and each
+    rebuild dropped it under every other run. Sessions sharing the dev Postgres failed
+    whole suites (`AdminShutdown`, rows vanishing), and every Stop hook could fail on
+    somebody else's run. T23, T43, T44, the merge and T48–T51 were each verified on a
+    throwaway container to get a result worth reporting.
+  - `storage.provision` (layer 10):
+    - `run_scoped(name)` inserts one token per process before the disposable suffix:
+      `agentstack_app_<token>_test`.
+    - `drop_database` is under the same disposable-name rule as `rebuild_database`,
+      checked before any connection.
+  - `tests/conftest.rebuild()` scopes and records every name, and a session fixture
+    drops them all when the run ends. The Temporal task-queue token is the same token.
+    The main suite, `tests/infra`, `blank_test`, `checkpoint_order_test` and the evals
+    runner all go through it: no fixed database name is left.
+  - 7 tests in `tests/infra/test_provision.py`:
+    - the suffix stays last, and one process always gets the same name;
+    - **two real processes never share a name**;
+    - both new functions refuse a non-disposable name before connecting;
+    - a dropped database is gone;
+    - the suite runs on its own database.
+  - **Proved on the shared dev Postgres:** two full suites at once, **712 passed each**,
+    with two scoped databases live side by side and **0** left afterwards. Then
+    `check_full.sh` on the shared database: all green, 13/13 gates.
+  - Fixed-name databases left by older code are still on the dev server. Sessions not
+    yet on this code use them, so they were left alone.
+
 ### ✅ Checkpoint M — Phase 8 complete
 - [x] Spec criteria C29–C45 met; SPEC.md criteria 1–28 still hold
   - C29 one run per id: `test_temporal_boundaries` (T34). C30 redelivery after close:

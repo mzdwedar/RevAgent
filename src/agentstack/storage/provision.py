@@ -11,6 +11,8 @@ name is the only signal available at the point of the call.
 
 from __future__ import annotations
 
+import uuid
+
 import psycopg
 from psycopg import OperationalError
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
@@ -22,6 +24,9 @@ BRING_UP = "bash scripts/dev_up.sh"
 
 # A database is disposable when its name says so. Nothing else here is safe to infer.
 DISPOSABLE_SUFFIXES = ("_test", "_evals")
+
+# This process's name on a Postgres other processes share (see `run_scoped`).
+RUN_TOKEN = uuid.uuid4().hex[:12]
 
 
 class NotDisposable(RuntimeError):
@@ -39,26 +44,55 @@ def url_for(admin_url: str, database: str) -> str:
     return make_conninfo("", **parts)
 
 
+def run_scoped(database: str) -> str:
+    """`database`, made this process's own: `agentstack_app_test` becomes
+    `agentstack_app_<token>_test`.
+
+    A fixed name is one database for every run on the machine, and a run that rebuilds
+    it drops it under every other run using it: sessions sharing a dev Postgres saw
+    their suites fail by the dozen on rows that vanished mid-test. One token per
+    process, so every name a run asks for agrees with every other it asks for. The
+    disposable suffix stays last, so the guard below still reads it.
+    """
+    _require_disposable(database)
+    suffix = next(s for s in DISPOSABLE_SUFFIXES if database.endswith(s))
+    return f"{database.removesuffix(suffix)}_{RUN_TOKEN}{suffix}"
+
+
 def rebuild_database(admin_url: str, database: str) -> str:
     """Drop `database` if it exists and create it empty. Returns its URL."""
+    _require_disposable(database)
+    with _admin(admin_url) as admin:
+        admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+        admin.execute(f'CREATE DATABASE "{database}"')
+    return url_for(admin_url, database)
+
+
+def drop_database(admin_url: str, database: str) -> None:
+    """Drop `database` if it exists: what a run does with its own scratch when it ends."""
+    _require_disposable(database)
+    with _admin(admin_url) as admin:
+        admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+def _require_disposable(database: str) -> None:
     if not database.endswith(DISPOSABLE_SUFFIXES):
         raise NotDisposable(
             f"{database!r} does not end in one of {DISPOSABLE_SUFFIXES}; refusing to drop it. "
             "Rebuilding is for throwaway substrates, and the name is the only thing "
             "distinguishing one from the database holding real runs."
         )
+
+
+def _admin(admin_url: str) -> psycopg.Connection[tuple[object, ...]]:
     try:
-        admin = psycopg.connect(admin_url, autocommit=True, connect_timeout=5)
+        return psycopg.connect(admin_url, autocommit=True, connect_timeout=5)
     except OperationalError as exc:
         raise SubstrateUnreachable(
             f"Postgres is not reachable at {redacted(admin_url)}.\n"
             f"Bring the substrate up:  {BRING_UP}\n"
             f"Driver said: {exc}"
         ) from exc
-    with admin:
-        admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
-        admin.execute(f'CREATE DATABASE "{database}"')
-    return url_for(admin_url, database)
 
 
 def truncate_all(db: Database) -> None:
