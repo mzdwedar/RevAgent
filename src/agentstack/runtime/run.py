@@ -11,6 +11,16 @@ import uuid
 from dataclasses import dataclass
 
 from agentstack.storage.database import Database
+from agentstack.tools.experiments import EVALUATION_STAGE, experiment_resource
+
+# Stages whose runs are about exactly one experiment and must say which. Evaluation is
+# woken by a trigger that names one, and holds `experiments:halt`: unbound, that scope
+# reaches every experiment in the tenant (H3). A rollout run *may* be bound, and is
+# then held to it; it is not required to be, because its one irreversible act already
+# waits on a human approval bound to the action's fingerprint - which names the
+# experiment - and rollout runs parked before `runs.subject` existed must still resume.
+# A draft run is never bound: it names an experiment nobody has written yet.
+SUBJECT_REQUIRED = frozenset({EVALUATION_STAGE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +33,25 @@ class Run:
     # Where the request came from. A string, not an import: the runtime records
     # provenance without depending on the channel layer.
     channel: str = "unknown"
+    # The experiment this run is about, from the trigger that woke it or from whoever
+    # created the run - never from model or tool output. None: bound to nothing.
+    subject: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.subject is not None and (not self.subject.strip() or "/" in self.subject):
+            raise ValueError(f"a run's subject is one experiment id; got {self.subject!r}")
+        if self.subject is None and self.stage in SUBJECT_REQUIRED:
+            # Refused rather than defaulted to unbound: an evaluation run that cannot
+            # say which experiment it is about holds halt authority over all of them.
+            # This is also what a pre-0013 row nothing could backfill hits on load.
+            raise ValueError(
+                f"run {self.run_id} is on the {self.stage} stage and names no subject; "
+                "an evaluation is about one experiment, and the run must say which"
+            )
+
+    def subject_resource(self) -> str | None:
+        """The resource root the run's envelope is narrowed to (layer 8 reads it)."""
+        return None if self.subject is None else experiment_resource(self.tenant, self.subject)
 
 
 def new_run(
@@ -32,6 +61,7 @@ def new_run(
     user: str,
     stage: str = "default",
     channel: str = "unknown",
+    subject: str | None = None,
 ) -> Run:
     return Run(
         run_id=f"run-{uuid.uuid4()}",
@@ -40,6 +70,7 @@ def new_run(
         user=user,
         stage=stage,
         channel=channel,
+        subject=subject,
     )
 
 
@@ -56,15 +87,23 @@ class RunStore:
 
     def ensure(self, run: Run) -> Run:
         self.db.execute(
-            "INSERT INTO runs (run_id, session_id, tenant, acting_user, stage, channel)"
-            " VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (run_id) DO NOTHING",
-            (run.run_id, run.session_id, run.tenant, run.user, run.stage, run.channel),
+            "INSERT INTO runs (run_id, session_id, tenant, acting_user, stage, channel, subject)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (run_id) DO NOTHING",
+            (
+                run.run_id,
+                run.session_id,
+                run.tenant,
+                run.user,
+                run.stage,
+                run.channel,
+                run.subject,
+            ),
         )
         return run
 
     def get(self, run_id: str) -> Run | None:
         row = self.db.fetch_one(
-            "SELECT run_id, session_id, tenant, acting_user, stage, channel"
+            "SELECT run_id, session_id, tenant, acting_user, stage, channel, subject"
             " FROM runs WHERE run_id = %s",
             (run_id,),
         )

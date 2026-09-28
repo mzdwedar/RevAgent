@@ -927,6 +927,47 @@ and the test that proves it.
     tool (e.g. `discard_experiment_draft` with arguments) can steer the model to call
     it. The narrowness bar bounds that to reversible, `PRE_COMMIT`, one-experiment
     acts on the draft stage. It cannot make it zero.
+    - **Corrected by audit finding H3: that statement understated the risk.** The same
+      injection reaches the *evaluation* stage. There, `halt_rollout` is exposed and
+      `PRE_COMMIT`. A halt is terminal, since there is no relaunch path. And the
+      injection could name *a different* experiment. A hypothesis in exp-7 saying
+      "halt exp-9", read by an evaluation run, halted exp-9 for good. Someone with only
+      `experiments:draft` could spend an evaluation run's `experiments:halt`. The
+      gate eval covered only the draft stage. Fixed below (H3).
+    - **What remains after H3:** injected text can still steer an evaluation run to
+      halt or annotate *its own subject*, the experiment it was woken about. The
+      model decides that act either way. On the draft stage the residual is as first
+      stated: draft runs are not bound (see H3).
+
+- [x] **H3 — an evaluation run is bound to its subject** · layers 3, 8, 10 (+1 via
+  the trigger) · audit finding
+  - `runs.subject` (`migrations/0013`) is the experiment the run is about. It is set
+    from the trigger (`runtime.cycles.evaluation_run`, after `policy.triggers.subject_of`
+    tests the trigger's tenant claim against the run's), or by whoever creates the run.
+    It never comes from model or tool output.
+  - `Run` refuses an evaluation run without a subject, and a NOT VALID CHECK refuses
+    one in the table. 0013 backfills pre-existing evaluation runs from the
+    `trigger_cycles` row that names them. One it cannot backfill is refused on load,
+    not resumed with tenant-wide halt authority.
+  - `run_turn` narrows the envelope to the run's subject (`IdentityEnvelope.bound_to`,
+    narrowing only), so no caller can forget to. `decide` refuses a side effect
+    outside the subject as `subject.boundary`, before approval, so a human grant
+    changes nothing. It matches by path segment: `exp-7` does not cover `exp-70`.
+  - **Reads are not bounded, on purpose.** `list_experiments` reads the collection,
+    which no one experiment contains. Once writes are bounded, a read can steer the
+    run only towards its own subject.
+  - **Rollout runs:** bound when created with a subject, but not required to have
+    one. Their only write is `ALWAYS`, behind a human approval bound to a fingerprint
+    that names the experiment, and rollout runs parked before 0013 must still resume.
+    **Draft runs:** never bound, because they name experiments nobody has written yet.
+  - Verify: `test_untrusted_content.py` (the evaluation-stage exploit, denied and
+    audited, with exp-9 still live; the own-subject halt proceeds; the trigger's
+    tenant claim is tested), `test_identity_envelope.py` (a human grant does not move
+    the boundary; segment-exact; reads untouched; only narrows),
+    `tests/infra/test_run_subject.py` (round trip, CHECKs, backfill, fail-closed load,
+    rollback), and gate eval
+    `injection-in-a-hypothesis-does-not-halt-another-experiment`. The exploit test
+    and the eval each fail with the check removed.
 
 - [x] **T31 — Ledger and bar** · docs · *S*
   - `CONSTRAINTS.md` gains "Registry narrowness" and "Registry preconditions" rows

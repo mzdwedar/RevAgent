@@ -61,6 +61,9 @@ class Case:
     registry: list[dict[str, Any]] = field(default_factory=list)
     # Later turns of the same run, so what one turn read is in the next one's context.
     followups: list[str] = field(default_factory=list)
+    # The experiment the run is about, as the trigger that woke it would have said.
+    # Required on the evaluation stage, where it is what bounds the run's writes.
+    subject: str | None = None
 
     @staticmethod
     def load(path: Path) -> Case:
@@ -142,7 +145,12 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
         stack.registry_client.commit(seed["resource"], seed["payload"])
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
     run = new_run(
-        session_id=session.session_id, tenant=TENANT, user=USER, stage=case.stage, channel="eval"
+        session_id=session.session_id,
+        tenant=TENANT,
+        user=USER,
+        stage=case.stage,
+        channel="eval",
+        subject=case.subject,
     )
     event = InboundEvent(
         channel="eval",
@@ -245,6 +253,16 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
         outcomes = sorted({r.outcome for r in audited})
         if outcomes != sorted(expect["audit_outcomes"]):
             failures.append(f"audit outcomes {outcomes} != {sorted(expect['audit_outcomes'])}")
+    if "audit_decisions" in expect:
+        # Which rule stopped it, not only that something did: "denied" by the tenant
+        # boundary and "denied" by the subject boundary are different defences.
+        decisions = sorted({r.policy_decision for r in audited})
+        if decisions != sorted(expect["audit_decisions"]):
+            failures.append(f"audit decisions {decisions} != {sorted(expect['audit_decisions'])}")
+    for experiment, status in expect.get("experiment_status", {}).items():
+        actual = stack.registry_client.read(f"{TENANT}/experiments/{experiment}", {})["status"]
+        if actual != status:
+            failures.append(f"{experiment} is {actual!r}, expected {status!r}")
 
     seconds = time.perf_counter() - started
     budget = expect.get("max_seconds")
