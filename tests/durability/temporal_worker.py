@@ -16,7 +16,6 @@ import argparse
 import asyncio
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,11 @@ from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import connect
-from agentstack.runtime.temporal.worker import build_worker
+from agentstack.runtime.temporal.worker import (
+    MAX_CONCURRENT_ACTIVITIES,
+    activity_threads,
+    build_worker,
+)
 from agentstack.runtime.waits import WaitStore
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
@@ -113,8 +116,8 @@ async def serve(args: argparse.Namespace) -> None:
     checkpoints, saver = open_checkpointer(args.database_url)
     try:
         with (
-            open_pool(args.database_url, min_size=1, max_size=4) as pool,
-            ThreadPoolExecutor(max_workers=4) as executor,
+            open_pool(args.database_url, min_size=1, max_size=MAX_CONCURRENT_ACTIVITIES) as pool,
+            activity_threads() as executor,
         ):
             db = Database(pool=pool)
             stack = build_stack(db, saver)

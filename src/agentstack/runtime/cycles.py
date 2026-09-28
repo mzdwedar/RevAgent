@@ -142,8 +142,9 @@ def evaluate_to_settled(
     (or layer 8 refused its outcome), and `evaluate` would hand back "no outcome" as if
     that were one. So it evaluates again and settles, or is refused again.
 
-    `evaluate` keeps its meaning for `fanout.py`, where two workers race one trigger
-    concurrently and an unsettled claim may belong to the other one, still working.
+    `evaluate` keeps its meaning for a caller that is not the only evaluator (the eval
+    runner, and callers racing one trigger): an unsettled claim it finds may belong to
+    another caller, still working, so it doesn't evaluate it a second time.
 
     `before_settle` records what the outcome rests on (T40b: the frozen cohort). It runs
     after layer 8 authorised the outcome, so a refused one leaves nothing behind, and

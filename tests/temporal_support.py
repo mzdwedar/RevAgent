@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -29,7 +28,7 @@ from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal.activities import Asker, RunActivities, TurnHost
 from agentstack.runtime.temporal.contracts import RunProgress
-from agentstack.runtime.temporal.worker import build_worker
+from agentstack.runtime.temporal.worker import activity_threads, build_worker
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 from agentstack.runtime.waits import WaitStore
 from agentstack.storage.database import Database
@@ -166,8 +165,9 @@ def asker_for(stack: Stack) -> ChannelAsker:
 async def worker_on(
     client: Client, task_queue: str, db: Database, **options: Any
 ) -> AsyncIterator[Client]:
-    """The production worker, with test stores and scorer, polling `task_queue`."""
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    """The production worker, with test stores and scorer, polling `task_queue`. Its
+    activity bound is the production one, and so are the threads under it."""
+    with activity_threads() as executor:
         worker = build_worker(
             client,
             activities=activities_for(db, **options),

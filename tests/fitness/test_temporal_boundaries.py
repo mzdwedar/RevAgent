@@ -39,7 +39,11 @@ from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import RunProgress, RunStart, workflow_id
 from agentstack.runtime.temporal.interceptors import DECLARED, DeclaredActivitiesOnly
 from agentstack.runtime.temporal.retry import DETERMINISTIC, REFUSALS, RETRY, UNDECLARED
-from agentstack.runtime.temporal.worker import build_worker
+from agentstack.runtime.temporal.worker import (
+    MAX_CONCURRENT_ACTIVITIES,
+    activity_threads,
+    build_worker,
+)
 from agentstack.storage.database import Database, IntegrityViolation
 from tests.conftest import connect_temporal
 from tests.temporal_support import activities_for, progress_until, running_worker
@@ -366,7 +370,7 @@ def test_the_production_worker_installs_the_guard_and_declares_all_it_registers(
 ) -> None:
     async def configured() -> dict[str, object]:
         client = await connect_temporal(temporal_address)
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with activity_threads() as executor:
             db = Database.__new__(Database)  # never queried: this only reads the config
             activities = activities_for(db)
             worker = build_worker(client, activities=activities, executor=executor)
@@ -382,3 +386,5 @@ def test_the_production_worker_installs_the_guard_and_declares_all_it_registers(
     # Where `@activity.defn` records the name a worker registers the function under.
     names = {getattr(fn, "__temporal_activity_definition").name for fn in registered}
     assert names <= set(DECLARED), f"registered but undeclared: {names - set(DECLARED)}"
+    # The activity bound is declared, not left at Temporal's default of 100 (T45).
+    assert config["max_concurrent_activities"] == MAX_CONCURRENT_ACTIVITIES
