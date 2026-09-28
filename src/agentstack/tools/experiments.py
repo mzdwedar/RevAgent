@@ -44,6 +44,12 @@ STATUSES = ["draft", "live", "halted", "discarded"]
 _ID = {"type": "string", "format": "id"}
 
 
+def experiment_resource(tenant: str, experiment_id: str) -> str:
+    """The resource root one experiment's requests live under. Every prepare below
+    names this path or one beneath it, which is what lets a run be bound to it."""
+    return f"{tenant}/experiments/{experiment_id}"
+
+
 def _read(
     name: str,
     description: str,

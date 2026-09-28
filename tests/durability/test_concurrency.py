@@ -327,6 +327,7 @@ def test_twenty_runs_halting_at_once_halt_once(stack: Stack, app_database: Datab
                 user=user,
                 stage=EVALUATION_STAGE,
                 channel="load",
+                subject="exp-7",
             )
         )
         view = stack.resolver.resolve(session_id=session.session_id, user_id=user, tenant=TENANT)

@@ -78,6 +78,13 @@ def run_turn(
     is the right default for a fresh turn; passing the same one twice resumes that turn.
     """
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
+    # The run, not the caller, says what the run is about. Narrowed here rather than
+    # trusted to every place that builds an envelope, so no path into a turn - a
+    # channel, a resumed run in another process, a worker - can hand a subject-bound
+    # run tenant-wide authority by forgetting to. It only ever narrows.
+    subject = run.subject_resource()
+    if subject is not None:
+        envelope = envelope.bound_to(subject)
     context = TurnContext(
         run=run,
         envelope=envelope,

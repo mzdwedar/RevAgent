@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind, authorize
+from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind, authorize, subject_of
+from agentstack.runtime.run import Run, new_run
 from agentstack.storage.database import Database
+from agentstack.tools.experiments import EVALUATION_STAGE
 
 _COLUMNS = "experiment_id, data_as_of, kind, outcome, run_id, claimed_at, settled_at"
 
@@ -115,3 +117,20 @@ def evaluate(store: CycleStore, trigger: TriggerEvent, evaluator: Evaluator) -> 
     outcome, run_id = evaluator(trigger)
     authorize(trigger.kind, outcome)
     return store.settle(trigger, outcome, run_id)
+
+
+def evaluation_run(trigger: TriggerEvent, *, session_id: str, tenant: str, user: str) -> Run:
+    """The run a trigger wakes, bound to the experiment the trigger is about.
+
+    The subject is set here, from the trigger, and recorded with the run: it has to be
+    there before the first turn reads anything, because everything after that point is
+    something a turn read. `tenant` is the run's own, from its session.
+    """
+    return new_run(
+        session_id=session_id,
+        tenant=tenant,
+        user=user,
+        stage=EVALUATION_STAGE,
+        channel=f"trigger:{trigger.source}",
+        subject=subject_of(trigger, tenant=tenant),
+    )

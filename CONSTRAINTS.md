@@ -38,6 +38,9 @@ Stack-specific (from `STACK.md`):
   waits forever, and looks exactly like waiting patiently
 - No tool exposed on a stage it does not belong to: drafting and rolling out are
   never on the same menu
+- No evaluation run without a subject, and no write by a subject-bound run outside
+  it: the subject comes from the trigger or the run record, never from what a turn
+  read, and no approval carries a run past it
 - No `ALWAYS` action satisfied by a policy grant — a rule does not authorise an
   irreversible act by minting the record the tier demands
 - No approval tier that behaves like another: `PRE_COMMIT` grants on a named rule
@@ -112,6 +115,7 @@ Stack-specific (from `STACK.md`):
 | Concurrency | 100 runs at once each commit exactly once with every resume delivered twice; a raced step completes once; a trigger batch evaluates each experiment once, within its bound; a migrator never unlocks over uncommitted work | `uv run pytest tests/durability/test_concurrency.py tests/infra/test_migrations.py` | task end, CI |
 | Registry narrowness | Every registry tool: no `status`/`fields`/`patch`/`updates` setter, no array or object argument, only the rollout names a `percentage`, every write requires `experiment_version`, one scope per blast radius; the stage menus are exactly draft 5 / evaluation 5 / rollout 4; a halt that names anything but zero is denied by `decide`, whatever was approved | `uv run pytest tests/fitness/test_registry_tools.py tests/fitness/test_approval_tiers.py` | every edit |
 | Registry preconditions | Each transition is refused from every wrong state and leaves every read unchanged; the fake and Postgres clients pass one contract suite; a lost answer then a retry leaves one row; twenty simultaneous halts leave one `halted` and one halt event, through the gateway and at the store alone | `uv run pytest tests/infra/test_registry_store.py tests/fitness/test_registry_tools.py tests/durability/test_concurrency.py` | task end, CI |
+| Subject binding | An evaluation run that reads a hypothesis naming another experiment cannot halt it, even with a human grant, and the denial is audited `subject.boundary`. It can still halt its own subject. The subject survives a round trip through `runs` | `uv run pytest tests/fitness/test_untrusted_content.py tests/fitness/test_identity_envelope.py tests/infra/test_run_subject.py` | every edit |
 | Checkpoint compatibility | An incompatible checkpoint change ships a version bump, drops the old version, and a migration note — or fails the build | `uv run python scripts/checkpoint_guard.py --base main` | task end, CI |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |

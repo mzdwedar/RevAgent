@@ -50,9 +50,35 @@ def decide(
             "tenant.boundary",
             f"resource {request.resource} is outside tenant {envelope.tenant}",
         )
+    if spec.side_effecting and not envelope.within_subject(request.resource):
+        return Decision(False, "subject.boundary", outside_subject(envelope, request))
     if refusal := halt_only_zeroes(spec, request):
         return Decision(False, "halt.only_zeroes", refusal)
     return Decision(True, "allow", f"{envelope.principal} may {spec.name} on {request.resource}")
+
+
+def outside_subject(envelope: IdentityEnvelope, request: ActionRequest) -> str:
+    """Why a run bound to one resource may not change another (H3).
+
+    An evaluation run is woken about one experiment and holds `experiments:halt`.
+    Without this, that scope reached every experiment in the tenant, and the run was a
+    confused deputy: text it read - another experiment's hypothesis, written by whoever
+    could draft - named a different live experiment, and the halt was granted.
+    Here, not in the `PRE_COMMIT` rule set: a refusal there only escalates to a human,
+    and an existing grant skips the rules, so a person approving the wrong
+    experiment's halt would get it through. `decide` runs first, on every call.
+
+    Writes only. A read changes nothing, and what it returns reaches a later turn as
+    untrusted data that - with every write bounded here - can steer the run only
+    towards its own subject. An evaluation also has a real use for the neighbours:
+    `list_experiments` is on its menu, and its resource is the collection, which no
+    one experiment contains. Bounding reads would deny that tool on every call and
+    buy nothing the write boundary does not already hold.
+    """
+    return (
+        f"this run is bound to {envelope.subject}; {request.resource} is another resource, "
+        "and what a run read does not choose what it may change"
+    )
 
 
 def halt_only_zeroes(spec: ToolSpec, request: ActionRequest) -> str | None:
