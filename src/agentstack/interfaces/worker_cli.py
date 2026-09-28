@@ -13,7 +13,6 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.interfaces import preflight_cli
@@ -27,14 +26,15 @@ from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import TemporalUnavailable, connect, temporal_address
 from agentstack.runtime.temporal.contracts import TASK_QUEUE
-from agentstack.runtime.temporal.worker import build_worker
+from agentstack.runtime.temporal.worker import (
+    MAX_CONCURRENT_ACTIVITIES,
+    activity_threads,
+    build_worker,
+)
 from agentstack.runtime.waits import WaitStore
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import database_url, open_pool, redacted
-
-# Activities hold one pooled connection each, so the pool is sized to the executor.
-MAX_ACTIVITIES = 8
 
 
 def main(
@@ -67,10 +67,10 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
     checkpoints, saver = open_checkpointer(url)
     try:
         with (
-            open_pool(url, min_size=1, max_size=MAX_ACTIVITIES) as pool,
-            ThreadPoolExecutor(
-                max_workers=MAX_ACTIVITIES, thread_name_prefix="activity"
-            ) as executor,
+            # Activities hold one pooled connection each, so the pool is sized to the
+            # worker's activity bound.
+            open_pool(url, min_size=1, max_size=MAX_CONCURRENT_ACTIVITIES) as pool,
+            activity_threads() as executor,
         ):
             db = Database(pool=pool)
             stack = build_stack(db, saver)

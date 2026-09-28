@@ -1305,12 +1305,49 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
 - [ ] `/stack-audit` on the diff so far
 - [ ] Human review
 
-- [ ] **T45 — Bounded fan-out; retire `fanout.py`** · layer 3 · *S*
+- [x] **T45 — Bounded fan-out; retire `fanout.py`** · layer 3 · *S*
   - Acceptance: worker `max_concurrent_activities` bounds evaluations; `fanout.py` is
     deleted once its tests pass.
   - Verify: `tests/durability/test_concurrency.py` re-pointed: 100 triggers, peak ≤
     the limit, each commits once (C42).
   - Files: `runtime/temporal/worker.py`, `runtime/fanout.py` (deleted), `tests/durability/test_concurrency.py`.
+  - **Done.** The bound is `worker.MAX_CONCURRENT_ACTIVITIES` (`min(8, pool max)`, the
+    number and reasoning `fanout.DEFAULT_MAX_IN_FLIGHT` had), passed to Temporal's
+    `max_concurrent_activities` by `build_worker`. Temporal's default was 100. A task
+    beyond the bound stays on the queue unclaimed, so its timeout hasn't started.
+  - **The declared limit is the one that binds.** `build_worker` refuses an executor
+    with fewer threads than the limit, and refuses a limit below 1. With fewer threads,
+    the threads would be the real bound, and claimed tasks would burn their
+    `start_to_close_timeout` in the executor's backlog. Temporal only warns about this.
+    `activity_threads()` builds an executor of exactly the limit. `agentstack-worker`
+    sizes its pool, threads and slots from that one number, which replaces its own
+    `MAX_ACTIVITIES = 8`. The bound counts every activity, not only evaluations, because
+    a turn or a commit also holds a connection.
+  - The three fan-out tests were rewritten in place, through a real worker and the real
+    ingress (`wiring.deliver`). In-flight evaluations are counted at the activity's
+    `evaluate_trigger` seam, around the real one. (1) C42: 100 experiments × 3 shuffled
+    deliveries are all queued before the worker starts. Each is scored once, each run
+    reads 3 cycles, 100 settled rows, none unsettled, and peak ≤ the worker's configured
+    limit (read from `worker.config()`) and > 1. The executor there has **4× the limit in
+    threads**, so only the slots can be what holds it. (2) A failing evaluation is
+    retried (≥2 attempts) and stays unsettled while the other 9 settle. (3) The bound is
+    ≤ the pool, and `build_worker` refuses 0 and a too-small executor. The production
+    worker config test also asserts the declared bound. Asserts and `raises` in the
+    section: 10 before, 18 now.
+  - **Mutation-checked:** without `max_concurrent_activities` on the `Worker`, the peak is
+    32 (the test executor's threads).
+  - **The C42 test runs on the time-skipping (in-memory) server.** The bound is the
+    worker's, so the server only has to hand out tasks faster than the bound runs them.
+    The dev server's SQLite can't do that for 100 runs: 17–23s, peak 6–7, so it measured
+    the server. In-memory: ~4.6s, peak 8. Waiting is done on `trigger_cycles` first,
+    because 100 runs polling `progress` at once are workflow tasks competing with the work.
+  - The test workers (`temporal_support.worker_on`, `durability/temporal_worker.py`) now
+    run at the production bound. They were at 4 threads, which would now be refused.
+    `cycles.evaluate`'s docstring no longer names `fanout.py`. It still serves the eval
+    runner and the direct cycle tests.
+  - Verified against a throwaway Postgres on 5435: `check_task.sh` green, **675 passed**,
+    changed-line coverage 100% (11/11), `stack_guard` intact, `checkpoint_guard` safe.
+    A fresh worktree still needs `data/manifest.json` copied in (T32's finding).
 
 - [ ] **T46 — Continue-as-new** · layer 3 · *S*
   - Acceptance: every 100 cycles, carrying `run_id` and the current wait id.
