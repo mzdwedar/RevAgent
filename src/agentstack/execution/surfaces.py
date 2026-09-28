@@ -55,6 +55,17 @@ class SurfaceClient(Protocol):
 
     def commit(self, resource: str, payload: dict[str, Any]) -> str: ...
 
+    def state(self, resource: str) -> tuple[str, ...] | None:
+        """What this resource *is* right now, for binding an approval to it (Part 7).
+
+        Never shown to the model: it's hashed into a state snapshot and nothing else.
+        It describes the thing an approver decided about, not where it is in its
+        lifecycle. The lifecycle is the surface's precondition to check at the act,
+        and an effect must not move its own snapshot, or the retry that should
+        deduplicate would read as stale. `None` when the surface can't describe it.
+        """
+        ...
+
 
 @dataclass(slots=True)
 class RecordingClient:
@@ -84,6 +95,12 @@ class RecordingClient:
             # makes every test about it vacuous.
             raise SurfaceTimeout(f"{resource}: applied, but the response was lost")
         return f"receipt-{len(self.calls)}"
+
+    def state(self, resource: str) -> tuple[str, ...] | None:
+        # A reference API with no resource model: the snapshot falls back to what the
+        # run itself committed against the resource (runtime/snapshot.py).
+        del resource
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +216,13 @@ class RegistryClient:
             raise SurfaceTimeout(f"{resource} applied, answer lost")
         return receipt
 
+    def state(self, resource: str) -> tuple[str, ...] | None:
+        tenant, experiment, _ = _registry_resource(resource)
+        draft = self.drafts.get(f"{tenant}/experiments/{experiment}")
+        if draft is None:
+            return None
+        return (draft["experiment_version"], draft["variant"], draft["hypothesis"])
+
 
 @dataclass(frozen=True, slots=True)
 class PostgresRegistryClient:
@@ -266,6 +290,29 @@ class PostgresRegistryClient:
             "hypothesis": hypothesis,
             "variant": variant,
         }
+
+    def state(self, resource: str) -> tuple[str, ...] | None:
+        """The experiment's current version, its variant and its latest hypothesis.
+
+        Either resource names the same experiment: a rollout is approved against the
+        experiment it exposes. Status is left out on purpose (see `SurfaceClient.state`):
+        the rollout itself moves it to `live`.
+        """
+        tenant, experiment, _ = _registry_resource(resource)
+        row = self.db.fetch_one(
+            "SELECT e.current_version, v.variant,"
+            " (SELECT r.hypothesis FROM draft_revisions r"
+            "   WHERE (r.tenant, r.experiment_id, r.experiment_version)"
+            "       = (e.tenant, e.experiment_id, e.current_version)"
+            "   ORDER BY r.revision_no DESC LIMIT 1)"
+            " FROM experiments e"
+            " JOIN experiment_versions v"
+            "   ON (v.tenant, v.experiment_id, v.experiment_version)"
+            "    = (e.tenant, e.experiment_id, e.current_version)"
+            " WHERE e.tenant = %s AND e.experiment_id = %s",
+            (tenant, experiment),
+        )
+        return None if row is None else tuple(str(column) for column in row)
 
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
         tenant, experiment, action = _registry_resource(resource)

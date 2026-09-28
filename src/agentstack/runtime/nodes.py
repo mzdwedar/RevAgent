@@ -20,7 +20,7 @@ from agentstack.model.contract import ExposedTool, ModelRequest
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.graph import TurnContext, TurnState
-from agentstack.runtime.snapshot import resource_snapshot
+from agentstack.runtime.snapshot import resource_snapshot, world_snapshot
 from agentstack.runtime.waits import approval_wait_id
 from agentstack.tools.registry import ToolNotExposed
 from agentstack.tools.validation import InvalidToolArguments
@@ -209,8 +209,15 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
             refusals.append(str(exc))
             continue
         spec = deps.registry.spec(tool)
-        state_snapshot = resource_snapshot(
-            fingerprint, request.resource, committed_against.get(request.resource, [])
+        # The world as its surface describes it, when it can: the same snapshot a commit
+        # reads again at the act (T43). Otherwise what this turn knows on its own.
+        world = deps.gateway.observe(request=request, tracer=tracer)
+        state_snapshot = (
+            world_snapshot(request.resource, world)
+            if world is not None
+            else resource_snapshot(
+                fingerprint, request.resource, committed_against.get(request.resource, [])
+            )
         )
         with tracer.span("tool.call", tool=spec.name, resource=request.resource):
             pass

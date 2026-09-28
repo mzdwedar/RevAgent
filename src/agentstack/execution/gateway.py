@@ -111,6 +111,29 @@ class Gateway:
             pass
         return ReadResult(data=data, approval_id=approval.id if approval else None)
 
+    def observe(self, *, request: ActionRequest, tracer: Tracer) -> tuple[str, ...] | None:
+        """What the resource this action changes is, now: the world an approval binds to.
+
+        Not a read. Nothing comes back to the model, and nothing is decided here: the
+        caller hashes it into a state snapshot, and `execute` compares that snapshot with
+        the approval's. It goes through the gateway because this is the only path to a
+        client. A resource outside containment is described as nothing, so that the
+        refusal happens in `execute`, where it is audited.
+        """
+        try:
+            self.sandbox.check(surface=request.surface, resource=request.resource)
+        except SandboxViolation:
+            return None
+        state = self.surfaces[request.surface].state(request.resource)
+        with tracer.span(
+            "execution.observe",
+            surface=request.surface.value,
+            resource=request.resource,
+            described=state is not None,
+        ):
+            pass
+        return state
+
     def execute(
         self,
         *,

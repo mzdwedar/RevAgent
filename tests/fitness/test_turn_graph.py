@@ -88,6 +88,9 @@ class RefusingClient:
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
         return self.inner.commit(resource, payload)
 
+    def state(self, resource: str) -> Any:
+        return self.inner.state(resource)
+
 
 def test_a_turn_that_died_resumes_without_re_running_what_it_finished(
     stack: Stack, run: Run

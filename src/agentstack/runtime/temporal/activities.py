@@ -24,6 +24,8 @@ from temporalio.exceptions import ApplicationError
 
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
+from agentstack.execution.gateway import UnresolvedEffect
+from agentstack.observability.spans import Tracer
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind
 from agentstack.prediction.churn import ChurnScorer
@@ -34,16 +36,21 @@ from agentstack.runtime.loop import TurnDeps
 from agentstack.runtime.loop import run_turn as take_turn
 from agentstack.runtime.operator import Evaluation, evaluate_trigger
 from agentstack.runtime.run import Run, RunStore
+from agentstack.runtime.snapshot import world_snapshot
 from agentstack.runtime.temporal.contracts import (
     ASK_APPROVAL,
+    COMMIT,
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
     PARK_TRIGGER_WAIT,
+    ROLLOUT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
     AskIntent,
     AskResult,
+    CommitIntent,
+    CommitOutcome,
     CycleResult,
     ParkedWait,
     RunStart,
@@ -55,12 +62,18 @@ from agentstack.runtime.temporal.contracts import (
 )
 from agentstack.runtime.waits import (
     APPROVAL_REASK_AFTER,
+    RECONCILE,
     TRIGGER,
     ResumeEvent,
     Wait,
     WaitStore,
+    reconcile_wait_id,
     resume,
 )
+from agentstack.tools.action import ActionRequest
+from agentstack.tools.registry import ToolNotExposed
+from agentstack.tools.spec import ToolSpec
+from agentstack.tools.validation import InvalidToolArguments
 
 # A turn's p95 is 60s (SPEC.md), and the workflow gives it 120s. A heartbeat every few
 # seconds lets Temporal notice a dead worker in `HEARTBEAT_TIMEOUT` instead of waiting
@@ -69,6 +82,10 @@ HEARTBEAT_EVERY_S = 5.0
 
 NO_TURN_HOST = "NoTurnHost"
 NO_ASKER = "NoAsker"
+# The answered wait names an action no checkpointed proposal of its turn prepares to.
+NOTHING_APPROVED = "NothingApproved"
+# The surface can't describe the resource, so no approval can be checked against it now.
+WORLD_UNREADABLE = "WorldUnreadable"
 
 
 class TurnHost(Protocol):
@@ -230,14 +247,7 @@ class RunActivities:
         turn commits goes through the gateway with the tool's content-derived key, so
         it lands once (E1).
         """
-        if self._turns is None:
-            # A configuration fault, the same on every attempt: fail once, visibly, as
-            # this turn's refusal, rather than spin and hold up every trigger behind it.
-            raise ApplicationError(
-                "this worker was built without a turn host, so it can't take turns",
-                type=NO_TURN_HOST,
-                non_retryable=True,
-            )
+        turns = self._host()
         recorded = self._runs.get(intent.run_id)
         assert recorded is not None  # ensure_run ran first in this workflow
         # The stage decides which tools the turn is shown. It is the workflow's choice of
@@ -252,9 +262,9 @@ class RunActivities:
             )
         )
         assert cycle is not None  # the turn follows the cycle that settled
-        turn_id = f"{intent.stage}:{intent.experiment_id}:{intent.data_as_of}:{intent.kind}"
+        turn_id = _turn_id(intent.stage, intent.experiment_id, intent.data_as_of, intent.kind)
 
-        done = finished_turn(self._turns.deps.graph, turn_thread(run.run_id, turn_id))
+        done = finished_turn(turns.deps.graph, turn_thread(run.run_id, turn_id))
         if done is not None:
             return _outcome(done)
 
@@ -262,18 +272,29 @@ class RunActivities:
         with _heartbeating():
             result = take_turn(
                 run=run,
-                envelope=self._turns.envelope(run),
+                envelope=turns.envelope(run),
                 message=message,
-                deps=self._turns.deps,
+                deps=turns.deps,
                 turn_id=turn_id,
             )
-        self._turns.record(run, asked=message, answered=result.text)
+        turns.record(run, asked=message, answered=result.text)
         return TurnOutcome(
             status=result.status,
             receipts=len(result.receipts),
             refusals=len(result.refusals),
             wait_id=None if result.pending_wait is None else result.pending_wait.wait_id,
         )
+
+    def _host(self) -> TurnHost:
+        if self._turns is None:
+            # A configuration fault, the same on every attempt: fail once, visibly, as
+            # this act's refusal, rather than spin and hold up every trigger behind it.
+            raise ApplicationError(
+                "this worker was built without a turn host, so it can't take turns or act",
+                type=NO_TURN_HOST,
+                non_retryable=True,
+            )
+        return self._turns
 
     def _instruction(self, intent: TurnIntent, run: Run, cycle: cycles.Cycle) -> str:
         """What this stage's turn is told, from the record. Never passed through history."""
@@ -326,6 +347,92 @@ class RunActivities:
                 next_deadline=datetime.now(UTC) + APPROVAL_REASK_AFTER,
             )
         return AskResult(answered=False)
+
+    @activity.defn(name=COMMIT)
+    def commit(self, intent: CommitIntent) -> CommitOutcome:
+        """The irreversible act: what the person was asked about, through the gateway.
+
+        Nothing is carried to here but ids (ADR-0008 rule 3). The action is the one the
+        rollout turn proposed, read from its checkpoint and held to the fingerprint the
+        wait recorded. The snapshot is the world as the surface describes it *now*, so
+        an approval given against a world that has since moved is `ApprovalStale`. The
+        envelope is minted for this act. Whether it may happen at all is the gateway's
+        to decide: a "no", an outsider's click or a forged wake-up leaves no human
+        approval, and the gateway refuses. That refusal is audited and not retried.
+
+        An effect of unknown outcome is not retried either (E2). The run parks a
+        reconcile wait, and once someone has settled the claim against the surface, the
+        rerun deduplicates.
+        """
+        turns = self._host()
+        recorded = self._runs.get(intent.run_id)
+        wait = self._waits.get(intent.wait_id)
+        assert recorded is not None and wait is not None  # parked by this run's turn
+        run = dataclasses.replace(recorded, stage=ROLLOUT)
+        request, spec = self._approved(run, intent, wait)
+        tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=turns.deps.versions)
+        gateway = turns.deps.gateway
+        world = gateway.observe(request=request, tracer=tracer)
+        if world is None:
+            raise ApplicationError(
+                f"{request.resource} can't be described by its surface now, so no approval "
+                "can be checked against it at the act",
+                type=WORLD_UNREADABLE,
+                non_retryable=True,
+            )
+        try:
+            result = gateway.execute(
+                request=request,
+                spec=spec,
+                envelope=turns.envelope(run),
+                run_id=run.run_id,
+                state_snapshot=world_snapshot(request.resource, world),
+                tracer=tracer,
+            )
+        except UnresolvedEffect:
+            parked = self._waits.park(
+                wait_id=reconcile_wait_id(run.run_id, request.fingerprint()),
+                run_id=run.run_id,
+                kind=RECONCILE,
+                state_snapshot=world_snapshot(request.resource, world),
+                action_fingerprint=request.fingerprint(),
+            )
+            return CommitOutcome(status="unresolved", wait_id=parked.wait_id)
+        return CommitOutcome(status="deduplicated" if result.deduplicated else "committed")
+
+    def _approved(
+        self, run: Run, intent: CommitIntent, wait: Wait
+    ) -> tuple[ActionRequest, ToolSpec]:
+        """The proposal this wait asked about, as the rollout turn checkpointed it.
+
+        Prepared again, against what this run may use now, and held to the fingerprint
+        the wait recorded: what commits is what the person was shown, or nothing.
+        """
+        deps = self._host().deps
+        turn_id = _turn_id(ROLLOUT, intent.experiment_id, intent.data_as_of, intent.kind)
+        state = finished_turn(deps.graph, turn_thread(run.run_id, turn_id)) or {}
+        proposals = state.get("proposals") or []
+        assert isinstance(proposals, list)
+        exposed = deps.registry.expose_for(tenant=run.tenant, stage=run.stage)
+        for proposal in proposals:
+            try:
+                request = deps.registry.prepare(
+                    str(proposal["tool"]), proposal["arguments"], exposed=exposed
+                )
+            except (InvalidToolArguments, ToolNotExposed):
+                continue
+            if request.fingerprint() == wait.action_fingerprint:
+                return request, deps.registry.spec(request.tool)
+        raise ApplicationError(
+            f"{wait.wait_id} asked about an action its turn never proposed; nothing to commit",
+            type=NOTHING_APPROVED,
+            non_retryable=True,
+        )
+
+
+def _turn_id(stage: str, experiment_id: str, data_as_of: str, kind: str) -> str:
+    """A turn's identity comes from the cycle, not from Temporal (E1)."""
+    return f"{stage}:{experiment_id}:{data_as_of}:{kind}"
 
 
 def _outcome(state: dict[str, object]) -> TurnOutcome:

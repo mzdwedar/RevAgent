@@ -98,6 +98,9 @@ class HangingGateway:
     def read(self, **kwargs: Any) -> Any:
         return self.inner.read(**kwargs)
 
+    def observe(self, **kwargs: Any) -> Any:
+        return self.inner.observe(**kwargs)
+
     def execute(self, **kwargs: Any) -> Any:
         # Which tool got here, so the test knows the kill landed on the effect it meant.
         self.reached.write_text(kwargs["request"].tool)

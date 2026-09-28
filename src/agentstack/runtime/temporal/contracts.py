@@ -25,6 +25,7 @@ PARK_TRIGGER_WAIT = "park_trigger_wait"
 SATISFY_TRIGGER_WAIT = "satisfy_trigger_wait"
 RUN_TURN = "run_turn"
 ASK_APPROVAL = "ask_approval"
+COMMIT = "commit"
 
 # The stage a turn runs at, which decides the tools it is shown (T22). Named here
 # because workflow code may not import `agentstack.tools`, where the stages are defined;
@@ -176,6 +177,38 @@ class AskResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CommitIntent:
+    """Commit what this answered wait asked about. The irreversible act.
+
+    Names the wait and the cycle whose rollout turn proposed the action, and nothing
+    else. No snapshot: the activity reads the world at the act, so an approval given
+    against a world that has since moved is stale (ADR-0008 rule 3). No proposal and no
+    envelope either: the proposal is read from the turn's checkpoint, and the envelope is
+    minted in the activity.
+    """
+
+    run_id: str
+    wait_id: str
+    experiment_id: str
+    data_as_of: str
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class CommitOutcome:
+    """How the act ended: `committed`, `deduplicated`, `unresolved` or `refused`.
+
+    `unresolved` names the reconcile wait the run parked: the effect may have applied,
+    and only the surface knows (E2). `refused` names the refusal type. The receipt stays
+    in the ledger and the audit trail.
+    """
+
+    status: str
+    wait_id: str | None = None
+    refusal: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RunProgress:
     """Where the run is, for whoever asks. Read by query, so it's never history."""
 
@@ -193,3 +226,6 @@ class RunProgress:
     awaiting_approval: str | None = None
     asks: int = 0
     answered: tuple[str, ...] = ()
+    # Every attempt at an act, in order, and the reconcile wait the run is parked on.
+    commits: tuple[CommitOutcome, ...] = ()
+    reconciling: str | None = None

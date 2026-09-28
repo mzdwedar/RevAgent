@@ -16,6 +16,7 @@ from temporalio.exceptions import ActivityError, ApplicationError
 
 from agentstack.runtime.temporal.contracts import (
     ASK_APPROVAL,
+    COMMIT,
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
@@ -26,6 +27,8 @@ from agentstack.runtime.temporal.contracts import (
     SATISFY_TRIGGER_WAIT,
     AskIntent,
     AskResult,
+    CommitIntent,
+    CommitOutcome,
     CycleResult,
     ParkedWait,
     RunEnd,
@@ -46,6 +49,8 @@ CYCLE_TIMEOUT = timedelta(seconds=120)
 # HEARTBEAT_TIMEOUT rather than after the whole two minutes.
 TURN_TIMEOUT = timedelta(seconds=120)
 HEARTBEAT_TIMEOUT = timedelta(seconds=15)
+# One surface call and its bookkeeping.
+ACT_TIMEOUT = timedelta(seconds=30)
 
 
 @workflow.defn
@@ -71,6 +76,8 @@ class ExperimentWorkflow:
         self._awaiting: str | None = None
         self._asks = 0
         self._answered: list[str] = []
+        self._commits: list[CommitOutcome] = []
+        self._reconciling: str | None = None
 
     @workflow.run
     async def run(self, start: RunStart) -> RunEnd:
@@ -106,6 +113,48 @@ class ExperimentWorkflow:
         self._turns.append(proposed)
         if proposed.wait_id is not None and cycle.experiment_version is not None:
             await self._await_approval(proposed.wait_id, cycle)
+            await self._act(proposed.wait_id, cycle)
+
+    async def _act(self, wait_id: str, cycle: CycleResult) -> None:
+        """The answer is in: commit what it was about. Whether it may happen is the
+        gateway's to decide at the act, against the world as it is then.
+
+        An effect of unknown outcome parks the run until someone reconciles it against
+        the surface, then acts again, and the ledger makes that a deduplication. It is
+        never retried blind (E2).
+        """
+        intent = CommitIntent(
+            run_id=self._run_id,
+            wait_id=wait_id,
+            experiment_id=cycle.experiment_id,
+            data_as_of=cycle.data_as_of,
+            kind=cycle.kind,
+        )
+        while True:
+            outcome = await self._commit(intent)
+            self._commits.append(outcome)
+            if outcome.status != "unresolved" or outcome.wait_id is None:
+                return
+            self._reconciling = outcome.wait_id
+            await workflow.wait_condition(lambda: self._reconciling in self._answered)
+            self._reconciling = None
+
+    async def _commit(self, intent: CommitIntent) -> CommitOutcome:
+        try:
+            outcome: CommitOutcome = await workflow.execute_activity(
+                COMMIT,
+                intent,
+                result_type=CommitOutcome,
+                start_to_close_timeout=ACT_TIMEOUT,
+                retry_policy=RETRY,
+            )
+            return outcome
+        except ActivityError as exc:
+            # A refusal is the act's answer: stale, unapproved, or refused by the surface.
+            # It was audited where it was decided, and asking again can't change it.
+            cause = exc.cause
+            refusal = cause.type if isinstance(cause, ApplicationError) else None
+            return CommitOutcome(status="refused", refusal=refusal or type(cause).__name__)
 
     async def _await_approval(self, wait_id: str, cycle: CycleResult) -> None:
         """Ask, then wait. Every REASK_EVERY without an answer, ask again. Never expire.
@@ -155,10 +204,12 @@ class ExperimentWorkflow:
 
     @workflow.signal
     def answered(self, wait_id: str) -> None:
-        """The person's answer was authorised and recorded (layer 8, in the callback).
+        """A wait this run parked was satisfied: a person's answer, authorised and
+        recorded by layer 8 in the callback, or an unresolved effect reconciled.
 
         Carries a wait id and nothing else: whether it was a yes, and who said it, is in
-        the `approvals` row and the wait, where layer 8 wrote it. Nothing here decides.
+        the `approvals` row and the wait, where layer 8 wrote it. Nothing here decides,
+        and a wake-up nobody authorised meets the gateway's refusal at the act.
         """
         self._answered.append(wait_id)
 
@@ -269,4 +320,6 @@ class ExperimentWorkflow:
             awaiting_approval=self._awaiting,
             asks=self._asks,
             answered=tuple(self._answered),
+            commits=tuple(self._commits),
+            reconciling=self._reconciling,
         )

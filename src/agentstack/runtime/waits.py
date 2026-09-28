@@ -31,6 +31,9 @@ HUMAN_APPROVAL = "human_approval"
 # A run whose checkpoint this code cannot read. Not stalled - nothing is late, the code
 # moved - and satisfied by migrating the checkpoint, not by an event arriving.
 NEEDS_MIGRATION = "needs_migration"
+# An effect whose outcome is unknown: the surface may have applied it (E2). Satisfied by
+# whoever reconciles the idempotency claim against the surface, never by waiting.
+RECONCILE = "reconcile"
 
 # How long a question sits unanswered before it is put again. A default, unlike a
 # trigger's deadline: how patiently to treat a person does not depend on the workflow,
@@ -71,6 +74,14 @@ def approval_wait_id(run_id: str, action_fingerprint: str, state_snapshot: str) 
     """
     digest = hashlib.sha256(f"{run_id}\n{action_fingerprint}\n{state_snapshot}".encode())
     return f"wait-approval-{digest.hexdigest()[:24]}"
+
+
+def reconcile_wait_id(run_id: str, action_fingerprint: str) -> str:
+    """The one reconcile wait for this action in this run: a rerun parks it again, not
+    a second one. Not bound to a snapshot: what is unknown is the effect, whatever the
+    world was."""
+    digest = hashlib.sha256(f"{run_id}\n{action_fingerprint}".encode())
+    return f"wait-reconcile-{digest.hexdigest()[:24]}"
 
 
 @dataclass(frozen=True, slots=True)

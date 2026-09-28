@@ -13,12 +13,17 @@ What a snapshot has to cover is the state of **the resource this action changes*
 * including the rendered context, so an approval does not survive the request that
   produced it being replaced.
 
-`resource_state` is the seam where the real thing arrives: the charge's status, the
-subscription's version, whatever the domain says identifies "this resource, now".
-Until SPEC.md answers that, the runtime supplies the effects it has already committed
-against that resource this run, which is the part it can know on its own. Replacing
-it is a change to this function and the call site - the approval semantics above do
-not move.
+`resource_state` is the seam where the real thing arrives: whatever the domain says
+identifies "this resource, now". A surface that can describe its resource says so
+(`SurfaceClient.state`, read through `Gateway.observe`), and then the snapshot is that
+description and nothing else: `world_snapshot`. It can be read again at the act, by a
+process that never saw the turn (T43, ADR-0008 rule 3), and an approval against a
+world that has since moved is stale. The experiment registry is the first such surface:
+its experiment's version, variant and hypothesis.
+
+A surface that can't describe its resource falls back to what the run itself has
+committed against it, plus the rendered context: the part the runtime can know on its
+own.
 """
 
 from __future__ import annotations
@@ -35,3 +40,13 @@ def resource_snapshot(
     """Identify the world this action is about to change."""
     material = "|".join([context_fingerprint, resource, *resource_state])
     return hashlib.sha256(material.encode()).hexdigest()[:16]
+
+
+def world_snapshot(resource: str, world: Sequence[str]) -> str:
+    """Identify the resource as its surface describes it now.
+
+    No context fingerprint: anything that reads the world again, at the act, gets the
+    same snapshot unless the world moved. That is what makes staleness checkable by the
+    commit rather than carried to it.
+    """
+    return resource_snapshot("world", resource, world)

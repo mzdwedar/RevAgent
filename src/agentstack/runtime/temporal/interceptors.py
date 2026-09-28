@@ -26,6 +26,7 @@ from temporalio.worker import (
 
 from agentstack.runtime.temporal.contracts import (
     ASK_APPROVAL,
+    COMMIT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
     PARK_TRIGGER_WAIT,
@@ -40,10 +41,12 @@ DECLARED: Mapping[str, str] = {
     EVALUATE_CYCLE: "record",
     PARK_TRIGGER_WAIT: "record",
     SATISFY_TRIGGER_WAIT: "record",
-    # The turn: the only activity so far that commits, and only through gateway.execute.
+    # The turn: its PRE_COMMIT writes commit, and only through gateway.execute.
     RUN_TURN: "gateway",
     # Puts a question to a person. Grants nothing: authority is the approvals row.
     ASK_APPROVAL: "notify",
+    # The irreversible act, through gateway.execute and nothing else.
+    COMMIT: "gateway",
 }
 
 

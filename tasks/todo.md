@@ -1220,7 +1220,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - Counting approvals means counting *human* ones: the draft's PRE_COMMIT grant is a
     policy row in the same table (migration 0006).
 
-- [ ] **T43 — The commit activity: snapshot at the act** · layer 3 · *M*
+- [x] **T43 — The commit activity: snapshot at the act** · layer 3 · *M*
   - Acceptance: `commit(CommitIntent)` takes no snapshot argument; it reads the snapshot,
     mints the envelope and calls `gateway.execute`. `UnresolvedEffect` parks a
     reconcile wait. This is the irreversible act.
@@ -1229,6 +1229,51 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     attempt, parked, reconciled, deduped (C34); `test_approve_resume_rollout`,
     `test_unresolved_effects` green.
   - Files: `runtime/temporal/{activities,workflows,contracts}.py`, `tests/fitness/test_state_snapshot.py`.
+  - **Two decisions (human, 2026-09-28): "world only", and take the checkpointed proposal.**
+    Layers 7 and 3, not only 3. The old snapshot mixed in the rollout turn's context
+    fingerprint, which a commit with no turn can't recompute. Copying it from the wait
+    instead would be E3: the check compares the snapshot with itself.
+  - **The world, read at the act.** `SurfaceClient.state(resource)` says what the resource
+    *is*, and `Gateway.observe` is the one path to it (sandboxed; outside containment it
+    returns nothing, so the refusal stays in `execute`, audited). For the registry, that's
+    the experiment's current version, variant and latest hypothesis. The version is derived
+    from the scored data, so it covers `data_as_of`. **Status is left out on purpose:** the
+    rollout itself takes the experiment live, and if that moved the snapshot, the retry
+    that should deduplicate would read as stale. The lifecycle is the surface's precondition
+    (`SurfaceRefused`). `snapshot.world_snapshot` has no context fingerprint. `act` uses it
+    whenever the surface describes the resource. The reference API describes nothing and
+    keeps the old snapshot, so refunds are unchanged.
+  - **The act.** After the answer, the workflow runs `commit(CommitIntent)`: run, wait and
+    cycle ids only. The activity reads the rollout turn's checkpointed proposals, prepares
+    them again against the rollout stage's exposure, and commits only the one whose
+    fingerprint equals the wait's (`NothingApproved` otherwise). It observes the world,
+    mints the envelope and calls `gateway.execute`. It checks no yes/no itself: a "no",
+    an outsider or a forged signal leaves no human approval, and the gateway refuses
+    (`ApprovalRequired`), audited, one attempt. A world that can't be described is
+    `WorldUnreadable`, non-retryable. Declared `gateway` in the interceptor.
+  - **`UnresolvedEffect` parks a `reconcile` wait** (id derived from run and fingerprint).
+    The run waits for the `answered` signal, which now means any satisfied wait, then acts
+    again, and the ledger deduplicates.
+  - 17 tests. `test_state_snapshot` +6 (Postgres registry through `observe`): a revised
+    hypothesis moves the world, the rollout doesn't move its own, the API falls back,
+    outside containment is nothing. `tests/durability/test_commit.py`, 7, on the
+    time-skipping server: approved → committed once, audited with the human approval,
+    and a direct rerun deduplicates (C36); **revised after the approval → `ApprovalStale`**,
+    one audit record, no rollout (C33); a forged wake-up and a "no" → `ApprovalRequired`
+    (C39); an unproposed action and an unreadable world refused; **lost answer → one
+    attempt, parked, reconciled, deduplicated, surface called once** (C34).
+  - **Mutation-checked:** with the activity passing `wait.state_snapshot` (E3's carried
+    snapshot), the C33 test fails because the stale approval *commits*.
+  - **Not done here, named:** no reconcile command. The test does what a reconciler would
+    (finalize the claim, satisfy the wait, signal). A reconcile wait has no deadline, and
+    `operator stalled` doesn't list it; `ledger.unresolved_keys()` and the `unresolved`
+    audit record are the operator's view today. Belongs with T50. The workflow change
+    isn't behind `workflow.patched()`: nothing is live, and T47 brings the replay guard.
+  - **Shared test database, again.** Sessions in the main checkout kept running
+    `check_task.sh` and dropping `agentstack_app_test` mid-run: dozens of spurious
+    failures (`AdminShutdown`, rows vanishing). Verified instead against a throwaway
+    Postgres on 5434, as in T23: **675 passed**. `stack_guard` intact, `checkpoint_guard`
+    safe, changed-line coverage 94%. A per-invocation test database is still owed.
 
 - [ ] **T44 — Death while parked, end to end** · layer 3 · *S*
   - Acceptance: the SPEC.md criterion 23 path runs on Temporal.
