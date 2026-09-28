@@ -45,7 +45,11 @@ LOOKUP = ToolSpec(
     description="Read one customer's current subscription state.",
     input_schema={
         "type": "object",
-        "properties": {"tenant": {"type": "string"}, "customer_id": {"type": "string"}},
+        # Both become segments of the resource path, so both are single-segment ids.
+        "properties": {
+            "tenant": {"type": "string", "format": "id"},
+            "customer_id": {"type": "string", "format": "id"},
+        },
         "required": ["tenant", "customer_id"],
     },
     acts_as=ActsAs.DELEGATED,

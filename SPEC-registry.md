@@ -144,7 +144,7 @@ uv run python scripts/stack_guard.py --base main
 migrations/0012_experiment_registry.{up,down}.sql   the four tables below
 src/agentstack/tools/experiments.py                 ToolSpecs + prepare_* for all 9 tools
 src/agentstack/tools/catalog.py                     registers them (no logic)
-src/agentstack/policy/decisions.py                  + halt_only_zeroes check (in decide; see below)
+src/agentstack/policy/decisions.py                  + bound_to: tool/surface/verb/fixed-payload binding (see below)
 src/agentstack/execution/surfaces.py                + PostgresRegistryClient (via storage pool)
 src/agentstack/interfaces/wiring.py                 selects the Postgres client
 tests/fitness/test_registry_tools.py                narrowness, exposure matrix, scopes
@@ -371,6 +371,20 @@ its task.
   In `decide`, which runs first on every call, a non-zero halt is `PolicyDenied`,
   audited `denied` / `halt.only_zeroes`, and no approval changes that. Criterion 6
   holds more strongly than it was written.
+  *Superseded by the C1/H2 fix:* the tool-specific check became a declaration.
+  `HALT.fixed_payload = {"percentage": Fixed(0, …)}`, and `policy.decisions.bound_to`,
+  which the gateway runs before `decide` and before approval, denies any request that
+  varies a fixed value, audited `denied` / `binding.payload`. The guarantee is
+  unchanged; the rule is no longer a `spec.name ==` branch inside generic policy.
+- **A request is held to its spec (H2), and an id is one segment (C1).** The registry
+  reads the act from a resource's last segment. `format: id` was declared and never
+  enforced, so `experiment_id=exp-9/rollout` made a draft a rollout; and the gateway
+  never compared a request with the spec it was authorised under, so a rollout request
+  presented beside the abstention spec committed on the annotate scope. Now: the
+  validator enforces `format` (an id is `[A-Za-z0-9][A-Za-z0-9._:-]*`); each spec declares
+  a `verb`; `bound_to` denies a mismatched tool, surface, verb or fixed value
+  (`binding.tool` / `.surface` / `.verb` / `.payload`); both clients hold each verb's
+  payload to its exact shape; and `migrations/0014` puts the percentages in the store.
 - **Reads reach the model.** A read used to stop at `TurnResult.observations`. The
   Boundary Decisions row "registry reads are observations appended to the transcript"
   is now true: `handle` appends each read as `kind="observation"`, and the next turn

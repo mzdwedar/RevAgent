@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from agentstack.tools.action import ActionRequest
-from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
+from agentstack.tools.spec import ActsAs, Approval, Fixed, Idempotency, Surface, ToolSpec
 
 # One stage per half of the lifecycle, so the exposure filter separates them. A drafting
 # turn sees drafting tools, an evaluation turn sees what may stop an experiment, and a
@@ -41,6 +41,10 @@ EXPERIMENT_STAGES = frozenset({DRAFT_STAGE, EVALUATION_STAGE, ROLLOUT_STAGE})
 # no tool may name one as a target - a transition is a tool, not an argument.
 STATUSES = ["draft", "live", "halted", "discarded"]
 
+# An id becomes one segment of a resource path (`{tenant}/experiments/{experiment}/...`),
+# and the registry reads the act from the path's last segment. `format: id` is enforced
+# by the validator as a single segment, so `exp-9/rollout` is refused as an argument
+# rather than read by the surface as a rollout (C1).
 _ID = {"type": "string", "format": "id"}
 
 
@@ -56,6 +60,7 @@ def _read(
     properties: dict[str, Any],
     required: list[str],
     stages: frozenset[str],
+    verb: str,
 ) -> ToolSpec:
     """A registry read: no effect, no approval, one scope for all of them.
 
@@ -78,6 +83,7 @@ def _read(
         approval=Approval.NONE,
         idempotency=Idempotency.NATURAL,
         stages=stages,
+        verb=verb,
     )
 
 
@@ -87,6 +93,7 @@ GET = _read(
     {"experiment_id": _ID},
     ["experiment_id"],
     EXPERIMENT_STAGES,
+    "experiment",
 )
 
 LIST = _read(
@@ -99,6 +106,7 @@ LIST = _read(
     },
     [],
     EXPERIMENT_STAGES,
+    "list",
 )
 
 # Not on the draft stage: a drafting turn has nothing live to look back on, and every
@@ -109,6 +117,7 @@ HISTORY = _read(
     {"experiment_id": _ID},
     ["experiment_id"],
     frozenset({EVALUATION_STAGE, ROLLOUT_STAGE}),
+    "history",
 )
 
 DRAFT = ToolSpec(
@@ -120,9 +129,9 @@ DRAFT = ToolSpec(
     input_schema={
         "type": "object",
         "properties": {
-            "tenant": {"type": "string", "format": "id"},
-            "experiment_id": {"type": "string", "format": "id"},
-            "experiment_version": {"type": "string", "format": "id"},
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
             "hypothesis": {"type": "string"},
             "variant": {"type": "string"},
         },
@@ -142,6 +151,7 @@ DRAFT = ToolSpec(
     approval=Approval.PRE_COMMIT,
     idempotency=Idempotency.KEY,
     stages=frozenset({DRAFT_STAGE}),
+    verb="draft",
 )
 
 ROLLOUT = ToolSpec(
@@ -152,13 +162,14 @@ ROLLOUT = ToolSpec(
     input_schema={
         "type": "object",
         "properties": {
-            "tenant": {"type": "string", "format": "id"},
-            "experiment_id": {"type": "string", "format": "id"},
-            "experiment_version": {"type": "string", "format": "id"},
-            "percentage": {"type": "integer"},
+            "tenant": _ID,
+            "experiment_id": _ID,
+            "experiment_version": _ID,
+            # Bounded, so 150% is refused as an argument rather than stored as a fact.
+            "percentage": {"type": "integer", "minimum": 0, "maximum": 100},
             # The cohort predicate. Required, so a rollout cannot be prepared without
             # naming the population an approval was granted against.
-            "targeting_model_version": {"type": "string", "format": "id"},
+            "targeting_model_version": _ID,
             "risk_threshold": {"type": "number"},
         },
         "required": [
@@ -183,6 +194,7 @@ ROLLOUT = ToolSpec(
         "not unsee the offer or refund what it cost"
     ),
     stages=frozenset({ROLLOUT_STAGE}),
+    verb="rollout",
 )
 
 
@@ -217,6 +229,7 @@ REVISE = ToolSpec(
     approval=Approval.PRE_COMMIT,
     idempotency=Idempotency.KEY,
     stages=frozenset({DRAFT_STAGE}),
+    verb="revise",
 )
 
 DISCARD = ToolSpec(
@@ -242,6 +255,7 @@ DISCARD = ToolSpec(
     approval=Approval.PRE_COMMIT,
     idempotency=Idempotency.KEY,
     stages=frozenset({DRAFT_STAGE}),
+    verb="discard",
 )
 
 
@@ -273,6 +287,7 @@ ABSTAIN = ToolSpec(
     approval=Approval.PRE_COMMIT,
     idempotency=Idempotency.KEY,
     stages=frozenset({EVALUATION_STAGE}),
+    verb="abstention",
 )
 
 
@@ -303,6 +318,14 @@ HALT = ToolSpec(
     approval=Approval.PRE_COMMIT,
     idempotency=Idempotency.KEY,
     stages=frozenset({EVALUATION_STAGE}),
+    verb="halt",
+    fixed_payload={
+        "percentage": Fixed(
+            0,
+            "a halt sets exposure to zero, and only a rollout, with a human's approval, "
+            "may name any other percentage",
+        )
+    },
 )
 
 
@@ -314,7 +337,13 @@ def prepare_halt(arguments: Mapping[str, Any]) -> ActionRequest:
         tool=HALT.name,
         surface=HALT.surface,
         resource=f"{tenant}/experiments/{experiment}/halt",
-        payload={"experiment_version": version, "percentage": 0, "reason": arguments["reason"]},
+        # The fixed values come from the spec, so what prepare writes and what the gateway
+        # holds a halt to cannot drift apart.
+        payload={
+            "experiment_version": version,
+            **{key: fixed.value for key, fixed in HALT.fixed_payload.items()},
+            "reason": arguments["reason"],
+        },
         # One halt per version: halting twice is a retry, not a second effect.
         idempotency_key=f"halt:{tenant}:{experiment}:{version}",
     )
