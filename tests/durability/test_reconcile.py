@@ -26,7 +26,7 @@ from temporalio.client import Client
 from agentstack.execution.surfaces import SurfaceTimeout
 from agentstack.interfaces import operator_cli
 from agentstack.interfaces.wiring import Stack, answer, deliver
-from agentstack.runtime.reconcile import APPLIED, NOT_APPLIED
+from agentstack.runtime.reconcile import APPLIED, NOT_APPLIED, ReconcileRefused, settle
 from agentstack.runtime.run import Run, new_run
 from agentstack.runtime.temporal.client import notify_answer
 from agentstack.runtime.temporal.contracts import (
@@ -408,3 +408,42 @@ def test_settled_but_not_woken_says_so_and_can_be_run_again(
     assert "not woken" in out and "Run this command again" in out
     satisfied = stack.waits.get(wait.wait_id)
     assert satisfied is not None and satisfied.satisfied
+
+
+@pytest.mark.parametrize(
+    ("changes", "refusal"),
+    [
+        ({"operator": " "}, "names the operator"),
+        ({"receipt": None, "applied": True}, "with the surface's receipt"),
+        ({"receipt": "r-1", "applied": False}, "has no receipt to record"),
+        ({"release_first": True}, "is already released"),
+        ({"keyless": True}, "does not name the claim"),
+    ],
+)
+def test_the_settlement_refuses_what_it_cannot_honestly_record(
+    stack: Stack, changes: dict[str, Any], refusal: str
+) -> None:
+    _, wait = unresolved_rollout(stack)
+    assert stack.ledger.inspect(KEY) is not None, "IN_FLIGHT, as the gateway left it"
+    if changes.get("release_first"):
+        stack.ledger.abandon(KEY)
+    if changes.get("keyless"):
+        # A reconcile wait from before 0016, satisfied and so allowed to name no claim.
+        stack.runs.db.execute(
+            "UPDATE waits SET satisfied = true, satisfied_at = now(), idempotency_key = NULL"
+            " WHERE wait_id = %s",
+            (wait.wait_id,),
+        )
+
+    with pytest.raises(ReconcileRefused, match=refusal):
+        settle(
+            runs=stack.runs,
+            waits=stack.waits,
+            ledger=stack.ledger,
+            audit=stack.audit,
+            wait_id=wait.wait_id,
+            applied=changes.get("applied", True),
+            receipt=changes.get("receipt", "rollout-42"),
+            operator=changes.get("operator", OPERATOR),
+            reason="checked",
+        )

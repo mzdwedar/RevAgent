@@ -1690,12 +1690,14 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
       and only `ALWAYS` binds. Fitness ratchet 42 → 43.
     - `test_worker_death`: SIGKILL after the draft commits and before its step is
       recorded. A fresh worker deduplicates and proposes the rollout.
-    - `tests/durability/test_reconcile.py` (10 tests):
+    - `tests/durability/test_reconcile.py` (15 tests):
       - a lost draft answer parks, is settled applied or not applied, and the same turn
         resumes;
       - a forged wake-up doesn't spin;
       - the command: twice is once; not applied releases the claim; contradictions are
-        refused; Temporal unreachable → "not woken", exit 1.
+        refused; Temporal unreachable → "not woken", exit 1;
+      - a settlement with no operator, no receipt, a stray receipt, a released claim or
+        a keyless wait is refused.
     - `test_stalled_waits` gets 7 more; `test_unresolved_effects` gets 2 more.
     - Eval gate `a-draft-whose-answer-was-lost-does-not-wedge-the-run`.
     - New recorded history `draft_unresolved_reconciled`, and all five re-recorded.
