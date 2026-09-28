@@ -40,7 +40,7 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
-from agentstack.tools.action import ActionRequest
+from agentstack.tools.action import ActionRequest, idempotency_key
 from agentstack.tools.spec import ActsAs, Approval, Fixed, Idempotency, Surface, ToolSpec
 
 # One stage per half of the lifecycle, so the exposure filter separates them. A drafting
@@ -389,7 +389,7 @@ def prepare_halt(arguments: Mapping[str, Any]) -> ActionRequest:
             "reason": arguments["reason"],
         },
         # One halt per version: halting twice is a retry, not a second effect.
-        idempotency_key=f"halt:{tenant}:{experiment}:{version}",
+        idempotency_key=idempotency_key("halt", tenant, experiment, version),
     )
 
 
@@ -409,7 +409,9 @@ def prepare_abstain(arguments: Mapping[str, Any]) -> ActionRequest:
         # to say it left no record. The words stay in the key so that two explanations
         # prepared against one read are two keys: one lands, and the other is refused
         # rather than answered with the first one's receipt.
-        idempotency_key=f"abstain:{tenant}:{experiment}:{version}:{prior}:{_digest(explanation)}",
+        idempotency_key=idempotency_key(
+            "abstain", tenant, experiment, version, prior, _digest(explanation)
+        ),
     )
 
 
@@ -431,7 +433,9 @@ def prepare_revise(arguments: Mapping[str, Any]) -> ActionRequest:
         # The revision it rewords, then the words. Keyed on the words alone, going back
         # to an earlier wording (A, B, A) got the first revision's key, and the draft
         # stayed at B. Hashed, so the key stays short whatever the model wrote.
-        idempotency_key=f"revise:{tenant}:{experiment}:{version}:{prior}:{_digest(hypothesis)}",
+        idempotency_key=idempotency_key(
+            "revise", tenant, experiment, version, prior, _digest(hypothesis)
+        ),
     )
 
 
@@ -446,7 +450,7 @@ def prepare_discard(arguments: Mapping[str, Any]) -> ActionRequest:
         payload={"experiment_version": version, "reason": arguments["reason"]},
         # One discard per version, whatever the reason says: discarding twice is a
         # retry, not a second effect.
-        idempotency_key=f"discard:{tenant}:{experiment}:{version}",
+        idempotency_key=idempotency_key("discard", tenant, experiment, version),
     )
 
 
@@ -467,7 +471,7 @@ def prepare_draft(arguments: Mapping[str, Any]) -> ActionRequest:
         # Keyed on the frozen version, not on a uuid. Drafting the same candidate for
         # the same frozen cohort twice is one draft; drafting against a different
         # cohort is a different candidate and must not deduplicate into the first.
-        idempotency_key=f"draft:{tenant}:{experiment}:{version}",
+        idempotency_key=idempotency_key("draft", tenant, experiment, version),
     )
 
 
@@ -496,9 +500,14 @@ def prepare_rollout(arguments: Mapping[str, Any]) -> ActionRequest:
         # target - percentage *and* cohort - because two rollouts approved against the
         # same state must be two keys: one lands, and the other is refused rather than
         # handed a receipt for a population nobody approved.
-        idempotency_key=(
-            f"rollout:{tenant}:{experiment}:{version}:{prior}:{percentage}:"
-            f"{_digest(f'{model}@{float(threshold)!r}')}"
+        idempotency_key=idempotency_key(
+            "rollout",
+            tenant,
+            experiment,
+            version,
+            prior,
+            percentage,
+            _digest(f"{model}@{float(threshold)!r}"),
         ),
     )
 
@@ -511,7 +520,7 @@ def prepare_get(arguments: Mapping[str, Any]) -> ActionRequest:
         surface=GET.surface,
         resource=f"{tenant}/experiments/{experiment}",
         payload={},
-        idempotency_key=f"get:{tenant}:{experiment}",
+        idempotency_key=idempotency_key("get", tenant, experiment),
     )
 
 
@@ -527,7 +536,7 @@ def prepare_list(arguments: Mapping[str, Any]) -> ActionRequest:
         # prefix the sandbox already allows - listing does not widen containment.
         resource=f"{tenant}/experiments/",
         payload=query,
-        idempotency_key=f"list:{tenant}:{query.get('status', '*')}:{query['limit']}",
+        idempotency_key=idempotency_key("list", tenant, query.get("status", "*"), query["limit"]),
     )
 
 
@@ -539,5 +548,5 @@ def prepare_history(arguments: Mapping[str, Any]) -> ActionRequest:
         surface=HISTORY.surface,
         resource=f"{tenant}/experiments/{experiment}/history",
         payload={},
-        idempotency_key=f"history:{tenant}:{experiment}",
+        idempotency_key=idempotency_key("history", tenant, experiment),
     )

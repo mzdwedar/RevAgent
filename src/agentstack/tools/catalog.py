@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agentstack.tools.action import ActionRequest
+from agentstack.tools.action import ActionRequest, idempotency_key
 from agentstack.tools.experiments import (
     ABSTAIN,
     DISCARD,
@@ -97,7 +97,7 @@ def _lookup(arguments: Mapping[str, Any]) -> ActionRequest:
         surface=LOOKUP.surface,
         resource=f"{tenant}/customers/{customer}/subscription",
         payload={},
-        idempotency_key=f"lookup:{tenant}:{customer}",
+        idempotency_key=idempotency_key("lookup", tenant, customer),
     )
 
 
@@ -113,7 +113,7 @@ def _refund(arguments: Mapping[str, Any]) -> ActionRequest:
         payload={"amount_cents": amount},
         # The key is the business identity of the effect, not a random uuid:
         # a retry has to produce the same key or it is not a retry.
-        idempotency_key=f"refund:{tenant}:{charge}:{amount}",
+        idempotency_key=idempotency_key("refund", tenant, charge, amount),
     )
 
 
