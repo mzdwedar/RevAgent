@@ -1627,3 +1627,84 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   release gates; `osv-scanner` and `gitleaks` not installed locally, CI runs them)
 - [ ] `/stack-audit` run and its findings addressed
 - [ ] Human review
+
+- [x] **A2 — Unresolved effects park where a person sees and settles them** · layers 7, 3, 1 · *M*
+  (audit findings H1, M1, H5; added 2026-09-28)
+  - **H1 (a regression from T43): a lost answer on the draft wedged the run for good.**
+    `act` bound *every* describable resource to the world its surface describes. The
+    draft creates the experiment the registry then describes, so its snapshot was
+    `None` before its own effect and a description after. Killed between the commit and
+    the step's record, the rerun read its own policy grant as stale before the ledger
+    could deduplicate, parked a `human_approval` wait for a `PRE_COMMIT` act, and the
+    workflow (0 receipts) never asked. That pending wait blocked every later turn.
+  - **Shape chosen: only an `ALWAYS` action is bound to the world**
+    (`runtime/snapshot.binds_the_world`, `approval_snapshot`, used by `nodes.act`).
+    - That tier is the one a person answers later, about a world the commit reads again
+      at the act. E3 ("no approval checked against a snapshot carried to the act") holds
+      for the rollout unchanged.
+    - A `PRE_COMMIT` grant is minted by a rule *at* the act, so there's no later world to
+      compare, and its turn-derived snapshot is the same on a rerun.
+    - Rejected: a per-tool "moves its own snapshot" flag. It's the property to *test*,
+      not to declare: a declaration can be wrong, and the fitness test below asks the
+      surface.
+    - Rejected: asking the ledger before the approval. That reverses Part 7's order in
+      the gateway, and a deduplicated repeat would skip the authorisation check.
+  - **M1: an `UnresolvedEffect` in the turn path parked nothing.** The claim stayed
+    IN_FLIGHT, and only `unresolved_keys()` knew.
+    - `act` now parks a reconcile wait (`waits.park_reconcile`, shared with the commit
+      path) and re-raises. The turn's checkpoint stays before `act`.
+    - The `run_turn` activity reports `UNRESOLVED` with the wait. The workflow waits on it
+      (`_settled_turn` → `_reconciled`) and then takes the *same* turn again: the model
+      isn't asked again, and the ledger answers for that proposal.
+    - Outside Temporal, the next turn is blocked on the wait (two fitness tests changed
+      from "raises again" to "blocked, and the surface still called once").
+  - **The reconcile wait is one per claim, not per action** (`reconcile_wait_id(run, key,
+    claimed_at)`; `UnresolvedEffect` now carries the key and the claim's `claimed_at`).
+    With the old id, a key released as "not applied" and then lost again would re-park
+    the old, *satisfied* wait, and the run would spin on it.
+  - **An answer is spent once** (`_spent`). A wake-up for a claim nobody settled went
+    round the act in a tight loop: 164 attempts in a second, measured on the mutant.
+  - **H5: a reconcile wait had no deadline, no command and no alert.**
+    - `migrations/0016`: `waits.idempotency_key`, plus two new CHECKs. A pending reconcile
+      wait has a deadline (0010's CHECK exempted every kind it didn't name, and
+      `reconcile` came later) and names its claim. Old rows are backfilled due-now, as
+      0010 did.
+    - `RECONCILE_DUE_AFTER` is 1h.
+    - `operator stalled` lists every pending reconcile wait from the moment it parks,
+      with its claim and the command to settle it, marked OVERDUE past the deadline. It
+      has its own count and exits 1.
+    - `operator reconcile WAIT_ID (--applied RECEIPT | --not-applied) --operator --reason`
+      has its logic in layer 3 (`runtime/reconcile.settle`). It settles the claim in one
+      conditional statement (`IdempotencyLedger.reconcile`), writes an audit record
+      (principal `operator:<name>`, `reconcile.applied|not_applied`, the act's own
+      surface and resource), then satisfies the wait. After that it wakes the run with
+      the existing `notify_answer` signal.
+    - Running `reconcile` again finishes a settlement that died halfway and changes
+      nothing otherwise. A contradiction with the ledger is refused.
+  - **Placeholder `0015`:** the migrator refuses a gap, and 0015 belongs to a parallel
+    task. A no-op `0015_reserved_for_a_parallel_task` keeps this branch applicable. Drop
+    it at merge.
+  - Tests:
+    - `tests/fitness/test_effects_keep_their_snapshot.py`, new (catalog-wide): no tool's
+      own effect moves its approval snapshot, the rollout is still bound to the world,
+      and only `ALWAYS` binds. Fitness ratchet 42 → 43.
+    - `test_worker_death`: SIGKILL after the draft commits and before its step is
+      recorded. A fresh worker deduplicates and proposes the rollout.
+    - `tests/durability/test_reconcile.py` (10 tests):
+      - a lost draft answer parks, is settled applied or not applied, and the same turn
+        resumes;
+      - a forged wake-up doesn't spin;
+      - the command: twice is once; not applied releases the claim; contradictions are
+        refused; Temporal unreachable → "not woken", exit 1.
+    - `test_stalled_waits` gets 7 more; `test_unresolved_effects` gets 2 more.
+    - Eval gate `a-draft-whose-answer-was-lost-does-not-wedge-the-run`.
+    - New recorded history `draft_unresolved_reconciled`, and all five re-recorded.
+  - Mutation-checked, each failing the tests named above:
+    - the old snapshot rule (the fitness test, the SIGKILL test and the eval);
+    - never binding the world;
+    - no parking in `act`;
+    - the old "answered" condition;
+    - no reconcile kind in `stalled`;
+    - no default deadline;
+    - no 0016 CHECKs;
+    - no wake-up in the command.
