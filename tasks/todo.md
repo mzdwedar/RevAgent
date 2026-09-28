@@ -1300,12 +1300,52 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - Verify: time-skipping: 250 cycles → same `run_id`, same pending wait, one audit trail (C44).
   - Files: `runtime/temporal/workflows.py`, `tests/durability/test_timers.py`.
 
-- [ ] **T47 — Replay guard** · layer 3 · *M*
+- [x] **T47 — Replay guard** · layer 3 · *M*
   - Acceptance: `scripts/replay_guard.py` replays `tests/fixtures/histories/*` (recorded
     by the durability tests) against this code; it runs in `check_full.sh`.
   - Verify: an unguarded change to `ExperimentWorkflow` fails the guard, and the same
     change behind `workflow.patched()` passes (C41); `checkpoint_guard` unchanged.
   - Files: `scripts/replay_guard.py`, `scripts/check_full.sh`, `tests/fixtures/histories/`, `tests/fitness/test_replay_guard.py`.
+  - **Done. Four histories, recorded on purpose.** `tests/durability/test_recorded_histories.py`
+    drives four real paths through the production worker on the time-skipping server,
+    checks each got where it was meant to, and hands the run to
+    `temporal_support.keep_history`: `trigger_cycles` (a cycle abstains, the trigger
+    wait goes overdue on its timer, a `metric_movement` is refused by layer 8, parked
+    again); `approved_commit` (propose → draft → rollout turn → park → ask → a day
+    unanswered → re-ask → approved through signed Slack → committed); `refused_at_the_act`
+    (a wake-up nobody authorised → `ApprovalRequired`); `unresolved_reconciled` (answer
+    lost → reconcile wait → woken → deduplicated).
+  - **Re-recording is one command:** `DATABASE_URL=... uv run python scripts/replay_guard.py --record`.
+    It reruns that module with `AGENTSTACK_RECORD_HISTORIES=1`, rewrites the four files,
+    then replays them. Without the variable the suite still runs the scenarios and
+    replays each fresh history, so a scenario that stops replaying is found by the suite,
+    but nothing is written: a fixture changes only when someone means it to. **T45/T46
+    re-record after they merge** (their workflow changes are not behind `patched()`,
+    and nothing is live yet). Once a run is live, add histories beside the old ones
+    instead of overwriting (deleting one is ask-first).
+  - **What's in the files:** ids and verdicts only (checked by hand: no envelope,
+    `credential_ref`/`vault://`, prompt, instruction or scope). Failed activities' stack
+    traces are emptied on recording: they named the recording machine's paths, and
+    replay never reads them. The failure's type and message are kept. T48 enforces this.
+  - **C41, proved in `tests/fitness/test_replay_guard.py` (7 tests):** every recorded
+    path exists; the real code replays all four; a mutant deploy
+    (`tests/fitness/replay_mutants.py`, an extra `ensure_run` before each evaluation)
+    fails **every** history with `TMPRL1100` nondeterminism; the same step behind
+    `workflow.patched()` passes; `main` exits 1 and names the history and the fix; no
+    histories is exit 2, not a pass. Also checked by hand against the real workflow: a
+    `workflow.sleep` inserted in `run` failed all four; behind `patched()` all four
+    passed. Reverted.
+  - **Where it runs: `check_task.sh`, next to `checkpoint_guard`,** so `check_full.sh`
+    runs it through `check_task` (a comment there says so). Replaying four histories
+    takes about half a second, and the four scenarios about 4s in the suite. That's
+    well inside the 90s budget. `checkpoint_guard` is unchanged.
+  - 686 passed (675 + 11) against a throwaway Postgres on 5437. `stack_guard` intact,
+    `checkpoint_guard` safe. README fitness count 41 → 42 (the README test enforces it).
+  - **Not done, named:** the fixtures aren't byte-stable across recordings (fresh uuids
+    and timestamps each time), so every re-record is a full diff. `data/manifest.json`
+    isn't tracked on this branch (`.gitignore` excludes `data/`), so
+    `test_data_snapshot` fails in a fresh worktree until it's copied in. That's
+    pre-existing, and I didn't fix it here.
 
 - [ ] **T48 — Nothing secret in history** · layer 3 · *S*
   - Acceptance: a test decodes every payload in every recorded history.
