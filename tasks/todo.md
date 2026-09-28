@@ -1397,6 +1397,9 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     `check_task.sh` run, this test failed once inside the full suite, and the reason was
     not captured. It then passed in the next gate run, a full-suite run, and 8 isolated
     runs. Logged as a possible flake to watch. It is not explained.
+  - **After the merge (2026-09-28):** not reproduced in 19 more runs on an isolated
+    Postgres: 15 alone, twice in `tests/durability`, twice in the full suite. Still
+    unexplained, and still worth capturing the output if it ever fails again.
 
 - [x] **T47 — Replay guard** · layer 3 · *M*
   - Acceptance: `scripts/replay_guard.py` replays `tests/fixtures/histories/*` (recorded
@@ -1439,6 +1442,12 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     well inside the 90s budget. `checkpoint_guard` is unchanged.
   - 686 passed (675 + 11) against a throwaway Postgres on 5437. `stack_guard` intact,
     `checkpoint_guard` safe. README fitness count 41 → 42 (the README test enforces it).
+  - **Merged with T44–T46 and re-recorded (2026-09-28).** Before re-recording, the four
+    histories recorded on T43's workflow still replayed against the merged code, T46's
+    continue-as-new included. That's direct evidence T46 would not strand a run started
+    before it. Re-recorded with `--record` so the fixtures carry T46's `RunStart` shape.
+    All 69 payloads decoded and scanned: no credential, prompt, scope or home path.
+    Merged branch: **688 passed**, all three guards green, on an isolated Postgres.
   - **Not done, named:** the fixtures aren't byte-stable across recordings (fresh uuids
     and timestamps each time), so every re-record is a full diff. `data/manifest.json`
     isn't tracked on this branch (`.gitignore` excludes `data/`), so
