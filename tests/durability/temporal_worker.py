@@ -24,21 +24,21 @@ import pytest
 
 from agentstack.context import datasets
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
-from agentstack.context.frozen_cohorts import FrozenCohortStore
+from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.interfaces.wiring import build_stack
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
-from agentstack.runtime.run import RunStore
+from agentstack.runtime.run import Run, RunStore
 from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import connect
 from agentstack.runtime.temporal.worker import build_worker
-from agentstack.runtime.waits import WaitStore
+from agentstack.runtime.waits import Wait, WaitStore
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import open_pool
 from tests.fitness.test_trigger_to_candidate import RULE, StubScorer, snapshot
-from tests.temporal_support import DraftingEngine, turns_for
+from tests.temporal_support import DraftingEngine, asker_for, turns_for
 
 # A stray worker must not outlive the test that started it.
 LIFETIME_S = 120.0
@@ -108,6 +108,21 @@ class HangingGateway:
         raise AssertionError("a hanging gateway outlived its test")
 
 
+class RecordingAsker:
+    """The production asker, noting each question it puts in a file both processes can
+    read: "asked once" has to be counted across a kill."""
+
+    def __init__(self, inner: Any, path: Path) -> None:
+        self.inner = inner
+        self.path = path
+
+    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, percentage: int) -> str:
+        message = str(self.inner.ask(run=run, wait=wait, cohort=cohort, percentage=percentage))
+        with self.path.open("a") as handle:
+            handle.write(f"{os.getpid()} {wait.wait_id}\n")
+        return message
+
+
 async def serve(args: argparse.Namespace) -> None:
     client = await connect(args.address)
     checkpoints, saver = open_checkpointer(args.database_url)
@@ -133,6 +148,7 @@ async def serve(args: argparse.Namespace) -> None:
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
                 rule=RULE,
                 turns=turns,
+                asker=RecordingAsker(asker_for(stack), Path(args.asks or f"{args.ready}.asks")),
             )
             worker = build_worker(
                 client, activities=activities, executor=executor, task_queue=args.task_queue
@@ -152,6 +168,7 @@ def main() -> None:
     parser.add_argument("--scorer-calls", required=True)
     parser.add_argument("--ready", required=True)
     parser.add_argument("--model-calls", default=None)
+    parser.add_argument("--asks", default=None)
     parser.add_argument("--hang-before-gateway", default=None, metavar="REACHED_FILE")
     args = parser.parse_args()
     _fixture_dataset()

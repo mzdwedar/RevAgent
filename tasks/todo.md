@@ -1275,12 +1275,29 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     Postgres on 5434, as in T23: **675 passed**. `stack_guard` intact, `checkpoint_guard`
     safe, changed-line coverage 94%. A per-invocation test database is still owed.
 
-- [ ] **T44 — Death while parked, end to end** · layer 3 · *S*
+- [x] **T44 — Death while parked, end to end** · layer 3 · *S*
   - Acceptance: the SPEC.md criterion 23 path runs on Temporal.
   - Verify: `tests/durability/test_approve_after_death.py` re-pointed: SIGKILL while
     parked, fresh worker, real Slack path; prepare, ask and commit each happen once;
     resume ≤15s (C31).
   - Files: `tests/durability/{park_worker,test_approve_after_death}.py`.
+  - **Done, as an extra driver, not a rewrite** (the plan's meaning of "re-point"). The
+    four criterion-23 tests on the record stay as they are, with `park_worker.py`, because
+    they still prove the approval binds across a death with nothing but Postgres. The new
+    test beside them drives the whole path on Temporal. `temporal_worker.py` is the
+    process it kills (not `park_worker.py`, which predates Temporal). It gained the
+    production asker, wrapped to note each question in a file, so "asked once" can be
+    counted across processes.
+  - The path: a proposing trigger → scored, drafted, rollout proposed, parked, asked, all
+    by worker 1 → **SIGKILL** → a signed Slack "yes" through `wiring.answer` **with no
+    worker alive** (layer 8 records it; the signal waits in history) → worker 2 finishes
+    the run. Asserted: scored, drafted, prepared (the rollout proposal) and asked once,
+    each by the dead process. Committed once, by the fresh one: one registry rollout and
+    one `committed` audit record whose approval is the Slack approver's.
+  - **Resume: 9.2s, 9.2s, 9.3s** over three runs, from worker 2 ready to committed, against
+    the 15s bound. It's almost all the dead worker's sticky-queue timeout (~10s, P4).
+  - Verified on a throwaway Postgres (port 5438), since the shared one is still being
+    dropped mid-run: `check_task.sh` green, bar intact, checkpoint guard safe.
 
 ### ✅ Checkpoint L — the approval boundary under Temporal
 - [ ] Trigger → score → draft → Slack → approve → rollout, killed while parked, still correct

@@ -12,23 +12,33 @@ the case that matters.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from agentstack.interfaces.wiring import Stack, build_stack, envelope_for
+from agentstack.interfaces.wiring import Stack, answer, build_stack, deliver, envelope_for
 from agentstack.observability.spans import Tracer
 from agentstack.policy.approval import ApprovalRequired
 from agentstack.policy.approvers import ApprovalReply
+from agentstack.runtime.temporal.contracts import CommitOutcome, RunProgress, workflow_id
+from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 from agentstack.storage.database import Database
 from agentstack.tools.experiments import ROLLOUT, prepare_rollout
+from tests.conftest import connect_temporal
 from tests.durability.park_worker import ARGS, SCOPES, TENANT, USER
+from tests.durability.test_slack_answer import APPROVER, slack_click
+from tests.durability.test_worker_death import payload, start_worker
+from tests.fitness.test_trigger_to_candidate import WATERMARK
+from tests.temporal_support import DRAFT_TOOL, ROLLOUT_TOOL, progress_until
+from tests.temporal_support import model_calls as asked_with
 
 ROOT = Path(__file__).resolve().parents[2]
 PARKED_TIMEOUT = 90.0
@@ -197,3 +207,103 @@ def test_the_approval_records_what_the_dead_process_had_shown(
     assert found is not None
     assert "IRREVERSIBLE" in found.summary
     assert found.approver == "ana@acme"
+
+
+# --- the same case on Temporal (T44, criterion 31) ---
+#
+# Everything above drives the record directly: the wait, the approval and the gateway.
+# Here the run is a Temporal workflow on a real worker process. It is killed while it
+# waits for a person, the person answers through Slack's signed callback while **no
+# worker is alive**, and a fresh process finishes the run from history.
+
+# P4: the dead worker's sticky queue times out after ~10s, then the task moves.
+RESUME_BOUND_S = 15.0
+
+
+def test_killed_while_parked_the_run_is_finished_by_a_fresh_worker_after_a_slack_yes(
+    app_database: Database,
+    app_database_url: str,
+    checkpointer: Any,
+    temporal_address: str,
+    task_queue: str,
+    tmp_path: Path,
+) -> None:
+    stack = build_stack(app_database, checkpointer)
+    stack.approver_directory.add(
+        tenant=TENANT, slack_user_id=APPROVER, principal="ana@acme", added_by="t44"
+    )
+    scorer_calls, model_calls, asks = (
+        tmp_path / "scorer-calls.txt",
+        tmp_path / "model-calls.txt",
+        tmp_path / "asks.txt",
+    )
+    recorded = ("--model-calls", str(model_calls), "--asks", str(asks))
+    queue = f"{task_queue}-{uuid.uuid4().hex[:6]}"
+    first = start_worker(
+        temporal_address, queue, app_database_url, scorer_calls, tmp_path / "1.ready", *recorded
+    )
+    second: subprocess.Popen[bytes] | None = None
+    try:
+
+        async def parked_on_a_person() -> RunProgress:
+            client = await connect_temporal(temporal_address)
+            run_id = await deliver(stack, client, payload(WATERMARK), source="t", task_queue=queue)
+            handle = client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+            return await progress_until(
+                handle, lambda p: p.awaiting_approval is not None and p.asks == 1, timeout=60
+            )
+
+        parked = asyncio.run(parked_on_a_person())
+        os.kill(first.pid, signal.SIGKILL)
+        first.wait(timeout=10)
+
+        async def answered_with_nobody_listening() -> None:
+            # Authorised and recorded by layer 8 in this process; the signal waits in history.
+            client = await connect_temporal(temporal_address)
+            await answer(stack, client, **slack_click(parked))
+
+        asyncio.run(answered_with_nobody_listening())
+
+        second = start_worker(
+            temporal_address, queue, app_database_url, scorer_calls, tmp_path / "2.ready", *recorded
+        )
+        began = time.monotonic()
+
+        async def acted() -> RunProgress:
+            client = await connect_temporal(temporal_address)
+            handle = client.get_workflow_handle_for(
+                ExperimentWorkflow.run, workflow_id(parked.run_id)
+            )
+            return await progress_until(handle, lambda p: len(p.commits) == 1, timeout=60)
+
+        done = asyncio.run(acted())
+        took = time.monotonic() - began
+    finally:
+        for process in (first, second):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+    assert first.returncode == -signal.SIGKILL
+    assert took <= RESUME_BOUND_S, f"resumed in {took:.1f}s, over the {RESUME_BOUND_S}s bound"
+
+    # Prepared once, asked once, both by the process that died; committed once, by the other.
+    assert asked_with(model_calls, tool=ROLLOUT_TOOL) == [str(first.pid)], "prepared once"
+    assert asked_with(model_calls, tool=DRAFT_TOOL) == [str(first.pid)], "drafted once"
+    assert asks.read_text().split("\n")[:-1] == [f"{first.pid} {parked.awaiting_approval}"]
+    assert scorer_calls.read_text().split() == [str(first.pid)], "scored once"
+    assert done.commits == (CommitOutcome(status="committed"),)
+    assert len(stack.registry_client.rollouts) == 1
+    committed = [
+        r
+        for r in stack.audit.for_run(parked.run_id)
+        if r.resource.endswith("/rollout") and r.outcome == "committed"
+    ]
+    (record,) = committed
+    approval = stack.approvals.find(
+        run_id=parked.run_id,
+        action_fingerprint=record.action_fingerprint,
+    )
+    assert approval is not None and approval.id == record.approval_id
+    assert approval.approver == "ana@acme", "the rollout rests on the Slack answer"
+    print(f"a fresh worker committed {took:.1f}s after it was ready")
