@@ -13,7 +13,8 @@ production worker by `tests/durability/test_recorded_histories.py`:
   timer, a `metric_movement` refused by layer 8, the run parked again;
 - `approved_commit`: propose, draft, rollout turn, park, ask, a day unanswered, ask
   again, approved in Slack, committed;
-- `refused_at_the_act`: woken with no approval on record, refused by the gateway;
+- `refused_at_the_act`: woken with no answer recorded, found unanswered at the act and
+  back to waiting; then a person's "no", refused by the gateway;
 - `unresolved_reconciled`: the rollout's answer lost, a reconcile wait, woken,
   deduplicated.
 
