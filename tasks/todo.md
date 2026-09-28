@@ -1626,4 +1626,31 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   (2026-09-28, isolated Postgres: every check ok, changed-line coverage 89.6%, 13/13
   release gates; `osv-scanner` and `gitleaks` not installed locally, CI runs them)
 - [ ] `/stack-audit` run and its findings addressed
+  - **Run 2026-09-28 on `59ba94a..c333575`. Verdict: do not ship.** 1 Critical, 5 High,
+    7 Medium, 7 Low. Gates were green before it ran. The full audit is in the
+    conversation record. The fixes, grouped by what they touch (human decision: fix C1,
+    all Highs, M1 and M7 now; the other Mediums and the Lows are follow-ups):
+- [ ] **A1 — What a person is asked about is what commits** (audit C1, H2, H3, H4) · layers 8, 3, 9, 10
+  - C1: a rollout proposal that differs from the frozen cohort is refused before
+    anyone is asked; the headline and headcount come from the recorded action, not a
+    constant. (Human decision kept from T43: the model's proposal is what commits.)
+  - H2: a wake-up with the wait still unanswered doesn't advance the run: `not_answered`,
+    recorded, and the run goes back to waiting and re-asking.
+  - H3: every human answer (yes or no) and every refusal before the gateway is an audit
+    record.
+  - H4: the prepared action is stored with the wait (migration 0015); the commit reads
+    it from the record, not from the LangGraph checkpoint.
+- [ ] **A2 — Unresolved effects park where a person sees and settles them** (audit H1, M1, H5) · layers 7, 3, 1
+  - H1: no effect moves its own world snapshot (a draft did); catalog-wide fitness test.
+  - M1: an `UnresolvedEffect` in the turn path parks a reconcile wait too.
+  - H5: reconcile waits get a deadline, `operator stalled` reports them and exits 1,
+    and an `agentstack-operator reconcile` command settles the claim, satisfies the wait,
+    audits and wakes the run (migration 0016 if needed).
+- [ ] **A3 — Docs claim only what the code enforces** (audit M7), after A1 and A2 merge ·
+  STACK rows 1, 3, 7 and 9; the spec's layer ledger; the CONSTRAINTS bullets on E2 and
+  unsatisfied waits.
+- Follow-ups, not blocking: M2 (tenant of a trigger checked in layer 8), M3 (spans for
+  evaluate/ask/answer), M4 (re-ask checks the world), M5 (heartbeat cancellation,
+  unverified), M6 (a stale approval at the act re-proposes or ends visibly), L1–L7.
+  Merging with `main` (C2, H1, H3 there; `test_concurrency`) is its own task after these.
 - [ ] Human review
