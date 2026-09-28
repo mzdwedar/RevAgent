@@ -9,6 +9,7 @@ says stop, so every wait here is bounded: a failure fails instead of hanging.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -16,8 +17,9 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from temporalio.client import Client, WorkflowHandle
+from temporalio.client import Client, WorkflowHandle, WorkflowHistory
 from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Replayer
 
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
@@ -35,6 +37,9 @@ from agentstack.storage.database import Database
 from tests.conftest import connect_temporal
 
 WAIT_S = 30.0
+# What `scripts/replay_guard.py` replays, and the switch that lets a test write there.
+HISTORIES = Path(__file__).resolve().parent / "fixtures" / "histories"
+RECORD_HISTORIES = "AGENTSTACK_RECORD_HISTORIES"
 # Long enough that no test on the real server ever sees a trigger wait go overdue by
 # accident. The tests that are about deadlines set their own, under time-skipping.
 DEFAULT_TRIGGER_DEADLINE = timedelta(days=1)
@@ -224,3 +229,37 @@ async def progress_until(
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError(f"run did not get there in {timeout}s; it is at {progress}")
         await asyncio.sleep(0.1)
+
+
+async def keep_history(handle: WorkflowHandle[ExperimentWorkflow, Any], name: str) -> Path | None:
+    """The run's history so far, as the file it would be: replayed against this code,
+    and written to `HISTORIES/{name}.json` only if asked.
+
+    Replayed every time, so a scenario that no longer replays is found by the suite and
+    not by the next person to record. Written only when `RECORD_HISTORIES` is set
+    (`replay_guard.py --record` sets it): a fixture changes because someone meant it
+    to, never as a side effect of running the tests.
+
+    A failed activity's stack trace names the disk it ran on: the checkout, the
+    interpreter, the user. Replay never reads one, so it is emptied. The failure's type
+    and message, which the workflow does read, are kept.
+    """
+    history = await handle.fetch_history()
+    recorded = _without_stack_traces(history.to_json_dict())
+    text = json.dumps(recorded, indent=1, sort_keys=True) + "\n"
+    kept = WorkflowHistory.from_json(name, text)
+    await Replayer(workflows=[ExperimentWorkflow]).replay_workflow(kept)
+    if not os.environ.get(RECORD_HISTORIES):
+        return None
+    HISTORIES.mkdir(parents=True, exist_ok=True)
+    path = HISTORIES / f"{name}.json"
+    path.write_text(text)
+    return path
+
+
+def _without_stack_traces(node: Any) -> Any:
+    if isinstance(node, dict):
+        return {k: "" if k == "stackTrace" else _without_stack_traces(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_without_stack_traces(v) for v in node]
+    return node
