@@ -22,6 +22,7 @@ import pytest
 from agentstack.interfaces.wiring import Stack, answer, deliver
 from agentstack.runtime.temporal.client import notify_answer
 from agentstack.runtime.temporal.contracts import (
+    NOT_ANSWERED,
     REASK_EVERY,
     CommitOutcome,
     RunProgress,
@@ -121,23 +122,31 @@ def test_proposed_reasked_approved_and_committed(stack: Stack, app_database: Dat
     assert len(stack.registry_client.rollouts) == 1
 
 
-def test_a_wake_up_nobody_authorised_is_refused_at_the_act(
+def test_a_stray_wake_waits_again_and_a_no_is_refused_at_the_act(
     stack: Stack, app_database: Database
 ) -> None:
-    """The act's refusal branch: woken with no approval on record, the gateway refuses
-    and the run records it."""
+    """Both of the act's other branches. Woken with no answer recorded, the act finds the
+    wait unanswered and the run goes back to waiting (A1, H2); then a person says no, and
+    the gateway refuses the act and the run records it."""
 
-    async def forged(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
+    async def stray_then_no(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
         await notify_answer(
             env.client, run_id=parked.run_id, wait_id=parked.awaiting_approval or ""
         )
-        done = await acted(handle)
+        await progress_until(
+            handle, lambda p: len(p.commits) == 1 and p.awaiting_approval is not None
+        )
+        await answer(stack, env.client, **slack_click(parked, approve=False))
+        done = await acted(handle, 2)
         await keep_history(handle, "refused_at_the_act")
         return done
 
-    _, _, done = propose_and_wait(stack, app_database, then=forged)
+    _, parked, done = propose_and_wait(stack, app_database, then=stray_then_no)
 
-    assert done.commits == (CommitOutcome(status="refused", refusal="ApprovalRequired"),)
+    assert done.commits == (
+        CommitOutcome(status=NOT_ANSWERED, wait_id=parked.awaiting_approval),
+        CommitOutcome(status="refused", refusal="ApprovalRequired"),
+    )
     assert stack.registry_client.rollouts == []
 
 

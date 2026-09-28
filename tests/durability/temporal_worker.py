@@ -41,6 +41,7 @@ from agentstack.runtime.waits import Wait, WaitStore
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import open_pool
+from agentstack.tools.action import ActionRequest
 from tests.fitness.test_trigger_to_candidate import RULE, StubScorer, snapshot
 from tests.temporal_support import DraftingEngine, asker_for, turns_for
 
@@ -120,8 +121,8 @@ class RecordingAsker:
         self.inner = inner
         self.path = path
 
-    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, percentage: int) -> str:
-        message = str(self.inner.ask(run=run, wait=wait, cohort=cohort, percentage=percentage))
+    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, action: ActionRequest) -> str:
+        message = str(self.inner.ask(run=run, wait=wait, cohort=cohort, action=action))
         with self.path.open("a") as handle:
             handle.write(f"{os.getpid()} {wait.wait_id}\n")
         return message
@@ -151,6 +152,7 @@ async def serve(args: argparse.Namespace) -> None:
                 scorer=RecordingScorer(Path(args.scorer_calls)),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
                 traces=LoggingSink(),
+                audit=stack.audit,
                 rule=RULE,
                 turns=turns,
                 asker=RecordingAsker(asker_for(stack), Path(args.asks or f"{args.ready}.asks")),

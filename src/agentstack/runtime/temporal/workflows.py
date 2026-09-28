@@ -21,6 +21,7 @@ from agentstack.runtime.temporal.contracts import (
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
+    NOT_ANSWERED,
     PARK_TRIGGER_WAIT,
     REASK_EVERY,
     ROLLOUT,
@@ -156,12 +157,19 @@ class ExperimentWorkflow:
         proposed = await self._take_turn(ROLLOUT, cycle)
         self._turns.append(proposed)
         if proposed.wait_id is not None and cycle.experiment_version is not None:
-            await self._await_approval(proposed.wait_id, cycle)
-            await self._act(proposed.wait_id, cycle)
+            wait_id = proposed.wait_id
+            await self._await_approval(wait_id, cycle)
+            while not await self._act(wait_id, cycle):
+                # Woken, and the wait says nobody answered: a stray or forged signal. The
+                # wake is spent, and the run goes back to the question it was on. The
+                # answer that does come later wakes it again, and still counts.
+                self._answered.remove(wait_id)
+                await self._await_approval(wait_id, cycle, asked=True)
 
-    async def _act(self, wait_id: str, cycle: CycleResult) -> None:
+    async def _act(self, wait_id: str, cycle: CycleResult) -> bool:
         """The answer is in: commit what it was about. Whether it may happen is the
-        gateway's to decide at the act, against the world as it is then.
+        gateway's to decide at the act, against the world as it is then. False if the
+        wait turned out to be unanswered: the run acted on nothing, and must wait again.
 
         An effect of unknown outcome parks the run until someone reconciles it against
         the surface, then acts again, and the ledger makes that a deduplication. It is
@@ -177,8 +185,10 @@ class ExperimentWorkflow:
         while True:
             outcome = await self._commit(intent)
             self._commits.append(outcome)
+            if outcome.status == NOT_ANSWERED:
+                return False
             if outcome.status != "unresolved" or outcome.wait_id is None:
-                return
+                return True
             self._reconciling = outcome.wait_id
             await workflow.wait_condition(lambda: self._reconciling in self._answered)
             self._reconciling = None
@@ -200,18 +210,25 @@ class ExperimentWorkflow:
             refusal = cause.type if isinstance(cause, ApplicationError) else None
             return CommitOutcome(status="refused", refusal=refusal or type(cause).__name__)
 
-    async def _await_approval(self, wait_id: str, cycle: CycleResult) -> None:
+    async def _await_approval(
+        self, wait_id: str, cycle: CycleResult, *, asked: bool = False
+    ) -> None:
         """Ask, then wait. Every REASK_EVERY without an answer, ask again. Never expire.
 
         The wait row says what is asked and against which snapshot; the answer is
         authorised and recorded by layer 8 before the workflow is told (T42). This
-        only decides when to put the question again.
+        only decides when to put the question again. `asked`: the question is already
+        out (the run is back after a wake nobody answered), so wait before putting it
+        again, rather than letting every stray signal post it once more.
         """
         assert cycle.experiment_version is not None
         self._awaiting = wait_id
-        self._asks = 0
+        if not asked:
+            self._asks = 0
         while True:
-            await self._ask(wait_id, cycle.experiment_id, cycle.experiment_version)
+            if not asked:
+                await self._ask(wait_id, cycle.experiment_id, cycle.experiment_version)
+            asked = False
             try:
                 await workflow.wait_condition(
                     lambda: wait_id in self._answered, timeout=REASK_EVERY
@@ -252,8 +269,10 @@ class ExperimentWorkflow:
         recorded by layer 8 in the callback, or an unresolved effect reconciled.
 
         Carries a wait id and nothing else: whether it was a yes, and who said it, is in
-        the `approvals` row and the wait, where layer 8 wrote it. Nothing here decides,
-        and a wake-up nobody authorised meets the gateway's refusal at the act.
+        the `approvals` row and the wait, where layer 8 wrote it. Nothing here decides.
+        A wake-up nobody answered finds the wait unsatisfied at the act, which does
+        nothing and says so, and the run waits again; a "no" or an outsider's approval
+        meets the gateway's refusal.
         """
         self._answered.append(wait_id)
 

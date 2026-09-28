@@ -51,6 +51,7 @@ from agentstack.runtime.temporal.client import deliver_trigger, notify_answer
 from agentstack.runtime.temporal.contracts import TASK_QUEUE, RunStart, Trigger
 from agentstack.runtime.waits import Wait, WaitStore
 from agentstack.storage.database import Database
+from agentstack.tools.action import ActionRequest
 from agentstack.tools.catalog import build_registry
 from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT_STAGE
 from agentstack.tools.spec import ActsAs, Surface
@@ -129,7 +130,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     replay_guard = ReplayGuard(db=db)
     approvers = ApproverDirectory(db=db)
     coordinator = ApprovalCoordinator(
-        runs=runs, waits=waits, approvals=approvals, directory=approvers
+        runs=runs, waits=waits, approvals=approvals, directory=approvers, audit=audit
     )
 
     gateway = Gateway(
@@ -358,23 +359,26 @@ class ChannelAsker:
     """The asker for an experiment run's worker (`runtime.temporal.Asker`).
 
     Builds the question from the record: what the wait asks about (its summary, bound
-    to the fingerprint and snapshot it was parked against) and what the frozen cohort
-    says it touches. The channel is the stack's notifier: Slack in production, a
-    recorder in tests.
+    to the fingerprint and snapshot it was parked against, and the action it holds) and
+    what the frozen cohort says it touches. The headline's percentage, and so its
+    headcount, are the held action's: the payload that commits if the answer is yes, not
+    a constant that happens to agree with it (A1, C1). The channel is the stack's
+    notifier: Slack in production, a recorder in tests.
     """
 
     notifier: Notifier
     channel: str = "#experiments"
 
-    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, percentage: int) -> str:
+    def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, action: ActionRequest) -> str:
         if wait.approval_summary is None:
             raise ValueError(f"{wait.wait_id} does not say what it asks about; nothing to put")
+        percentage = int(action.payload["percentage"])
         return self.notifier.post_approval(
             ApprovalAsk(
                 run_id=run.run_id,
                 wait_id=wait.wait_id,
                 summary=wait.approval_summary,
-                experiment_version=cohort.experiment_version,
+                experiment_version=str(action.payload["experiment_version"]),
                 data_as_of=cohort.data_as_of,
                 percentage=percentage,
                 estimated_customers=estimated_customers(cohort, percentage),

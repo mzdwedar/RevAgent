@@ -10,22 +10,31 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.items import Scope, Trust
 from agentstack.context.retrieval import Candidate, StaticRetriever
+from agentstack.context.targeting import Cohort, TargetingRule
 from agentstack.interfaces.inbound import InboundEvent
+from agentstack.interfaces.slack import RecordingNotifier
 from agentstack.interfaces.triggers import parse_trigger
-from agentstack.interfaces.wiring import Stack, build_stack, handle
+from agentstack.interfaces.wiring import ExperimentTurns, Stack, build_stack, handle
+from agentstack.observability.spans import CollectingSink
 from agentstack.policy.triggers import Outcome as Outcome_
 from agentstack.policy.triggers import OutcomeNotAuthorized
 from agentstack.runtime.cycles import CycleStore, evaluate
+from agentstack.runtime.drafting import rollout_admission
+from agentstack.runtime.loop import run_turn
 from agentstack.runtime.run import new_run
-from agentstack.runtime.waits import ResumeEvent, resume
+from agentstack.runtime.temporal.activities import RunActivities
+from agentstack.runtime.temporal.contracts import CommitIntent
+from agentstack.runtime.waits import HUMAN_APPROVAL, ResumeEvent, resume
 from agentstack.storage.database import Database
 from agentstack.storage.provision import truncate_all
+from agentstack.tools.experiments import ROLLOUT_STAGE
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 TENANT = "acme"
@@ -53,6 +62,11 @@ class Case:
     # delivered `deliveries` times and the cycle count is what is asserted.
     trigger: dict[str, Any] | None = None
     deliveries: int = 1
+    # A rollout case runs the rollout turn against this frozen cohort, held to it as the
+    # worker holds it, with `message` as what the model proposes (A1).
+    frozen_cohort: dict[str, Any] | None = None
+    # Then wake the run's act while its approval wait is still unanswered (A1, H2).
+    wake_unanswered: bool = False
     description: str = ""
 
     @staticmethod
@@ -125,10 +139,124 @@ def _run_trigger_case(case: Case, db: Database, started: float) -> Outcome:
     )
 
 
+def _freeze(db: Database, spec: dict[str, Any]) -> FrozenCohort:
+    """Record the frozen cohort a rollout case is about, as a propose cycle records it."""
+    rule = TargetingRule(
+        profile="eval", risk_quantile=0.9, minimum_cohort=1, minimum_annual_value_at_risk_cents=1
+    )
+    return FrozenCohortStore(db=db).record(
+        tenant=TENANT,
+        experiment_id=str(spec["experiment_id"]),
+        cohort=Cohort(
+            experiment_version=str(spec["experiment_version"]),
+            dataset="eval",
+            data_as_of=str(spec["data_as_of"]),
+            model_version=str(spec["targeting_model_version"]),
+            rule=rule,
+            risk_threshold=float(spec["risk_threshold"]),
+            members=tuple(range(int(spec["size"]))),
+            annual_value_at_risk_cents=int(spec["annual_value_at_risk_cents"]),
+            risk_quantiles=(0.1, 0.3, 0.5, 0.7, 0.9),
+            revenue_note="eval",
+        ),
+    )
+
+
+def _run_rollout_case(case: Case, db: Database, checkpointer: Any, started: float) -> Outcome:
+    """The rollout turn, held to its frozen cohort exactly as the worker holds it; then,
+    if asked, the act woken while nobody has answered."""
+    failures: list[str] = []
+    assert case.frozen_cohort is not None
+    stack = _stack_for(case, db, checkpointer)
+    cohort = _freeze(db, case.frozen_cohort)
+    session = stack.resolver.start(user_id=USER, tenant=TENANT)
+    run = stack.runs.ensure(
+        new_run(
+            session_id=session.session_id,
+            tenant=TENANT,
+            user=USER,
+            stage=ROLLOUT_STAGE,
+            channel="eval",
+        )
+    )
+    turns = ExperimentTurns(stack)
+    envelope = turns.envelope(run)
+    result = run_turn(
+        run=run,
+        envelope=envelope,
+        message=case.message,
+        deps=stack.deps,
+        admit=rollout_admission(
+            cohort=cohort, audit=stack.audit, run=run, principal=envelope.principal
+        ),
+    )
+
+    commit_status: str | None = None
+    if case.wake_unanswered and result.pending_wait is not None:
+        activities = RunActivities(
+            runs=stack.runs,
+            cycles=CycleStore(db=db),
+            cohorts=FrozenCohortStore(db=db),
+            waits=stack.waits,
+            scorer=_NoScoring(),
+            trigger_deadline=timedelta(days=1),
+            traces=CollectingSink(),
+            audit=stack.audit,
+            turns=turns,
+        )
+        try:
+            commit_status = activities.commit(
+                CommitIntent(
+                    run_id=run.run_id,
+                    wait_id=result.pending_wait.wait_id,
+                    experiment_id=cohort.experiment_id,
+                    data_as_of=cohort.data_as_of,
+                    kind="data_arrival",
+                )
+            ).status
+        except Exception as exc:  # a refusal at the act is the result under test
+            commit_status = type(exc).__name__
+
+    expect = case.expect
+    approval_waits = [
+        w for w in stack.waits.pending_for(run.run_id) if w.kind == HUMAN_APPROVAL
+    ] + [w for w in stack.waits.satisfied_for(run.run_id) if w.kind == HUMAN_APPROVAL]
+    decisions = sorted({r.policy_decision for r in stack.audit.for_run(run.run_id)})
+    notifier = stack.notifier
+    posted = len(notifier.posted) if isinstance(notifier, RecordingNotifier) else 0
+    checks: dict[str, Any] = {
+        "status": result.status,
+        "rollouts": len(stack.registry_client.rollouts),
+        "approval_waits": len(approval_waits),
+        "pending_approval_waits": len([w for w in approval_waits if not w.satisfied]),
+        "questions_posted": posted,
+        "audit_decisions": decisions,
+        "commit_status": commit_status,
+    }
+    for key, actual in checks.items():
+        if key in expect and actual != expect[key]:
+            failures.append(f"{key} {actual!r} != {expect[key]!r}")
+
+    return Outcome(
+        case=case, passed=not failures, failures=failures, seconds=time.perf_counter() - started
+    )
+
+
+class _NoScoring:
+    """A rollout case never evaluates a trigger."""
+
+    model_version = "none"
+
+    def score(self, **_: Any) -> Any:
+        raise AssertionError("a rollout case scores nothing")
+
+
 def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
     started = time.perf_counter()
     if case.trigger is not None:
         return _run_trigger_case(case, db, started)
+    if case.frozen_cohort is not None:
+        return _run_rollout_case(case, db, checkpointer, started)
     failures: list[str] = []
     stack = _stack_for(case, db, checkpointer)
     session = stack.resolver.start(user_id=USER, tenant=TENANT)

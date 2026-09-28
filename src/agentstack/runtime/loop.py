@@ -8,6 +8,7 @@ progress. It does not own authority, and it never touches a surface directly.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,6 +65,7 @@ def run_turn(
     deps: TurnDeps,
     instructions: str = "You are a support agent. Prefer the narrowest tool that fits.",
     turn_id: str | None = None,
+    admit: Callable[[ActionRequest], str | None] | None = None,
 ) -> TurnResult:
     """One turn, executed as a checkpointed graph (ADR-0006).
 
@@ -73,6 +75,10 @@ def run_turn(
 
     `turn_id` names the checkpoint namespace. Left unset it is unique per call, which
     is the right default for a fresh turn; passing the same one twice resumes that turn.
+
+    `admit`, for a turn told exactly what to propose, refuses anything else before the
+    gateway sees it, so a proposal that differs is never parked and never put to a
+    person. It returns the refusal's reason, or None.
     """
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
     context = TurnContext(
@@ -80,7 +86,8 @@ def run_turn(
         envelope=envelope,
         deps=deps,
         instructions=instructions,
-        carried={"tracer": tracer},
+        # Not state: a checkpoint never holds it, and a resumed turn is handed it again.
+        carried={"tracer": tracer, "admit": admit},
     )
     final = advance(
         deps.graph,

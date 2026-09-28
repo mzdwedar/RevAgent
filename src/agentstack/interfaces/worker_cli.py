@@ -89,9 +89,11 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
                 scorer=TabPFNScorer(),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
                 # Spans from turns and commits, one JSON line each on `agentstack.traces`.
-                # The audit trail is Postgres, written by the gateway: never this, never
-                # Temporal's history.
+                # The audit trail is Postgres, written by the gateway and by the
+                # activities' own refusals: never this, never Temporal's history.
                 traces=LoggingSink(),
+                # Refusals at the ask and the act that never reach the gateway.
+                audit=stack.audit,
                 turns=ExperimentTurns(stack),
                 asker=ChannelAsker(stack.notifier),
             )
