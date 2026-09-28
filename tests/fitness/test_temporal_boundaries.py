@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import base64
 import configparser
+import dataclasses
 import importlib.util
+import json
 import re
 import sys
 import time
@@ -19,22 +22,30 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from temporalio import activity
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from agentstack.context.frozen_cohorts import FrozenCohort
 from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.surfaces import SandboxViolation, SurfaceRefused
 from agentstack.interfaces import worker_cli
+from agentstack.model.contract import ModelRequest
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.approvers import ApproverNotAuthorized
 from agentstack.policy.decisions import PolicyDenied
-from agentstack.policy.triggers import OutcomeNotAuthorized
+from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.policy.triggers import Outcome, OutcomeNotAuthorized, TriggerKind
+from agentstack.runtime.cycles import Cycle
+from agentstack.runtime.drafting import draft_instruction, rollout_instruction
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal import client as temporal_client
+from agentstack.runtime.temporal import contracts
 from agentstack.runtime.temporal.client import start_run
 from agentstack.runtime.temporal.contracts import RunProgress, RunStart, workflow_id
 from agentstack.runtime.temporal.interceptors import DECLARED, DeclaredActivitiesOnly
@@ -388,3 +399,158 @@ def test_the_production_worker_installs_the_guard_and_declares_all_it_registers(
     assert names <= set(DECLARED), f"registered but undeclared: {names - set(DECLARED)}"
     # The activity bound is declared, not left at Temporal's default of 100 (T45).
     assert config["max_concurrent_activities"] == MAX_CONCURRENT_ACTIVITIES
+
+
+# --- Criterion 40: nothing secret in history (T48) ---
+#
+# History is kept, replayed and shown in a UI, so it holds what `contracts` defines and
+# nothing else. Every payload of every recorded history is decoded and read: not
+# grepped, since a payload is base64 inside the JSON and a grep sees none of it.
+
+HISTORIES = ROOT / "tests" / "fixtures" / "histories"
+
+# Ids the contracts carry on purpose. The same names are fields of the envelope and the
+# frozen cohort, and there they are identity, not authority or evidence.
+CARRIED_IDS = {"tenant", "experiment_id", "experiment_version", "data_as_of"}
+
+
+def _fields(*types: Any) -> set[str]:
+    return {f.name for t in types for f in dataclasses.fields(t)}
+
+
+CONTRACT_FIELDS = _fields(
+    *(v for v in vars(contracts).values() if isinstance(v, type) and dataclasses.is_dataclass(v))
+)
+# Authority (the envelope), the prompt (the model request, the turn's message) and the
+# evidence (the frozen cohort, and what the approver was shown against which snapshot).
+NEVER_IN_HISTORY = (
+    _fields(IdentityEnvelope, ModelRequest, FrozenCohort)
+    | {"message", "state_snapshot", "approval_summary", "action_fingerprint", "payload"}
+) - CARRIED_IDS
+
+
+def _instruction_openings() -> tuple[str, ...]:
+    """The fixed opening of each instruction a turn is given, built by the code that
+    builds them, so a reworded prompt is still recognised."""
+    cycle = Cycle(
+        experiment_id="e",
+        data_as_of="d",
+        kind=TriggerKind.DATA_ARRIVAL,
+        outcome=Outcome.PROPOSE,
+        run_id="v",
+        claimed_at=datetime.now(UTC),
+        settled_at=None,
+    )
+    cohort = FrozenCohort(
+        tenant="t",
+        experiment_id="e",
+        experiment_version="v",
+        data_as_of="d",
+        targeting_model_version="m",
+        risk_threshold=0.5,
+        size=1,
+        annual_value_at_risk_cents=1,
+        description="",
+    )
+    drafted = draft_instruction(tenant="t", cycle=cycle)
+    rolled = rollout_instruction(experiment_id="e", cohort=cohort)
+    return (drafted.split(" by calling")[0], rolled.split(" by calling")[0])
+
+
+def _decoded(history: dict[str, Any]) -> tuple[list[Any], list[str]]:
+    """Every payload, decoded, and every failure message, anywhere in the history."""
+    payloads: list[Any] = []
+    messages: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if "metadata" in node and "data" in node:
+                encoding = base64.b64decode(node["metadata"]["encoding"]).decode()
+                # A payload that can't be read can't be checked: an unknown encoding
+                # fails rather than passing unread.
+                assert encoding == "json/plain", f"cannot read a {encoding} payload"
+                payloads.append(json.loads(base64.b64decode(node["data"])))
+            if isinstance(node.get("message"), str):
+                messages.append(node["message"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(history)
+    return payloads, messages
+
+
+def _findings(history: dict[str, Any]) -> list[str]:
+    payloads, messages = _decoded(history)
+    openings = _instruction_openings()
+    found: list[str] = []
+
+    def keys(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in NEVER_IN_HISTORY:
+                    found.append(f"field {key!r}")
+                elif key not in CONTRACT_FIELDS:
+                    found.append(f"field {key!r} is not in contracts")
+                keys(value)
+        elif isinstance(node, list):
+            for value in node:
+                keys(value)
+
+    for payload in payloads:
+        keys(payload)
+    for text in [json.dumps(p) for p in payloads] + messages:
+        if "vault://" in text:
+            found.append("a credential reference")
+        found += [f"instruction text {o!r}" for o in openings if o in text]
+    return found
+
+
+def _histories() -> dict[str, dict[str, Any]]:
+    return {path.name: json.loads(path.read_text()) for path in sorted(HISTORIES.glob("*.json"))}
+
+
+def test_every_recorded_history_holds_contracts_and_nothing_secret() -> None:
+    histories = _histories()
+    assert len(histories) >= 4, "the replay guard's histories are what this reads"
+    for name, history in histories.items():
+        payloads, _ = _decoded(history)
+        assert payloads, f"{name}: nothing decoded, so nothing was checked"
+        assert _findings(history) == [], name
+
+
+def test_what_history_must_never_hold_is_no_contract_field() -> None:
+    """If a contract grew one of these fields, the allowlist would pass it; this is what
+    stops that. Adding `size`, `credential_ref` or `approval_summary` to a contract is a
+    decision about history, and it fails here first."""
+    overlap = NEVER_IN_HISTORY & CONTRACT_FIELDS
+    assert not overlap, f"a contract carries {sorted(overlap)} into history"
+    assert {"credential_ref", "delegation_scopes", "rendered_context", "size"} <= NEVER_IN_HISTORY
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        {"principal": "ana@acme", "credential_ref": "vault://agent/acme/ana"},
+        {"run_id": "r", "state_snapshot": "as-shown"},
+        {"run_id": "r", "size": 42, "annual_value_at_risk_cents": 100},
+        {"run_id": "r", "wait_id": "vault://agent/acme/ana"},
+        "The experiment is drafted. Propose its rollout by calling the tool",
+        {"run_id": "r", "customer_emails": ["a@example.com"]},
+    ],
+    ids=["envelope", "snapshot", "evidence", "credential-in-a-value", "prompt", "not-a-contract"],
+)
+def test_the_scan_finds_what_is_planted(planted: Any) -> None:
+    """The scan is only worth something if it finds things: each plant, encoded the way
+    Temporal encodes a payload, goes into a real recorded history."""
+    history = _histories()["approved_commit.json"]
+    event = next(e for e in history["events"] if "activityTaskScheduledEventAttributes" in e)
+    event["activityTaskScheduledEventAttributes"]["input"]["payloads"].append(
+        {
+            "metadata": {"encoding": base64.b64encode(b"json/plain").decode()},
+            "data": base64.b64encode(json.dumps(planted).encode()).decode(),
+        }
+    )
+    assert _findings(history) != []

@@ -1300,9 +1300,11 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     dropped mid-run: `check_task.sh` green, bar intact, checkpoint guard safe.
 
 ### ✅ Checkpoint L — the approval boundary under Temporal
-- [ ] Trigger → score → draft → Slack → approve → rollout, killed while parked, still correct
-- [ ] Stale approval refused at the act; unresolved effect not retried blind
-- [ ] `/stack-audit` on the diff so far
+- [x] Trigger → score → draft → Slack → approve → rollout, killed while parked, still correct
+  (T44: `test_approve_after_death`, resumed in 9.2s)
+- [x] Stale approval refused at the act; unresolved effect not retried blind
+  (T43: `test_commit`, mutation-checked)
+- [ ] `/stack-audit` on the diff so far (deferred by the human to Checkpoint M, 2026-09-28)
 - [ ] Human review
 
 - [x] **T45 — Bounded fan-out; retire `fanout.py`** · layer 3 · *S*
@@ -1454,10 +1456,27 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     `test_data_snapshot` fails in a fresh worktree until it's copied in. That's
     pre-existing, and I didn't fix it here.
 
-- [ ] **T48 — Nothing secret in history** · layer 3 · *S*
+- [x] **T48 — Nothing secret in history** · layer 3 · *S*
   - Acceptance: a test decodes every payload in every recorded history.
   - Verify: no envelope, `credential_ref`, prompt or evidence field anywhere (C40).
   - Files: `tests/fitness/test_temporal_boundaries.py`.
+  - **Done. Decoded, not grepped:** a payload is base64 inside the history JSON, so a grep
+    sees none of it. Every payload in every recorded history (T47's four) is decoded,
+    along with every failure message. A payload in any encoding but `json/plain` fails,
+    since what can't be read can't be checked.
+  - **Two checks.**
+    - **Allowlist:** every key at any depth must be a field of a `contracts` dataclass.
+    - **Denylist, derived from the real types:** the fields of `IdentityEnvelope`,
+      `ModelRequest` and `FrozenCohort`, plus the turn's `message` and the wait's
+      approval material (`state_snapshot`, `approval_summary`, `action_fingerprint`,
+      `payload`), minus the four ids the contracts carry on purpose.
+    - Values are scanned too: no `vault://`, and no instruction text. The openings are
+      built by `drafting` itself, so a reworded prompt is still recognised.
+  - A separate test asserts the two lists never overlap. Adding `size` or
+    `approval_summary` to a contract is a decision about history, and it fails there.
+  - 8 tests. Six plants (an envelope, a snapshot, cohort evidence, a credential inside
+    an allowed field, a prompt, a field no contract has) each go into a real history,
+    encoded as Temporal encodes them, and each is found.
 
 - [ ] **T49 — Traces across workflow and activities** · layer 9 · *S*
   - Acceptance: every activity's spans carry our `run_id` and `session_id`; Temporal
@@ -1465,24 +1484,119 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - Verify: `test_trace_completeness`, `test_audit_separate_from_traces` green through
     the worker.
   - Files: `runtime/temporal/activities.py`, `tests/fitness/test_trace_completeness.py`.
+  - **Done. Found first: every span emitted in an activity was lost.** A turn run by
+    `handle` returns its tracer to its caller. In an activity the caller is the workflow,
+    which must never hold spans (they'd be history, T48). `run_turn` dropped the turn's
+    tracer, and `commit` dropped its own.
+  - **Layer 9 gains a port:** `SpanSink`, with `CollectingSink` (tests) and `LoggingSink`
+    (one JSON line per span on the `agentstack.traces` logger; stdlib, no dependency; a
+    trace backend is deployment's choice later). `RunActivities` takes `traces` as a
+    **required** argument, so losing spans can't be the default again. `agentstack-worker`
+    and the SIGKILL worker pass `LoggingSink`; the test helpers default to a collector.
+  - `run_turn` exports the turn's spans. `commit` exports in a `finally`, so a refused act
+    is traced too, and a refusal is the trace someone asks for. Every span carries the
+    run's `run_id` and `session_id` from the record, never a Temporal id.
+  - **History is never read as audit:** an AST scan finds no history API
+    (`fetch_history*`, `WorkflowHistory`, `Replayer`) anywhere in `src/agentstack`. Only
+    `scripts/replay_guard.py` reads history, outside the package.
+  - 5 tests. `tests/durability/test_traces.py` (in `durability`, not
+    `test_trace_completeness.py`, because it needs that directory's dataset fixture and
+    the time-skipping server): a run through the production worker emits every
+    `REQUIRED_SPANS` member, all with our ids, none mentioning the workflow or Temporal
+    run id; a refused act is traced (the second read of the rollout's world is the
+    commit's); the logging sink writes one JSON line per span.
+    `test_audit_separate_from_traces` +2: the scan, and a plant proving it sees a reader.
+  - **Mutation-checked** on an isolated Postgres: without the commit's export, both run
+    tests fail. The first draft of the refusal test **passed** under that mutant (the
+    rollout turn's own spans satisfied it), so it now asserts the commit's specific span.
+  - **Not traced, as before:** `evaluate_cycle`, `ask_approval` and the wait activities
+    emit no spans. The ask has no version stamp without a turn host, and adding one only
+    for it wasn't worth another constructor argument. A turn that raises mid-way loses
+    its spans, because `loop.run_turn` owns its tracer.
 
-- [ ] **T50 — `operator status` joins position and record** · layers 3, 1 · *S*
+- [x] **T50 — `operator status` joins position and record** · layers 3, 1 · *S*
   - Acceptance: status shows the workflow's position (Temporal) beside the run's record
     (Postgres); `stalled` still reads only `waits`.
   - Verify: `test_stalled_waits` operator tests green; a new status test for a parked run.
     Status flags a pending activity past 10 attempts, with its last failure, because
     the retry policy has no cap by design (decided at Checkpoint I).
   - Files: `runtime/operator.py`, `interfaces/operator_cli.py`, test.
+  - **Done, not in `runtime/operator.py`:** that module is trigger evaluation, not an
+    operator view. Position is read in `runtime/temporal/client.py` (`position()` →
+    `Position`), and the join is in `operator_cli.status_report`.
+  - `agentstack-operator status RUN_ID [--address]`:
+    - **Record lines** (Postgres): the run (tenant, stage, session) and each pending
+      wait (kind, id, deadline, re-asks).
+    - **Position lines** (Temporal): workflow status; what it awaits (approval, and how
+      often it was put; reconciliation; a trigger wait, and if overdue); cycles, acts
+      and queued triggers; each pending activity and its attempt.
+    - Neither is taken for the other.
+  - **Built for the moment it's used, a dead worker:** the server's `describe` answers
+    with no worker. The progress query needs one, so it's bounded (5s) and says "no
+    worker answered" instead of hanging. The record is read first: an unknown run exits 1
+    without contacting Temporal.
+  - **Stuck:** a pending activity past `retry.STUCK_AFTER_ATTEMPTS` (10, beside the
+    policy it qualifies) is flagged `STUCK` with its last failure, and the exit code is 1
+    so a scheduler can alert. It's not a cap: the activity keeps retrying.
+  - Also closes part of T43's gap: a reconcile wait now shows, as a record wait with no
+    deadline and as "awaiting reconciliation". `stalled` is unchanged and still reads only
+    `waits` (all 29 of its tests green). Reconcile waits aren't in `stalled`, and there's
+    still no reconcile command.
+  - 4 tests in `tests/durability/test_operator_status.py`: a parked run's record and
+    position side by side; no worker alive → still answers; an evaluation failing every
+    attempt → retried past 10 on the time-skipping server (backoff is skipped, not slept),
+    flagged with "the scoring service is down", exit 1; an unknown run → exit 1, with an
+    address nothing listens on proving Temporal wasn't asked.
 
-- [ ] **T51 — Ledger and bar** · docs · *S*
+- [x] **T51 — Ledger and bar** · docs · *S*
   - `STACK.md` rows 3 and 10 (Temporal owns position, Postgres the record); `CONSTRAINTS.md`
     additions only: floor bullets "No identity envelope, credential or prompt in
     workflow history", "No idempotency key derived from Temporal identity", "No gateway
     refusal retried"; enforced rows for the replay guard and `test_temporal_boundaries`;
     fitness count ratchet; README counts.
+  - **Done.** `STACK.md`:
+    - Row 3: Postgres is the record, Temporal the position, and the Phase 8 invariants
+      (contract 6, declared activities, ids-only, the world read at the act, nothing
+      secret in history, the replay guard).
+    - Row 10: Temporal is substrate for position only, since history is retained for a
+      window and rewritten by reset.
+    - Row 9: T49's `SpanSink`, and that nothing reads history.
+    - The Part 4 row names `test_temporal_boundaries`, `tests/durability/` and the replay
+      guard.
+  - `CONSTRAINTS.md`, additions only: the three floor bullets, plus two for invariants
+    this phase built:
+    - "No approval checked against a snapshot carried to the act" (T43, E3).
+    - "No span emitted in an activity left for the workflow to hold" (T49).
+    - Enforced rows for durable-runtime boundaries and replay safety, and the fitness
+      ratchet 36 → 42.
+  - README: it said **five** `.importlinter` contracts while there were six (contract 6,
+    T33), and nothing checked it. Now `test_the_readme_counts_match_what_is_actually_here`
+    checks the contract count too, and it fails on "five". Also corrected: the durability
+    row (Temporal, not Postgres alone); the scripts row; and a "LangGraph is not wired in"
+    bullet, false since T8, replaced by the real state and the open reconcile gaps.
+  - `stack_guard`: the bar is intact.
 
 ### ✅ Checkpoint M — Phase 8 complete
-- [ ] Spec criteria C29–C45 met; SPEC.md criteria 1–28 still hold
-- [ ] `check_full.sh` green, including `replay_guard` and `checkpoint_guard`
+- [x] Spec criteria C29–C45 met; SPEC.md criteria 1–28 still hold
+  - C29 one run per id: `test_temporal_boundaries` (T34). C30 redelivery after close:
+    Checkpoint J / T36. C31 death while parked: `test_approve_after_death` (T44).
+    C32 re-ask over 72h: `test_approval_wait` (T41). C33 stale approval refused at the act
+    and C34 unresolved effect parked, reconciled, deduplicated: `test_commit` (T43).
+    C35 refusals are one attempt and C37 only declared activities run:
+    `test_temporal_boundaries` (T35). C36 keys survive Temporal: T39, T40, and T43's
+    rerun. C38 workflow code has no path to an effect: contract 6 + `stack_guard` (T33).
+    C39 an outsider changes nothing: `test_slack_answer` (T42) + `test_commit` (T43).
+    C40 nothing secret in history: T48. C41 a stranding deploy fails: `replay_guard` (T47).
+    C42 bounded fan-out: `test_concurrency` (T45). C43 stalled still surfaces:
+    `test_stalled_waits` + `test_timers`. C44 continue-as-new invisible: `test_timers`
+    (T46), including `operator status` showing one run with all 250 cycles (added at this
+    checkpoint). The *traces* half holds by construction, since spans are tagged with the
+    carried `run_id`; no test drives a turn across a handoff. C45 the substrate fails
+    loudly: `tests/infra/test_temporal_substrate` + `worker_cli` (T32, T34).
+  - SPEC.md 1–28: held by the full suite, **705 passed** on an isolated Postgres.
+    `stack_guard` finds no fitness test removed or weakened.
+- [x] `check_full.sh` green, including `replay_guard` and `checkpoint_guard`
+  (2026-09-28, isolated Postgres: every check ok, changed-line coverage 89.6%, 13/13
+  release gates; `osv-scanner` and `gitleaks` not installed locally, CI runs them)
 - [ ] `/stack-audit` run and its findings addressed
 - [ ] Human review

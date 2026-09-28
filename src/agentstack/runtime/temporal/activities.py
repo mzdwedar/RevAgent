@@ -25,7 +25,7 @@ from temporalio.exceptions import ApplicationError
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.execution.gateway import UnresolvedEffect
-from agentstack.observability.spans import Tracer
+from agentstack.observability.spans import SpanSink, Tracer
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind
 from agentstack.prediction.churn import ChurnScorer
@@ -127,10 +127,14 @@ class RunActivities:
         waits: WaitStore,
         scorer: ChurnScorer,
         trigger_deadline: timedelta,
+        traces: SpanSink,
         rule: TargetingRule | None = None,
         turns: TurnHost | None = None,
         asker: Asker | None = None,
     ) -> None:
+        # Required: an activity's caller is the workflow, which never holds spans (they
+        # would be history). Without a sink, every span a turn or a commit emits is lost.
+        self._traces = traces
         self._asker = asker
         self._runs = runs
         self._cycles = cycles
@@ -277,6 +281,8 @@ class RunActivities:
                 deps=turns.deps,
                 turn_id=turn_id,
             )
+        # Tagged with this run and its session, as every span is: never with Temporal's ids.
+        self._traces.export(result.tracer.spans)
         turns.record(run, asked=message, answered=result.text)
         return TurnOutcome(
             status=result.status,
@@ -371,6 +377,15 @@ class RunActivities:
         run = dataclasses.replace(recorded, stage=ROLLOUT)
         request, spec = self._approved(run, intent, wait)
         tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=turns.deps.versions)
+        # Exported however the act ends: a refusal is the trace someone will want most.
+        try:
+            return self._act(turns, run, request, spec, tracer)
+        finally:
+            self._traces.export(tracer.spans)
+
+    def _act(
+        self, turns: TurnHost, run: Run, request: ActionRequest, spec: ToolSpec, tracer: Tracer
+    ) -> CommitOutcome:
         gateway = turns.deps.gateway
         world = gateway.observe(request=request, tracer=tracer)
         if world is None:

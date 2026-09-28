@@ -69,10 +69,11 @@ def test_the_workflow_names_what_the_record_uses() -> None:
 
 
 def propose_and_wait(
-    stack: Stack, db: Database, *, then: Any = None
+    stack: Stack, db: Database, *, then: Any = None, traces: Any = None
 ) -> tuple[str, RunProgress, Any]:
     """Deliver a proposing trigger on the time-skipping server, wait until the run is
-    parked on its approval, then hand the environment to `then`."""
+    parked on its approval, then hand the environment to `then`. `traces` is where the
+    worker's activities export their spans."""
 
     async def go() -> tuple[str, RunProgress, Any]:
         async with (
@@ -85,6 +86,7 @@ def propose_and_wait(
                 rule=RULE,
                 turns=turns_for(stack, DraftingEngine()),
                 asker=asker_for(stack),
+                traces=traces,
             ),
         ):
             run_id = await deliver(stack, env.client, PAYLOAD, source="t", task_queue="approvals")

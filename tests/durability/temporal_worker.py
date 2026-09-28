@@ -25,6 +25,7 @@ from agentstack.context import datasets
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.interfaces.wiring import build_stack
+from agentstack.observability.spans import LoggingSink
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
@@ -149,6 +150,7 @@ async def serve(args: argparse.Namespace) -> None:
                 waits=WaitStore(db=db),
                 scorer=RecordingScorer(Path(args.scorer_calls)),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
+                traces=LoggingSink(),
                 rule=RULE,
                 turns=turns,
                 asker=RecordingAsker(asker_for(stack), Path(args.asks or f"{args.ready}.asks")),

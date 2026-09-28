@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -161,3 +163,41 @@ def test_audit_records_outlive_the_process_that_wrote_them(
     restarted = build_stack(app_database, checkpointer, tenant=run.tenant)
 
     assert restarted.audit.for_run(run.run_id) == stack.audit.for_run(run.run_id)
+
+
+# Temporal's history APIs. History is the orchestrator's memory of where a run is: it
+# is kept for a retention window, replayed, and rewritten by reset. The audit trail is
+# `audit.records`, written by the gateway at the act (T49).
+HISTORY_READERS = {"fetch_history", "fetch_history_events", "WorkflowHistory", "Replayer"}
+SRC = Path(__file__).resolve().parents[2] / "src" / "agentstack"
+
+
+def _names_used(path: Path) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.alias):
+            names.add(node.name.rsplit(".", 1)[-1])
+    return names
+
+
+def test_no_code_reads_temporal_history_as_a_record() -> None:
+    """Replaying history is `scripts/replay_guard.py`'s job, outside the package. Inside
+    it, nothing asks history what happened: that is the audit trail's question."""
+    readers = {
+        str(path.relative_to(SRC)): sorted(_names_used(path) & HISTORY_READERS)
+        for path in SRC.rglob("*.py")
+        if _names_used(path) & HISTORY_READERS
+    }
+    assert readers == {}
+
+
+def test_the_history_scan_would_see_a_reader(tmp_path: Path) -> None:
+    planted = tmp_path / "audit_from_history.py"
+    planted.write_text(
+        "async def audit(handle):\n    return [e async for e in handle.fetch_history_events()]\n"
+    )
+    assert _names_used(planted) & HISTORY_READERS == {"fetch_history_events"}

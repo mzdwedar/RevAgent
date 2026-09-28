@@ -25,6 +25,7 @@ from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, Stack
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
+from agentstack.observability.spans import CollectingSink, SpanSink
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
@@ -141,6 +142,7 @@ def activities_for(
     trigger_deadline: timedelta = DEFAULT_TRIGGER_DEADLINE,
     turns: TurnHost | None = None,
     asker: Asker | None = None,
+    traces: SpanSink | None = None,
 ) -> RunActivities:
     return RunActivities(
         runs=RunStore(db=db),
@@ -149,6 +151,7 @@ def activities_for(
         waits=WaitStore(db=db),
         scorer=scorer or NoScoring(),
         trigger_deadline=trigger_deadline,
+        traces=traces if traces is not None else CollectingSink(),
         rule=rule,
         turns=turns,
         asker=asker,

@@ -46,6 +46,10 @@ DETERMINISTIC = ("IntegrityViolation",)
 # Raised by `interceptors.DeclaredActivitiesOnly`, before the activity body runs.
 UNDECLARED = "UndeclaredActivity"
 
+# Past this many attempts, `operator status` flags a pending activity with its last
+# failure. Not a cap: the activity keeps retrying. It's the point a person should look.
+STUCK_AFTER_ATTEMPTS = 10
+
 # No attempt cap, deliberately. A cap can't tell an outage from a bug, and a run parked for
 # weeks on an approval must not die because Postgres was down for twenty minutes. What's
 # still retried indefinitely is surfaced by `operator status` instead (T50).

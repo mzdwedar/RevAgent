@@ -253,7 +253,7 @@ async def executions(
 
 
 def test_continuing_as_new_is_invisible_to_the_record(
-    app_database: Database, run_start: RunStart
+    app_database: Database, run_start: RunStart, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Criterion 44: 250 cycles, three executions, one run, one record.
 
@@ -294,9 +294,20 @@ def test_continuing_as_new_is_invisible_to_the_record(
                 for batch in batches[QUEUED_AHEAD:]:
                     await handle.signal(ExperimentWorkflow.trigger, batch)
                 last = await progress_until(handle, evaluated(CYCLES), timeout=60)
+                capsys.readouterr()
+                status_code.append(
+                    await operator_cli.status_report(env.client, app_database, run_start.run_id)
+                )
                 return parked, last, await executions(env.client, handle)
 
+    status_code: list[int] = []
     parked, last, starts = asyncio.run(run_through_the_handoffs())
+    status = capsys.readouterr().out
+
+    # The operator sees one run through all three executions (criterion 44).
+    assert status_code == [0]
+    assert status.count(f"run      {run_start.run_id}") == 1
+    assert f"position {CYCLES} cycles" in status, "counted across the handoffs, not since the last"
 
     # Temporal's side: three executions, each started with what the one before carried.
     assert len(starts) == 1 + CYCLES // CONTINUE_EVERY, "continued as new at 100 and 200"

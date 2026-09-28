@@ -19,6 +19,7 @@ from agentstack.interfaces import preflight_cli
 from agentstack.interfaces.slack import SlackNotifier
 from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, build_stack
 from agentstack.model.ollama_engine import OllamaEngine
+from agentstack.observability.spans import LoggingSink
 from agentstack.prediction.engine import TabPFNScorer
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
@@ -87,6 +88,10 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
                 # The scorer preflight just proved can load its weights.
                 scorer=TabPFNScorer(),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
+                # Spans from turns and commits, one JSON line each on `agentstack.traces`.
+                # The audit trail is Postgres, written by the gateway: never this, never
+                # Temporal's history.
+                traces=LoggingSink(),
                 turns=ExperimentTurns(stack),
                 asker=ChannelAsker(stack.notifier),
             )

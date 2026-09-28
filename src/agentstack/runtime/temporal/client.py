@@ -8,15 +8,26 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import dataclass
 
-from temporalio.client import Client, WorkflowHandle
+from temporalio.client import Client, WorkflowHandle, WorkflowQueryFailedError
 from temporalio.common import WorkflowIDConflictPolicy
+from temporalio.service import RPCError, RPCStatusCode
 
-from agentstack.runtime.temporal.contracts import TASK_QUEUE, RunEnd, RunStart, Trigger, workflow_id
+from agentstack.runtime.temporal.contracts import (
+    TASK_QUEUE,
+    RunEnd,
+    RunProgress,
+    RunStart,
+    Trigger,
+    workflow_id,
+)
+from agentstack.runtime.temporal.retry import STUCK_AFTER_ATTEMPTS
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 
 DEFAULT_ADDRESS = "localhost:7233"
 CONNECT_TIMEOUT_S = 5.0
+QUERY_TIMEOUT_S = 5.0
 
 
 class TemporalUnavailable(RuntimeError):
@@ -80,6 +91,63 @@ async def deliver_trigger(
         start_signal="trigger",
         start_signal_args=[trigger],
     )
+
+
+@dataclass(frozen=True, slots=True)
+class PendingActivity:
+    name: str
+    attempt: int
+    last_failure: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Position:
+    """Where Temporal says the run is. Position only: what the run did is the record's."""
+
+    status: str
+    # None when no worker answered the query: a dead worker is exactly when this is read.
+    progress: RunProgress | None
+    pending: tuple[PendingActivity, ...]
+
+    def stuck(self) -> tuple[PendingActivity, ...]:
+        """Activities retried past the point a person should know. The retry policy has
+        no cap by design (retry.py), so this is where an endless retry becomes visible."""
+        return tuple(a for a in self.pending if a.attempt > STUCK_AFTER_ATTEMPTS)
+
+
+async def position(
+    client: Client, run_id: str, *, query_timeout: float = QUERY_TIMEOUT_S
+) -> Position | None:
+    """The run's workflow as the server describes it, or None if there is no workflow.
+
+    Described by the server, so it answers with no worker alive. The progress query
+    needs a worker, so it is bounded and may come back empty.
+    """
+    handle = client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+    try:
+        description = await handle.describe()
+    except RPCError as exc:
+        if exc.status is RPCStatusCode.NOT_FOUND:
+            return None
+        raise
+    status = description.status.name if description.status is not None else "UNKNOWN"
+    progress: RunProgress | None = None
+    if status == "RUNNING":
+        try:
+            progress = await asyncio.wait_for(
+                handle.query(ExperimentWorkflow.progress), timeout=query_timeout
+            )
+        except (TimeoutError, RPCError, WorkflowQueryFailedError):
+            progress = None
+    pending = tuple(
+        PendingActivity(
+            name=info.activity_type.name,
+            attempt=info.attempt,
+            last_failure=info.last_failure.message or None,
+        )
+        for info in description.raw_description.pending_activities
+    )
+    return Position(status=status, progress=progress, pending=pending)
 
 
 async def notify_answer(client: Client, *, run_id: str, wait_id: str) -> None:

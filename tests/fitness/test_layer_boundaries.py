@@ -106,3 +106,9 @@ def test_the_readme_counts_match_what_is_actually_here() -> None:
 
     assert f"{fitness} tests" in readme, f"README does not say there are {fitness} fitness tests"
     assert f"{packages} packages" in readme, f"README does not say there are {packages} packages"
+
+    # It said "five" for as long as there were six: contract 6 arrived in T33 unannounced.
+    contracts = (root / ".importlinter").read_text().count("[importlinter:contract:")
+    spelled = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+    said = f"{spelled[contracts]} `.importlinter` contracts"
+    assert said in readme, f"README does not say there are {said}"
