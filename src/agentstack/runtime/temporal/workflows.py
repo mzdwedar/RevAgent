@@ -26,6 +26,7 @@ from agentstack.runtime.temporal.contracts import (
     ROLLOUT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
+    UNRESOLVED,
     AskIntent,
     AskResult,
     Carried,
@@ -83,6 +84,8 @@ class ExperimentWorkflow:
         self._answered: list[str] = []
         self._commits: list[CommitOutcome] = []
         self._reconciling: str | None = None
+        # How many answers to each reconcile wait the run has acted on. Replay rebuilds it.
+        self._spent: dict[str, int] = {}
         self._cycles_before = 0
 
     @workflow.run
@@ -149,15 +152,42 @@ class ExperimentWorkflow:
         The rollout is proposed in a second turn, which the gateway stops at the
         approval boundary (ALWAYS): the turn parks the wait and the run asks.
         """
-        drafted = await self._take_turn(DRAFT, cycle)
-        self._turns.append(drafted)
+        drafted = await self._settled_turn(DRAFT, cycle)
         if drafted.refusal is not None or drafted.receipts == 0:
             return
-        proposed = await self._take_turn(ROLLOUT, cycle)
-        self._turns.append(proposed)
+        proposed = await self._settled_turn(ROLLOUT, cycle)
         if proposed.wait_id is not None and cycle.experiment_version is not None:
             await self._await_approval(proposed.wait_id, cycle)
             await self._act(proposed.wait_id, cycle)
+
+    async def _settled_turn(self, stage: str, cycle: CycleResult) -> TurnOutcome:
+        """Take the turn; if it met an effect of unknown outcome, wait for the claim to be
+        settled and take the same turn again (M1).
+
+        The turn parked a reconcile wait and stopped with its checkpoint before `act`, so
+        taking it again resumes there: the proposals already made are not asked for
+        again, and the ledger answers for the one that was unknown.
+        """
+        while True:
+            outcome = await self._take_turn(stage, cycle)
+            self._turns.append(outcome)
+            if outcome.status != UNRESOLVED or outcome.wait_id is None:
+                return outcome
+            await self._reconciled(outcome.wait_id)
+
+    async def _reconciled(self, wait_id: str) -> None:
+        """Wait until someone has settled this claim and said so (`operator reconcile`).
+
+        Each answer is spent once. An act that comes back unresolved on the same wait
+        again (a wake-up nobody settled anything for) waits for a new answer instead of
+        going round again at once: the gateway would only refuse it again, and a run
+        spinning on a claim hides it rather than surfacing it.
+        """
+        spent = self._spent.get(wait_id, 0)
+        self._reconciling = wait_id
+        await workflow.wait_condition(lambda: self._answered.count(wait_id) > spent)
+        self._spent[wait_id] = spent + 1
+        self._reconciling = None
 
     async def _act(self, wait_id: str, cycle: CycleResult) -> None:
         """The answer is in: commit what it was about. Whether it may happen is the
@@ -177,11 +207,9 @@ class ExperimentWorkflow:
         while True:
             outcome = await self._commit(intent)
             self._commits.append(outcome)
-            if outcome.status != "unresolved" or outcome.wait_id is None:
+            if outcome.status != UNRESOLVED or outcome.wait_id is None:
                 return
-            self._reconciling = outcome.wait_id
-            await workflow.wait_condition(lambda: self._reconciling in self._answered)
-            self._reconciling = None
+            await self._reconciled(outcome.wait_id)
 
     async def _commit(self, intent: CommitIntent) -> CommitOutcome:
         try:

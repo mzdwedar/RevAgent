@@ -40,6 +40,13 @@ RECONCILE = "reconcile"
 # whereas how long to wait for data depends entirely on how often the data arrives.
 APPROVAL_REASK_AFTER = timedelta(hours=24)
 
+# How soon an effect of unknown outcome should have been reconciled. Short, because the
+# effect may be live (a rollout customers can already see) and the run, and every
+# trigger queued behind it, waits until someone looks. `operator stalled` reports a
+# reconcile wait from the moment it is parked, since it never resolves by waiting; past
+# this it is reported as overdue.
+RECONCILE_DUE_AFTER = timedelta(hours=1)
+
 
 @dataclass(frozen=True, slots=True)
 class Wait:
@@ -63,6 +70,9 @@ class Wait:
     # and an approval wait is asked again; neither is allowed to lapse quietly.
     deadline: datetime | None = None
     reasks: int = 0
+    # What a reconcile wait is about: the idempotency claim a person has to settle
+    # against the surface. The fingerprint says which action; this says which claim.
+    idempotency_key: str | None = None
 
 
 def approval_wait_id(run_id: str, action_fingerprint: str, state_snapshot: str) -> str:
@@ -76,12 +86,44 @@ def approval_wait_id(run_id: str, action_fingerprint: str, state_snapshot: str) 
     return f"wait-approval-{digest.hexdigest()[:24]}"
 
 
-def reconcile_wait_id(run_id: str, action_fingerprint: str) -> str:
-    """The one reconcile wait for this action in this run: a rerun parks it again, not
-    a second one. Not bound to a snapshot: what is unknown is the effect, whatever the
-    world was."""
-    digest = hashlib.sha256(f"{run_id}\n{action_fingerprint}".encode())
+def reconcile_wait_id(run_id: str, idempotency_key: str, claimed_at: datetime | None) -> str:
+    """The one reconcile wait for this claim in this run: a rerun parks it again, not a
+    second one. Not bound to a snapshot: what is unknown is the effect, whatever the world
+    was.
+
+    One per *claim*, not per action. Reconciled as not applied, the key is released and
+    the act goes again; if that attempt's answer is lost too, it is a new unknown, and it
+    needs a wait of its own. Reusing the first (already satisfied) one would read as
+    answered, and the run would spin on the claim instead of stopping for a person.
+    """
+    staked = "" if claimed_at is None else claimed_at.astimezone(UTC).isoformat()
+    digest = hashlib.sha256(f"{run_id}\n{idempotency_key}\n{staked}".encode())
     return f"wait-reconcile-{digest.hexdigest()[:24]}"
+
+
+def park_reconcile(
+    store: WaitStore,
+    *,
+    run_id: str,
+    action_fingerprint: str,
+    idempotency_key: str,
+    claimed_at: datetime | None,
+    state_snapshot: str,
+) -> Wait:
+    """Park the run on an effect of unknown outcome (E2), wherever it was met.
+
+    The turn and the commit both land here, so a reconcile wait is the same thing from
+    either: named for its claim, due `RECONCILE_DUE_AFTER` from now, and saying which
+    action and which claim a person has to settle.
+    """
+    return store.park(
+        wait_id=reconcile_wait_id(run_id, idempotency_key, claimed_at),
+        run_id=run_id,
+        kind=RECONCILE,
+        state_snapshot=state_snapshot,
+        action_fingerprint=action_fingerprint,
+        idempotency_key=idempotency_key,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +136,7 @@ class ResumeEvent:
 
 _COLUMNS = (
     "wait_id, run_id, kind, state_snapshot, created_at, satisfied, payload, "
-    "action_fingerprint, approval_summary, deadline, reasks"
+    "action_fingerprint, approval_summary, deadline, reasks, idempotency_key"
 )
 
 
@@ -112,6 +154,7 @@ class WaitStore:
         approval_summary: str | None = None,
         timeout: timedelta | None = None,
         wait_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Wait:
         """Persist a wait, due `timeout` from now.
 
@@ -122,9 +165,14 @@ class WaitStore:
         `wait_id` is for a caller that may park the same wait twice: an activity rerun
         after its first attempt landed. Parking an id that's already there returns the
         wait as it was first parked, deadline included, instead of a second one.
+
+        A reconcile wait names the claim it is about (`idempotency_key`): the person who
+        settles it has to know which one, and the database refuses one that doesn't say.
         """
         if timeout is None and kind == HUMAN_APPROVAL:
             timeout = APPROVAL_REASK_AFTER
+        if timeout is None and kind == RECONCILE:
+            timeout = RECONCILE_DUE_AFTER
         if timeout is None and kind == TRIGGER:
             raise WaitWithoutDeadline(
                 "a trigger wait needs a deadline: a trigger that never fires must "
@@ -136,8 +184,8 @@ class WaitStore:
         wait_id = wait_id or f"wait-{uuid.uuid4()}"
         row = self.db.fetch_one(
             "INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at,"
-            "  action_fingerprint, approval_summary, deadline)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            "  action_fingerprint, approval_summary, deadline, idempotency_key)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
             f" ON CONFLICT (wait_id) DO NOTHING RETURNING {_COLUMNS}",
             (
                 wait_id,
@@ -148,6 +196,7 @@ class WaitStore:
                 action_fingerprint,
                 approval_summary,
                 None if timeout is None else now + timeout,
+                idempotency_key,
             ),
         )
         if row is None:
@@ -179,10 +228,13 @@ class WaitStore:
     def stalled(self, *, now: datetime, older_than: timedelta = timedelta(0)) -> tuple[Wait, ...]:
         """Runs that will not move on their own, parked at least `older_than` before `now`.
 
-        Two kinds, reported together and told apart by `kind` because the remedies
-        differ: a trigger wait past its deadline (find out why the data never came), and
-        a run in `needs_migration` (migrate its checkpoint) - which has no deadline,
-        since it was never going to resume by waiting.
+        Three kinds, reported together and told apart by `kind` because the remedies
+        differ: a trigger wait past its deadline (find out why the data never came), a
+        run in `needs_migration` (migrate its checkpoint), which has no deadline since it
+        was never going to resume by waiting, and a `reconcile` wait (settle the claim
+        against the surface: `agentstack-operator reconcile`). A reconcile wait is
+        reported as soon as it is parked, for the same reason as a migration: nothing
+        settles it but a person. Its deadline says when it became overdue.
 
         The deadline is what makes a trigger wait stalled; `older_than` only narrows the
         report. `now` is an argument so that "a week later" is something a test can say.
@@ -190,9 +242,9 @@ class WaitStore:
         rows = self.db.fetch_all(
             f"SELECT {_COLUMNS} FROM waits"
             " WHERE NOT satisfied AND created_at <= %s"
-            "   AND ((kind = %s AND deadline <= %s) OR kind = %s)"
+            "   AND ((kind = %s AND deadline <= %s) OR kind IN (%s, %s))"
             " ORDER BY kind, deadline, created_at",
-            (now - older_than, TRIGGER, now, NEEDS_MIGRATION),
+            (now - older_than, TRIGGER, now, NEEDS_MIGRATION, RECONCILE),
         )
         return tuple(Wait(*row) for row in rows)
 

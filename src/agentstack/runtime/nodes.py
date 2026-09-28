@@ -16,13 +16,14 @@ from langgraph.runtime import Runtime
 from agentstack.context.assemble import ContextBundle
 from agentstack.context.assemble import assemble as assemble_context
 from agentstack.context.items import ContextItem, Scope, Trust
+from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.surfaces import SurfaceRefused
 from agentstack.model.contract import ExposedTool, ModelRequest
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.graph import TurnContext, TurnState
 from agentstack.runtime.snapshot import approval_snapshot
-from agentstack.runtime.waits import approval_wait_id
+from agentstack.runtime.waits import approval_wait_id, park_reconcile
 from agentstack.tools.registry import ToolNotExposed
 from agentstack.tools.validation import InvalidToolArguments
 
@@ -258,6 +259,24 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 pass
             refusals.append(str(exc))
             continue
+        except UnresolvedEffect as exc:
+            # The effect may have applied, and only the surface knows (E2). The run parks
+            # for someone to settle the claim, and nothing after this proposal runs: the
+            # turn stops here, its checkpoint still before `act`, so once the claim is
+            # settled the same turn resumes and the ledger answers for this proposal.
+            wait = park_reconcile(
+                deps.waits,
+                run_id=run.run_id,
+                action_fingerprint=request.fingerprint(),
+                idempotency_key=exc.key,
+                claimed_at=exc.claimed_at,
+                state_snapshot=state_snapshot,
+            )
+            with tracer.span("response", status="unresolved", wait=wait.wait_id):
+                pass
+            ctx.carried["pending_wait"] = wait
+            ctx.carried["pending_request"] = request
+            raise
         except (ApprovalRequired, ApprovalStale) as exc:
             summary = ApprovalPrompt(
                 spec=spec,

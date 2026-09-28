@@ -28,9 +28,12 @@ from agentstack.runtime.run import Run
 from agentstack.runtime.temporal.contracts import AskIntent
 from agentstack.runtime.waits import (
     APPROVAL_REASK_AFTER,
+    RECONCILE,
+    RECONCILE_DUE_AFTER,
     ResumeEvent,
     Wait,
     WaitWithoutDeadline,
+    park_reconcile,
     resume,
 )
 from agentstack.storage.database import Database, IntegrityViolation
@@ -250,6 +253,98 @@ def test_a_duration_without_a_known_unit_is_refused(text: str) -> None:
 
 def test_overdue_formats_hours_below_a_day() -> None:
     assert operator_cli._ago(timedelta(hours=5, minutes=59)) == "5h"
+
+
+# --- an effect of unknown outcome is watched, and a person is told to settle it --------
+#
+# Audit finding H5. A reconcile wait had no deadline (0010's CHECK named only trigger and
+# approval waits), named no claim, and `stalled` keyed on deadlines, so it never said a
+# word. The run blocked indefinitely, and so did every trigger queued behind it.
+
+
+def park_reconcile_wait(stack: Stack, run: Run) -> Wait:
+    return park_reconcile(
+        stack.waits,
+        run_id=run.run_id,
+        action_fingerprint="fp-rollout",
+        idempotency_key="rollout:acme:exp-7:v1:10",
+        claimed_at=datetime(2026, 9, 28, 12, 0, tzinfo=UTC),
+        state_snapshot="world-1",
+    )
+
+
+def test_a_reconcile_wait_is_parked_due_by_a_deadline(stack: Stack, run: Run) -> None:
+    before = datetime.now(UTC)
+    wait = park_reconcile_wait(stack, run)
+
+    assert wait.kind == RECONCILE and wait.idempotency_key == "rollout:acme:exp-7:v1:10"
+    assert wait.deadline is not None
+    assert before + RECONCILE_DUE_AFTER <= wait.deadline <= later(RECONCILE_DUE_AFTER)
+
+
+@pytest.mark.parametrize(
+    ("columns", "values", "constraint"),
+    [
+        (
+            "action_fingerprint, idempotency_key",
+            "'fp-rollout', 'rollout:acme:exp-7:v1:10'",
+            "pending_reconcile_waits_have_a_deadline",
+        ),
+        ("action_fingerprint, deadline", "'fp-rollout', now()", "reconcile_waits_name_their_claim"),
+        ("idempotency_key, deadline", "'k', now()", "reconcile_waits_name_their_claim"),
+    ],
+)
+def test_the_database_refuses_a_reconcile_wait_nobody_could_act_on(
+    app_database: Database, run: Run, columns: str, values: str, constraint: str
+) -> None:
+    """Held below the store too (migrations/0016): no deadline, or no claim to settle."""
+    with pytest.raises(IntegrityViolation) as caught:
+        app_database.execute(
+            f"INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at, {columns})"
+            f" VALUES ('wait-raw', %s, 'reconcile', 's', now(), {values})",
+            (run.run_id,),
+        )
+
+    assert caught.value.constraint == constraint
+
+
+def test_a_reconcile_wait_is_reported_from_the_moment_it_parks(stack: Stack, run: Run) -> None:
+    """Nothing settles it but a person, so it is news at once, like a migration."""
+    wait = park_reconcile_wait(stack, run)
+
+    assert [w.wait_id for w in stack.waits.stalled(now=later(timedelta(minutes=1)))] == [
+        wait.wait_id
+    ]
+
+
+def test_operator_stalled_names_the_reconcile_wait_and_how_to_settle_it(
+    stack: Stack, run: Run, app_database_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wait = park_reconcile_wait(stack, run)
+
+    code = operator_cli.main(["--url", app_database_url, "stalled"], now=later(timedelta(0)))
+
+    out = capsys.readouterr().out
+    assert code == 1, "a scheduler alerts on the exit code"
+    assert f"  reconcile  {wait.wait_id}  run {run.run_id}  tenant {TENANT}" in out
+    assert "claim rollout:acme:exp-7:v1:10" in out
+    assert f"settle: agentstack-operator reconcile {wait.wait_id}" in out
+    assert "OVERDUE" not in out
+    assert "0 stalled, 0 needs_migration, 1 reconcile, 0 unsettled" in out
+
+
+def test_past_its_deadline_a_reconcile_wait_is_overdue(
+    stack: Stack, run: Run, app_database_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    park_reconcile_wait(stack, run)
+
+    code = operator_cli.main(
+        ["--url", app_database_url, "stalled"],
+        now=later(RECONCILE_DUE_AFTER + timedelta(hours=2)),
+    )
+
+    assert code == 1
+    assert "OVERDUE 2h" in capsys.readouterr().out
 
 
 # --- an unanswered approval is asked again, never silently expired --------------------

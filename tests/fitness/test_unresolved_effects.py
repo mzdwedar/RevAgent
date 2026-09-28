@@ -17,6 +17,7 @@ never as "not yet done".
 from __future__ import annotations
 
 import threading
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -28,6 +29,7 @@ from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, build_stack, envelope_for, handle
 from agentstack.observability.spans import Tracer
 from agentstack.runtime.run import Run
+from agentstack.runtime.waits import RECONCILE, RECONCILE_DUE_AFTER, reconcile_wait_id
 from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.catalog import REFUND
 
@@ -61,11 +63,47 @@ def test_an_effect_that_applied_but_never_answered_is_not_repeated(
         handle(stack, event, scopes=SCOPES, run=run)
     assert len(stack.client.calls) == 1, "the effect applied once"
 
-    # The retry is the dangerous moment. It must refuse, not re-commit.
+    # The retry is the dangerous moment. It must not re-commit: the run is parked on the
+    # effect's reconcile wait (M1), so the next turn doesn't reach the surface at all.
     stack.client.fail_after_effect = False
-    with pytest.raises(UnresolvedEffect, match="(?i)reconcile"):
-        handle(stack, event, scopes=SCOPES, run=run)
+    retried = handle(stack, event, scopes=SCOPES, run=run)
+    assert retried.status == "blocked"
+    (parked,) = stack.waits.pending_for(run.run_id)
+    assert parked.kind == RECONCILE
     assert len(stack.client.calls) == 1, "the money left twice"
+
+
+def test_an_unresolved_effect_in_a_turn_parks_the_run_for_reconciliation(
+    stack: Stack, event: InboundEvent, run: Run
+) -> None:
+    """Audit finding M1. The claim used to stay IN_FLIGHT with nothing parked: listed by
+    `unresolved_keys()`, and invisible to anything that watches runs. It parks a
+    reconcile wait that says which action and which claim, and is due by a deadline."""
+    _approved_run(stack, event, run)
+    stack.client.fail_after_effect = True
+    before = datetime.now(UTC)
+
+    with pytest.raises(UnresolvedEffect) as unresolved:
+        handle(stack, event, scopes=SCOPES, run=run)
+
+    (wait,) = stack.waits.pending_for(run.run_id)
+    (key,) = stack.ledger.unresolved_keys()
+    assert wait.kind == RECONCILE and wait.idempotency_key == key == unresolved.value.key
+    assert wait.wait_id == reconcile_wait_id(run.run_id, key, unresolved.value.claimed_at)
+    assert wait.action_fingerprint
+    assert wait.deadline is not None
+    assert before + RECONCILE_DUE_AFTER <= wait.deadline <= datetime.now(UTC) + RECONCILE_DUE_AFTER
+
+
+def test_a_reconcile_wait_is_one_per_claim(run: Run) -> None:
+    """Released and claimed again, a key is a second attempt: its own unknown, its own
+    wait. The same claim met twice (a rerun) parks the one wait it already has."""
+    first = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
+    again = first + timedelta(seconds=1)
+
+    assert reconcile_wait_id(run.run_id, "k", first) == reconcile_wait_id(run.run_id, "k", first)
+    assert reconcile_wait_id(run.run_id, "k", first) != reconcile_wait_id(run.run_id, "k", again)
+    assert reconcile_wait_id(run.run_id, "k", first) != reconcile_wait_id(run.run_id, "j", first)
 
 
 def test_an_unresolved_effect_is_audited_so_someone_can_reconcile_it(
@@ -233,9 +271,10 @@ def test_a_restarted_process_refuses_to_retry_the_unresolved_effect(
         handle(stack, event, scopes=SCOPES, run=run)
 
     restarted = build_stack(app_database, checkpointer, tenant=TENANT)
-    with pytest.raises(UnresolvedEffect, match="(?i)reconcile"):
-        handle(restarted, event, scopes=SCOPES, run=run)
+    retried = handle(restarted, event, scopes=SCOPES, run=run)
 
+    assert retried.status == "blocked", "the run is parked on the reconcile wait, not retried"
+    assert [w.kind for w in restarted.waits.pending_for(run.run_id)] == [RECONCILE]
     assert restarted.client.calls == [], "the money left twice across a restart"
 
 

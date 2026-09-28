@@ -64,6 +64,7 @@ def run_turn(
     deps: TurnDeps,
     instructions: str = "You are a support agent. Prefer the narrowest tool that fits.",
     turn_id: str | None = None,
+    tracer: Tracer | None = None,
 ) -> TurnResult:
     """One turn, executed as a checkpointed graph (ADR-0006).
 
@@ -73,8 +74,13 @@ def run_turn(
 
     `turn_id` names the checkpoint namespace. Left unset it is unique per call, which
     is the right default for a fresh turn; passing the same one twice resumes that turn.
+
+    `tracer` is for a caller that must export the turn's spans however it ends: a turn
+    that meets an effect of unknown outcome parks the run and raises `UnresolvedEffect`,
+    and the spans that led there are the ones someone reconciling will want.
     """
-    tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
+    if tracer is None:
+        tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
     context = TurnContext(
         run=run,
         envelope=envelope,

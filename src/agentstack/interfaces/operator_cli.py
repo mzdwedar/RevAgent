@@ -11,6 +11,19 @@ is stuck retrying. A refusal left unsettled on purpose is only useful if it's se
 
 Exits 1 when anything is stalled, so a scheduler running it can alert on the exit code
 rather than on someone reading the output.
+
+Runs parked on a `reconcile` wait are listed too, on their own line, from the moment
+they park: an effect of unknown outcome (possibly a rollout customers can already see)
+is settled by nobody but a person, and the run, and every trigger queued behind it,
+waits until then. `reconcile` is how that person settles it:
+
+    uv run agentstack-operator reconcile WAIT_ID --applied RECEIPT \\
+        --operator ana@acme --reason "registry shows the rollout at 10%"
+    uv run agentstack-operator reconcile WAIT_ID --not-applied \\
+        --operator ana@acme --reason "no rollout event in the registry"
+
+It settles the claim, audits who did and why, satisfies the wait, and wakes the run.
+Running it again finishes a settlement that died halfway, and changes nothing otherwise.
 """
 
 from __future__ import annotations
@@ -19,14 +32,25 @@ import argparse
 import asyncio
 import re
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 from temporalio.client import Client
+from temporalio.service import RPCError, RPCStatusCode
 
+from agentstack.execution.idempotency import IdempotencyLedger
+from agentstack.observability.audit import AuditSink
 from agentstack.runtime.cycles import UNSETTLED_AFTER, CycleStore
+from agentstack.runtime.reconcile import ReconcileRefused, settle
 from agentstack.runtime.run import RunStore
-from agentstack.runtime.temporal.client import connect, position, temporal_address
-from agentstack.runtime.waits import NEEDS_MIGRATION, WaitStore
+from agentstack.runtime.temporal.client import (
+    TemporalUnavailable,
+    connect,
+    notify_answer,
+    position,
+    temporal_address,
+)
+from agentstack.runtime.waits import NEEDS_MIGRATION, RECONCILE, WaitStore
 from agentstack.storage.database import Database
 from agentstack.storage.pool import database_url, open_pool, redacted
 
@@ -59,6 +83,23 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
     )
     status.add_argument("run_id")
     status.add_argument("--address", default=None, help="Temporal; defaults to $TEMPORAL_ADDRESS")
+    reconcile = commands.add_parser(
+        "reconcile",
+        help="settle an effect of unknown outcome, after checking the surface, and wake its run",
+    )
+    reconcile.add_argument("wait_id", help="the reconcile wait `stalled` lists")
+    verdict = reconcile.add_mutually_exclusive_group(required=True)
+    verdict.add_argument(
+        "--applied", metavar="RECEIPT", help="the surface did apply it; its receipt for the effect"
+    )
+    verdict.add_argument(
+        "--not-applied", action="store_true", help="the surface shows it did not apply"
+    )
+    reconcile.add_argument("--operator", required=True, help="who checked the surface")
+    reconcile.add_argument("--reason", required=True, help="what the surface was found to show")
+    reconcile.add_argument(
+        "--address", default=None, help="Temporal; defaults to $TEMPORAL_ADDRESS"
+    )
     parser.add_argument("--url", default=None, help="database URL; defaults to $DATABASE_URL")
     args = parser.parse_args(argv)
 
@@ -70,6 +111,19 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
         with open_pool(url, min_size=1, max_size=2) as pool:
             return asyncio.run(
                 _status(Database(pool=pool), args.run_id, args.address or temporal_address())
+            )
+    if args.command == "reconcile":
+        address = args.address or temporal_address()
+        with open_pool(url, min_size=1, max_size=2) as pool:
+            return asyncio.run(
+                reconcile_report(
+                    lambda: connect(address),
+                    Database(pool=pool),
+                    wait_id=args.wait_id,
+                    receipt=args.applied,
+                    operator=args.operator,
+                    reason=args.reason,
+                )
             )
 
     with open_pool(url, min_size=1, max_size=2) as pool:
@@ -84,6 +138,19 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
                 print(
                     f"  {NEEDS_MIGRATION}  {where}  parked {_ago(now - wait.created_at)} ago  "
                     f"checkpoint {wait.state_snapshot}"
+                )
+                continue
+            if wait.kind == RECONCILE:
+                assert wait.deadline is not None  # pending_reconcile_waits_have_a_deadline
+                due = (
+                    f"OVERDUE {_ago(now - wait.deadline)}"
+                    if wait.deadline <= now
+                    else f"due {wait.deadline:%Y-%m-%d %H:%M%z}"
+                )
+                print(
+                    f"  {RECONCILE}  {where}  parked {_ago(now - wait.created_at)} ago  "
+                    f"{due}  claim {wait.idempotency_key}  "
+                    f"settle: agentstack-operator reconcile {wait.wait_id}"
                 )
                 continue
             assert wait.deadline is not None  # a stalled trigger wait is one past its deadline
@@ -101,11 +168,61 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
             )
 
     migrations = sum(1 for w in waits if w.kind == NEEDS_MIGRATION)
+    reconciling = sum(1 for w in waits if w.kind == RECONCILE)
     print(
-        f"{len(waits) - migrations} stalled, {migrations} {NEEDS_MIGRATION}, "
-        f"{len(cycles)} unsettled"
+        f"{len(waits) - migrations - reconciling} stalled, {migrations} {NEEDS_MIGRATION}, "
+        f"{reconciling} {RECONCILE}, {len(cycles)} unsettled"
     )
     return 1 if waits or cycles else 0
+
+
+async def reconcile_report(
+    connect_to: Callable[[], Awaitable[Client]],
+    db: Database,
+    *,
+    wait_id: str,
+    receipt: str | None,
+    operator: str,
+    reason: str,
+) -> int:
+    """Settle the claim in the record, then wake the run. `receipt` None: not applied.
+
+    The record comes first and is complete on its own (layer 3 decides, in `settle`): a
+    run whose wake-up is lost is woken by running this again, which changes nothing else.
+    Exits 1 when the settlement is refused or the run could not be woken.
+    """
+    try:
+        settled = settle(
+            runs=RunStore(db=db),
+            waits=WaitStore(db=db),
+            ledger=IdempotencyLedger(db=db),
+            audit=AuditSink(db=db),
+            wait_id=wait_id,
+            applied=receipt is not None,
+            receipt=receipt,
+            operator=operator,
+            reason=reason,
+        )
+    except ReconcileRefused as exc:
+        print(f"refused  {exc}")
+        return 1
+    verdict = "applied" if settled.applied else "not applied"
+    news = "settled" if settled.changed else "already settled"
+    print(f"record   {settled.wait.wait_id}  {news} as {verdict}  run {settled.run.run_id}")
+    try:
+        await notify_answer(
+            await connect_to(), run_id=settled.run.run_id, wait_id=settled.wait.wait_id
+        )
+    except TemporalUnavailable as exc:
+        print(f"position not woken: {exc}. Run this command again to wake it.")
+        return 1
+    except RPCError as exc:
+        if exc.status is not RPCStatusCode.NOT_FOUND:
+            raise
+        print("position no workflow for this run; its next turn finds the wait satisfied")
+        return 0
+    print("position woken; the run acts again and the ledger answers")
+    return 0
 
 
 async def _status(db: Database, run_id: str, address: str) -> int:

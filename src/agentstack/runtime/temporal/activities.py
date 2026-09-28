@@ -47,6 +47,7 @@ from agentstack.runtime.temporal.contracts import (
     ROLLOUT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
+    UNRESOLVED,
     AskIntent,
     AskResult,
     CommitIntent,
@@ -62,11 +63,11 @@ from agentstack.runtime.temporal.contracts import (
 )
 from agentstack.runtime.waits import (
     APPROVAL_REASK_AFTER,
-    RECONCILE,
     TRIGGER,
     ResumeEvent,
     Wait,
     WaitStore,
+    park_reconcile,
     reconcile_wait_id,
     resume,
 )
@@ -273,16 +274,28 @@ class RunActivities:
             return _outcome(done)
 
         message = self._instruction(intent, run, cycle)
-        with _heartbeating():
-            result = take_turn(
-                run=run,
-                envelope=turns.envelope(run),
-                message=message,
-                deps=turns.deps,
-                turn_id=turn_id,
+        tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=turns.deps.versions)
+        try:
+            with _heartbeating():
+                result = take_turn(
+                    run=run,
+                    envelope=turns.envelope(run),
+                    message=message,
+                    deps=turns.deps,
+                    turn_id=turn_id,
+                    tracer=tracer,
+                )
+        except UnresolvedEffect as unresolved:
+            # The turn parked the run on a reconcile wait and stopped before `act`
+            # finished, so its checkpoint still resumes there. The workflow waits for the
+            # claim to be settled, then takes this same turn again (M1).
+            return TurnOutcome(
+                status=UNRESOLVED,
+                wait_id=reconcile_wait_id(run.run_id, unresolved.key, unresolved.claimed_at),
             )
-        # Tagged with this run and its session, as every span is: never with Temporal's ids.
-        self._traces.export(result.tracer.spans)
+        finally:
+            # Tagged with this run and its session, as every span is: never Temporal's ids.
+            self._traces.export(tracer.spans)
         turns.record(run, asked=message, answered=result.text)
         return TurnOutcome(
             status=result.status,
@@ -404,15 +417,16 @@ class RunActivities:
                 state_snapshot=world_snapshot(request.resource, world),
                 tracer=tracer,
             )
-        except UnresolvedEffect:
-            parked = self._waits.park(
-                wait_id=reconcile_wait_id(run.run_id, request.fingerprint()),
+        except UnresolvedEffect as unresolved:
+            parked = park_reconcile(
+                self._waits,
                 run_id=run.run_id,
-                kind=RECONCILE,
-                state_snapshot=world_snapshot(request.resource, world),
                 action_fingerprint=request.fingerprint(),
+                idempotency_key=unresolved.key,
+                claimed_at=unresolved.claimed_at,
+                state_snapshot=world_snapshot(request.resource, world),
             )
-            return CommitOutcome(status="unresolved", wait_id=parked.wait_id)
+            return CommitOutcome(status=UNRESOLVED, wait_id=parked.wait_id)
         return CommitOutcome(status="deduplicated" if result.deduplicated else "committed")
 
     def _approved(

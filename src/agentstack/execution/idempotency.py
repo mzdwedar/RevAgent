@@ -66,7 +66,10 @@ class IdempotencyLedger:
         assert row is not None  # the upsert always returns exactly one row
         claimed_at, receipt, inserted = row
         if inserted:
-            return Claim(ClaimState.FRESH)
+            # When it was staked names this claim: a reconcile wait for it is one per
+            # claim, not one per key, because a key released and claimed again is a
+            # second attempt whose outcome can be unknown in its own right.
+            return Claim(ClaimState.FRESH, claimed_at=claimed_at)
         if receipt is not None:
             return Claim(ClaimState.COMMITTED, receipt=receipt)
         return Claim(ClaimState.IN_FLIGHT, claimed_at=claimed_at)
@@ -89,6 +92,40 @@ class IdempotencyLedger:
         from a lost response.
         """
         self.db.execute("DELETE FROM idempotency_claims WHERE key = %s", (key,))
+
+    def inspect(self, key: str) -> Claim | None:
+        """What the ledger says about `key`, without staking it. None: nobody holds it."""
+        row = self.db.fetch_one(
+            "SELECT claimed_at, receipt FROM idempotency_claims WHERE key = %s", (key,)
+        )
+        if row is None:
+            return None
+        claimed_at, receipt = row
+        if receipt is not None:
+            return Claim(ClaimState.COMMITTED, receipt=receipt, claimed_at=claimed_at)
+        return Claim(ClaimState.IN_FLIGHT, claimed_at=claimed_at)
+
+    def reconcile(self, key: str, *, receipt: str | None) -> bool:
+        """Settle an unresolved claim with what the surface was found to have done.
+
+        `receipt` is what the surface says it did; `None` means someone checked and it did
+        not apply, which releases the key like `abandon`. Only an unresolved claim moves:
+        the condition is in the same statement as the change, so two reconcilers racing
+        (one saying applied, one not) cannot both win, and a claim the gateway already
+        settled is never overwritten. True when this call settled it.
+        """
+        if receipt is not None:
+            row = self.db.fetch_one(
+                "UPDATE idempotency_claims SET receipt = %s, settled_at = now()"
+                " WHERE key = %s AND receipt IS NULL RETURNING key",
+                (receipt, key),
+            )
+        else:
+            row = self.db.fetch_one(
+                "DELETE FROM idempotency_claims WHERE key = %s AND receipt IS NULL RETURNING key",
+                (key,),
+            )
+        return row is not None
 
     def recorded(self, key: str) -> str | None:
         row = self.db.fetch_one("SELECT receipt FROM idempotency_claims WHERE key = %s", (key,))
