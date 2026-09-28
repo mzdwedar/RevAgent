@@ -24,7 +24,13 @@ from tests.fitness.replay_mutants import StepInsertedBehindPatch, StepInsertedUn
 ROOT = Path(__file__).resolve().parents[2]
 
 # The paths the histories cover. Deleting one is ask-first (SPEC-durable-runtime.md).
-RECORDED = {"trigger_cycles", "approved_commit", "refused_at_the_act", "unresolved_reconciled"}
+RECORDED = {
+    "trigger_cycles",
+    "approved_commit",
+    "refused_at_the_act",
+    "unresolved_reconciled",
+    "draft_unresolved_reconciled",
+}
 
 
 @functools.cache
