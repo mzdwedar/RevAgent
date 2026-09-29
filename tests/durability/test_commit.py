@@ -141,7 +141,11 @@ def held(parked: RunProgress, stack: Stack, **changes: Any) -> dict[str, Any]:
         experiment_version=parked.cycles[0].experiment_version or "",
     )
     assert cohort is not None
-    return intended_rollout(cohort) | changes
+    history = stack.registry_client.read(
+        f"acme/experiments/{parked.cycles[0].experiment_id}/history", {}
+    )
+    prior_rollout_event = history["latest_rollout_event"]
+    return intended_rollout(cohort, prior_rollout_event=prior_rollout_event) | changes
 
 
 @pytest.mark.parametrize(

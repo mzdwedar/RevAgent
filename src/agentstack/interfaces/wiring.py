@@ -7,6 +7,7 @@ the backend chosen in ADR-0002 is a change to this file and to nothing else.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -53,7 +54,7 @@ from agentstack.runtime.waits import Wait, WaitStore
 from agentstack.storage.database import Database
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.catalog import build_registry
-from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT_STAGE
+from agentstack.tools.experiments import DRAFT_STAGE, EVALUATION_STAGE, ROLLOUT_STAGE
 from agentstack.tools.spec import ActsAs, Surface
 
 VERSIONS = VersionStamp(
@@ -63,6 +64,11 @@ VERSIONS = VersionStamp(
     policy="policy-v1",
     retrieval="static-v1",
 )
+
+# How many earlier reads a turn is shown. A handful, most recent: enough to act on what
+# was just read, not so many that old reads crowd out the question (list reads are
+# themselves capped at 50 rows).
+OBSERVATIONS_IN_CONTEXT = 5
 
 
 @dataclass(slots=True)
@@ -235,12 +241,24 @@ def handle(
             channel=event.channel,
         )
     )
+    earlier = stack.transcripts.recent(
+        view.session_id, kind="observation", limit=OBSERVATIONS_IN_CONTEXT
+    )
     result = run_turn(
         run=run,
         envelope=envelope_for(view, scopes=scopes),
         message=event.text,
         deps=stack.deps,
+        observations=[(e.body, e.at) for e in earlier],
     )
+    # What the turn read is part of the record before it is part of any prompt: the
+    # transcript holds it, and the next turn's context is derived from there.
+    for observation in result.observations:
+        stack.transcripts.append(
+            session_id=view.session_id,
+            kind="observation",
+            body=json.dumps(observation, sort_keys=True),
+        )
     stack.transcripts.append(session_id=view.session_id, kind="agent", body=result.text)
     return result
 
@@ -320,11 +338,14 @@ async def deliver(
     return start.run_id
 
 
-# The one scope each stage's turn is given. A drafting turn can write a draft and cannot
-# roll anything out, whatever it is shown or asks for: least privilege per act.
+# The scopes each stage's turn is given. A drafting turn can write a draft and cannot
+# roll anything out, whatever it is shown or asks for: least privilege per act. An
+# evaluation turn may abstain or halt - divergent branches from one trigger, not a
+# sequence - so it carries both, never a scope from a stage it is not in.
 STAGE_SCOPES: dict[str, frozenset[str]] = {
-    DRAFT_STAGE: frozenset({"experiments:write"}),
+    DRAFT_STAGE: frozenset({"experiments:draft"}),
     ROLLOUT_STAGE: frozenset({"experiments:rollout"}),
+    EVALUATION_STAGE: frozenset({"experiments:annotate", "experiments:halt"}),
 }
 
 

@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from itertools import permutations
+from typing import Any
+
 import grimp
+import pytest
 
 from agentstack.execution.gateway import Gateway
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, envelope_for, handle
 from agentstack.observability.spans import Tracer
 from agentstack.runtime.run import Run
-from agentstack.tools.catalog import REFUND
+from agentstack.tools.catalog import REFUND, build_registry
+from agentstack.tools.spec import ToolSpec
 
 from .conftest import SCOPES, approve_and_resume
 
@@ -92,3 +97,50 @@ def test_no_key_can_be_derived_from_temporal_identity() -> None:
     assert not graph.chain_exists(
         importer="agentstack.tools", imported="temporalio", as_packages=True
     ), f"agentstack.tools reaches temporalio: {chain}"
+
+
+# --- the key identifies one effect ---
+
+# Two ways to split one string across two ids. `:` is a legal id character, so a key
+# that joins its parts with `:` cannot tell `a` + `b:c` from `a:b` + `c` - and the
+# ledger answers the second effect with the first one's receipt, before the surface
+# is ever called. Found by the registry stack audit: experiment `exp-7` at version
+# `exp:H` and experiment `exp-7:exp` at version `H` shared a halt key.
+_SPLITS = (("a", "b:c"), ("a:b", "c"))
+_REGISTRY = build_registry()
+
+
+def _baseline(spec: ToolSpec) -> dict[str, Any]:
+    arguments: dict[str, Any] = {}
+    for index, (name, declared) in enumerate(spec.input_schema["properties"].items()):
+        if "enum" in declared:
+            arguments[name] = declared["enum"][0]
+        elif declared["type"] == "string":
+            arguments[name] = f"m{index}x"
+        elif declared["type"] == "integer":
+            arguments[name] = declared.get("minimum", 1)
+        else:
+            arguments[name] = 0.5
+    return arguments
+
+
+@pytest.mark.parametrize("spec", _REGISTRY.specs(), ids=lambda s: s.name)
+def test_two_valid_requests_for_different_effects_never_share_a_key(spec: ToolSpec) -> None:
+    """Held over the whole catalog: a key is the effect's identity, so it must be
+    injective over every argument set validation lets through."""
+    ids = [n for n, d in spec.input_schema["properties"].items() if d.get("format") == "id"]
+    for first, second in permutations(ids, 2):
+        requests = [
+            _REGISTRY.prepare(
+                spec.name,
+                {**_baseline(spec), first: x, second: y},
+                exposed=_REGISTRY.specs(),
+            )
+            for x, y in _SPLITS
+        ]
+        left, right = requests
+        if (left.resource, left.payload) != (right.resource, right.payload):
+            assert left.idempotency_key != right.idempotency_key, (
+                f"{spec.name}: {first}/{second} split differently name different effects "
+                f"({left.resource} vs {right.resource}) under one key {left.idempotency_key!r}"
+            )

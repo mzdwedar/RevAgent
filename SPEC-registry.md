@@ -1,6 +1,6 @@
 # Spec: Experiment Registry and its tools
 
-Status: **approved** (revision 2)
+Status: **approved** (revision 3: built, T22–T31; see § Revised in the build)
 Date: 2026-09-24
 Parent: `SPEC.md` (Experiment Operator, revision 10). This is a sub-spec of that one
 capability, not a new module: the registry's only consumer is still the run
@@ -107,14 +107,16 @@ model's good behaviour.
 | `get_experiment` | `tenant`, `experiment_id` |
 | `list_experiments` | `tenant`, `status` (enum of the four states, optional), `limit` (integer, 1–50, default 20) |
 | `get_rollout_history` | `tenant`, `experiment_id` |
-| `revise_draft_hypothesis` | `tenant`, `experiment_id`, `experiment_version`, `hypothesis` |
+| `revise_draft_hypothesis` | `tenant`, `experiment_id`, `experiment_version`, `hypothesis`, `prior_revision` (integer ≥ 1) |
 | `discard_experiment_draft` | `tenant`, `experiment_id`, `experiment_version`, `reason` |
-| `record_abstention` | `tenant`, `experiment_id`, `experiment_version`, `explanation` |
+| `record_abstention` | `tenant`, `experiment_id`, `experiment_version`, `explanation`, `prior_event` (integer ≥ 0) |
 | `halt_rollout` | `tenant`, `experiment_id`, `experiment_version`, `reason` |
+| `roll_out_variant_to_percentage` | `tenant`, `experiment_id`, `experiment_version`, `percentage`, `targeting_model_version`, `risk_threshold`, `prior_rollout_event` (integer ≥ 0) |
 
 Every write names `experiment_version`, so a call prepared against one frozen cohort
 cannot land on a different one. Unknown arguments are refused by the existing
-validator (`tools/validation.py`).
+validator (`tools/validation.py`). The three `prior_*` arguments are added by the C2
+fix (§ Revised in the build).
 
 ---
 
@@ -144,7 +146,7 @@ uv run python scripts/stack_guard.py --base main
 migrations/0012_experiment_registry.{up,down}.sql   the four tables below
 src/agentstack/tools/experiments.py                 ToolSpecs + prepare_* for all 9 tools
 src/agentstack/tools/catalog.py                     registers them (no logic)
-src/agentstack/policy/precommit.py                  + halt_only_zeroes check
+src/agentstack/policy/decisions.py                  + bound_to: tool/surface/verb/fixed-payload binding (see below)
 src/agentstack/execution/surfaces.py                + PostgresRegistryClient (via storage pool)
 src/agentstack/interfaces/wiring.py                 selects the Postgres client
 tests/fitness/test_registry_tools.py                narrowness, exposure matrix, scopes
@@ -168,7 +170,8 @@ tests/infra/test_registry_store.py                  preconditions, atomicity, id
 - **No `idempotency_key` column.** `SurfaceClient.commit(resource, payload)` never
   receives the key. The store instead holds unique what the key is made of: kind +
   payload per version (`one_row_per_effect`), wording per version
-  (`one_row_per_revision`).
+  (`one_row_per_revision`). *Superseded by the C2 fix:* those are target identities,
+  and the store now holds unique the state a move starts from (`migrations/0015`).
 - **No `run_id` / `approval_id` columns.** Who did what, under which approval, is the
   audit trail's record (`audit.records`); the registry is what exists. The registry is
   also not hung off `sessions`, so an experiment customers saw outlives the session
@@ -260,7 +263,7 @@ Coverage bar unchanged (changed lines ≥ 80%).
 | 5 Context | yes, small | registry read results enter context as `trust=untrusted` (hypothesis prose is model-authored) | `test_untrusted_content.py` (extended) |
 | 6 Tools | **yes** | seven new `ToolSpec`s, three stages, five scopes | `test_tool_registry.py`, `test_registry_tools.py` |
 | 7 Execution | **yes** | `PostgresRegistryClient`: guarded writes, insert-only history, reads | `test_capability_is_not_execution.py`, `test_registry_store.py` |
-| 8 Policy | yes | `halt_only_zeroes` pre-commit check | `test_approval_tiers.py` |
+| 8 Policy | yes | `halt_only_zeroes`, in `decide` (§ Revised in the build) | `test_approval_tiers.py` |
 | 9 Observability | yes, inherited | every write already audited by the gateway; reads get an `execution.read` span | `test_trace_completeness.py` |
 | 10 Infrastructure | yes | migrations `0011` (stage remap) and `0012` (registry) | `tests/infra` |
 
@@ -322,13 +325,118 @@ Coverage bar unchanged (changed lines ≥ 80%).
 
 ## Open Questions
 
+All three are answered. The question text is kept with each answer, so the record
+shows what was asked.
+
 1. **Runs already on `stage='experiment'`.** Default: a data migration maps them to
    `draft` (the only thing that stage legitimately did before rollout approval), with
    the change noted for `checkpoint_guard`. The alternative is to park them loudly as
    `needs_migration`.
+   **Answered (T22):** `migrations/0011_split_experiment_stage` remaps them to `draft`.
+   The down migration folds the three stages back into one and says it is lossy.
 2. **A precondition miss after an idempotency claim.** Default: the surface raises
    `RegistryConflict`, the gateway finalizes the claim as `refused` (not `unresolved`),
    and the turn gets a tool error it can explain. This needs a small gateway change;
    confirm it belongs in this work.
+   **Answered (T24):** the surface raises `SurfaceRefused`, and the gateway calls
+   `IdempotencyLedger.abandon` rather than finalizing. A refused key must stay free
+   for the later legitimate call. The refusal is audited `refused`, and the turn
+   answers with a `tool.reject`.
 3. **Should `record_abstention` also be exposed on `metric_movement` cycles?** Default:
    yes. `SPEC.md` lets those cycles abstain, and the note is the explanation.
+   **Answered (T28):** yes, by construction. The tool is on the `evaluation` stage, and
+   nothing ties a stage to a trigger kind, so an evaluation run can record an
+   abstention whichever trigger woke it.
+
+## Revised in the build (T26–T30)
+
+What changed against revision 2, and why. Each item is also in `tasks/todo.md` under
+its task.
+
+- **The resource table.** Each resource serves exactly the verbs listed. Anything else
+  is `SurfaceRefused`. The list read uses the trailing-slash collection, which the
+  existing `{tenant}/experiments/` sandbox prefix already covers.
+
+  | Resource | Verb | Tool |
+  |---|---|---|
+  | `{t}/experiments/` | read | `list_experiments` |
+  | `{t}/experiments/{e}` | read / commit | `get_experiment` / `create_experiment_draft` |
+  | `{t}/experiments/{e}/history` | read | `get_rollout_history` |
+  | `{t}/experiments/{e}/rollout` | commit | `roll_out_variant_to_percentage` |
+  | `{t}/experiments/{e}/revision` | commit | `revise_draft_hypothesis` |
+  | `{t}/experiments/{e}/discard` | commit | `discard_experiment_draft` |
+  | `{t}/experiments/{e}/abstention` | commit | `record_abstention` |
+  | `{t}/experiments/{e}/halt` | commit | `halt_rollout` |
+
+- **`halt_only_zeroes` is in `decide`, not in the `PRE_COMMIT` rule set.** In the rule
+  set, a refusal escalates the run to a human, and an existing grant skips the rules
+  altogether. A person approving a hand-built "halt to 5%" would have got it through.
+  In `decide`, which runs first on every call, a non-zero halt is `PolicyDenied`,
+  audited `denied` / `halt.only_zeroes`, and no approval changes that. Criterion 6
+  holds more strongly than it was written.
+  *Superseded by the C1/H2 fix:* the tool-specific check became a declaration.
+  `HALT.fixed_payload = {"percentage": Fixed(0, …)}`, and `policy.decisions.bound_to`,
+  which the gateway runs before `decide` and before approval, denies any request that
+  varies a fixed value, audited `denied` / `binding.payload`. The guarantee is
+  unchanged; the rule is no longer a `spec.name ==` branch inside generic policy.
+- **A request is held to its spec (H2), and an id is one segment (C1).** The registry
+  reads the act from a resource's last segment. `format: id` was declared and never
+  enforced, so `experiment_id=exp-9/rollout` made a draft a rollout; and the gateway
+  never compared a request with the spec it was authorised under, so a rollout request
+  presented beside the abstention spec committed on the annotate scope. Now: the
+  validator enforces `format` (an id is `[A-Za-z0-9][A-Za-z0-9._:-]*`); each spec declares
+  a `verb`; `bound_to` denies a mismatched tool, surface, verb or fixed value
+  (`binding.tool` / `.surface` / `.verb` / `.payload`); both clients hold each verb's
+  payload to its exact shape; and `migrations/0014` puts the percentages in the store.
+- **Reads reach the model.** A read used to stop at `TurnResult.observations`. The
+  Boundary Decisions row "registry reads are observations appended to the transcript"
+  is now true: `handle` appends each read as `kind="observation"`, and the next turn
+  shows the last five as `trust=untrusted`, with the surface and resource as
+  provenance.
+- **Declared bounds are enforced.** `tools/validation.py` checks `enum`, `minimum` and
+  `maximum`. Without that, `list_experiments`' 1–50 limit would have been decoration.
+- **`create_experiment_draft`'s scope** is `experiments:draft`, as the tools table
+  says. It was `experiments:write` until T27.
+- **A blank revision is a refusal.** The store's `revision_says_something` check fails
+  the statement whole, so nothing applied. It would otherwise have stranded the claim
+  as an unresolved effect.
+- **A write is keyed on the state it moves from (audit C2).** Keys and store indexes
+  were the target: `rollout:{t}:{e}:{v}:{pct}`, `revise:…:{digest}`,
+  `abstain:…:{digest}`, and `one_row_per_effect` / `one_row_per_revision` on the
+  payload and wording. A target can be reached twice, so a human-approved ramp-down
+  10 → 25 → 10 came back `deduplicated` with the first receipt at 25%; a draft
+  reworded A → B → A stayed at B; and a later cycle abstaining "insufficient sample"
+  left no record. Now each of the three names its prior, read back from a registry
+  read, because a `prepare_*` does no I/O:
+
+  | Tool | Prior argument | Read from | Key |
+  |---|---|---|---|
+  | rollout | `prior_rollout_event` | `get_rollout_history.latest_rollout_event` (0: none) | `rollout:{t}:{e}:{v}:{prior}:{pct}:{digest(model@threshold)}` |
+  | revise | `prior_revision` | `get_experiment.revision_no` | `revise:{t}:{e}:{v}:{prior}:{digest(hypothesis)}` |
+  | abstain | `prior_event` | `get_rollout_history.latest_event` (0: none) | `abstain:{t}:{e}:{v}:{prior}:{digest(explanation)}` |
+
+  The target stays in the key after the prior, so two writes prepared against one
+  state are two keys: one lands, the other is `SurfaceRefused`, never handed the
+  first's receipt. The history read gives each event its `event_id`. `migrations/0015`
+  adds `registry_events.follows`, replaces `one_row_per_effect` with
+  `one_rollout_per_prior`, `one_abstention_per_prior` and `one_ending_per_version`,
+  and drops `one_row_per_revision` (a revision's prior is its `revision_no - 1`, so
+  the primary key already forks at most once). Each write's `WHERE` checks the prior is
+  still the latest; the indexes refuse the second of two racing statements. When a
+  write matches nothing and the exact move is already on record, the surface answers
+  with its receipt (audit M4) instead of refusing an effect it can prove applied.
+  Halt and discard are unchanged: each ends a version once.
+
+  *Why not the trigger cycle for abstentions:* a cycle is `(experiment, data_as_of,
+  kind)` in `trigger_cycles`, and nothing links an evaluation run to it - `runs` has
+  no cycle id and the model is never shown one. A cycle id the model typed would be an
+  unchecked claim; the history position is one the store can check.
+
+  *Parked runs:* a rollout proposal checkpointed before this change has no
+  `prior_rollout_event`. On resume the validator refuses it (`tool.reject`) - the
+  approval it waited on named no starting state, so nothing commits under it. It is
+  not a `TurnState` change, so `checkpoint_guard` has nothing to flag; the run ends
+  rejected and must be proposed again.
+- **Still open:** redrafting an existing experiment id under a new version (assumption
+  6's relaunch path). `create_experiment_draft` refuses any experiment id that already
+  exists, and no tool owns relaunching yet (T25).

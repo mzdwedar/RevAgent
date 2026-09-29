@@ -609,6 +609,7 @@ visible as a change rather than a discovery.
 | Concurrency target | designed for hundreds, verified at 100 |
 | Approver group | one per tenant; policy checks the *acting* tenant's group |
 | Registry consumers | none outside this run — stays one capability |
+| Registry store and tools | Postgres (`migrations/0012`) and nine narrow tools, each one thing to one experiment in one state (`SPEC-registry.md`) |
 
 ---
 

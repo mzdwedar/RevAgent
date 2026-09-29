@@ -16,8 +16,27 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agentstack.tools.action import ActionRequest
-from agentstack.tools.experiments import DRAFT, ROLLOUT, prepare_draft, prepare_rollout
+from agentstack.tools.action import ActionRequest, idempotency_key
+from agentstack.tools.experiments import (
+    ABSTAIN,
+    DISCARD,
+    DRAFT,
+    GET,
+    HALT,
+    HISTORY,
+    LIST,
+    REVISE,
+    ROLLOUT,
+    prepare_abstain,
+    prepare_discard,
+    prepare_draft,
+    prepare_get,
+    prepare_halt,
+    prepare_history,
+    prepare_list,
+    prepare_revise,
+    prepare_rollout,
+)
 from agentstack.tools.registry import Registry
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 
@@ -26,7 +45,11 @@ LOOKUP = ToolSpec(
     description="Read one customer's current subscription state.",
     input_schema={
         "type": "object",
-        "properties": {"tenant": {"type": "string"}, "customer_id": {"type": "string"}},
+        # Both become segments of the resource path, so both are single-segment ids.
+        "properties": {
+            "tenant": {"type": "string", "format": "id"},
+            "customer_id": {"type": "string", "format": "id"},
+        },
         "required": ["tenant", "customer_id"],
     },
     acts_as=ActsAs.DELEGATED,
@@ -74,7 +97,7 @@ def _lookup(arguments: Mapping[str, Any]) -> ActionRequest:
         surface=LOOKUP.surface,
         resource=f"{tenant}/customers/{customer}/subscription",
         payload={},
-        idempotency_key=f"lookup:{tenant}:{customer}",
+        idempotency_key=idempotency_key("lookup", tenant, customer),
     )
 
 
@@ -90,7 +113,7 @@ def _refund(arguments: Mapping[str, Any]) -> ActionRequest:
         payload={"amount_cents": amount},
         # The key is the business identity of the effect, not a random uuid:
         # a retry has to produce the same key or it is not a retry.
-        idempotency_key=f"refund:{tenant}:{charge}:{amount}",
+        idempotency_key=idempotency_key("refund", tenant, charge, amount),
     )
 
 
@@ -108,4 +131,11 @@ def build_registry() -> Registry:
     registry.register(REFUND, _refund)
     registry.register(DRAFT, prepare_draft)
     registry.register(ROLLOUT, prepare_rollout)
+    registry.register(GET, prepare_get)
+    registry.register(LIST, prepare_list)
+    registry.register(HISTORY, prepare_history)
+    registry.register(REVISE, prepare_revise)
+    registry.register(DISCARD, prepare_discard)
+    registry.register(ABSTAIN, prepare_abstain)
+    registry.register(HALT, prepare_halt)
     return registry

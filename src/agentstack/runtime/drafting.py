@@ -45,12 +45,15 @@ def estimated_customers(cohort: FrozenCohort, percentage: int = ROLLOUT_PERCENTA
     return round(cohort.size * percentage / 100)
 
 
-def intended_rollout(cohort: FrozenCohort) -> dict[str, Any]:
+def intended_rollout(cohort: FrozenCohort, *, prior_rollout_event: int) -> dict[str, Any]:
     """The rollout the record says this cohort gets, as the tool's arguments.
 
-    Every value is the record's: the frozen cohort's own identity and predicate, and the
-    percentage SPEC.md sets. Nothing here was chosen by a model, so it is what a proposal
-    is held to, and what the instruction tells the model to propose.
+    Every value is the record's: the frozen cohort's own identity and predicate, the
+    percentage SPEC.md sets, and the registry's own compare-and-set key for its next
+    rollout event (C2), read by the caller so this stays a function of the record and
+    not an importer of the execution surface it reads. Nothing here was chosen by a
+    model, so it is what a proposal is held to, and what the instruction tells the
+    model to propose.
     """
     return {
         "tenant": cohort.tenant,
@@ -59,10 +62,13 @@ def intended_rollout(cohort: FrozenCohort) -> dict[str, Any]:
         "percentage": ROLLOUT_PERCENTAGE,
         "targeting_model_version": cohort.targeting_model_version,
         "risk_threshold": cohort.risk_threshold,
+        "prior_rollout_event": prior_rollout_event,
     }
 
 
-def rollout_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | None:
+def rollout_deviation(
+    request: ActionRequest, cohort: FrozenCohort, *, prior_rollout_event: int
+) -> str | None:
     """Why `request` is not the rollout the frozen cohort gets, or None if it is.
 
     The model is told the arguments; it is not trusted to have used them. Its proposal
@@ -72,7 +78,7 @@ def rollout_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | Non
     cohort's version - is refused here, before a person is asked about it, rather than
     headlined as the rollout they would expect.
     """
-    intended = prepare_rollout(intended_rollout(cohort))
+    intended = prepare_rollout(intended_rollout(cohort, prior_rollout_event=prior_rollout_event))
     if request.fingerprint() == intended.fingerprint():
         return None
     differs = sorted(
@@ -92,14 +98,14 @@ def rollout_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | Non
 
 
 def rollout_admission(
-    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str
+    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str, prior_rollout_event: int
 ) -> Admission:
     """An `Admission` for a rollout turn: the frozen cohort's rollout, or a refusal that is
     written to the audit trail, because a proposal stopped before anyone saw it is exactly
     what someone will later ask about."""
 
     def admit(request: ActionRequest) -> str | None:
-        reason = rollout_deviation(request, cohort)
+        reason = rollout_deviation(request, cohort, prior_rollout_event=prior_rollout_event)
         if reason is not None:
             audit.write(
                 run_id=run.run_id,
@@ -117,11 +123,15 @@ def rollout_admission(
     return admit
 
 
-def rollout_instruction(*, experiment_id: str, cohort: FrozenCohort) -> str:
+def rollout_instruction(
+    *, experiment_id: str, cohort: FrozenCohort, prior_rollout_event: int
+) -> str:
     """The rollout turn is told the action exactly. Every argument comes from the record:
     the frozen cohort's predicate travels in the payload, because a rollout is to *this*
     cohort. The model proposes it; layer 8 decides it, with a person in the loop."""
-    told = intended_rollout(cohort) | {"experiment_id": experiment_id}
+    told = intended_rollout(cohort, prior_rollout_event=prior_rollout_event) | {
+        "experiment_id": experiment_id
+    }
     return (
         "The experiment is drafted. Propose its rollout by calling "
         f"roll_out_variant_to_percentage with tenant={told['tenant']} "
@@ -129,8 +139,9 @@ def rollout_instruction(*, experiment_id: str, cohort: FrozenCohort) -> str:
         f"experiment_version={told['experiment_version']} "
         f"percentage={told['percentage']} "
         f"targeting_model_version={told['targeting_model_version']} "
-        f"risk_threshold={told['risk_threshold']!r} exactly as given. A person approves it "
-        "before it happens."
+        f"risk_threshold={told['risk_threshold']!r} "
+        f"prior_rollout_event={told['prior_rollout_event']} exactly as given. A person "
+        "approves it before it happens."
     )
 
 

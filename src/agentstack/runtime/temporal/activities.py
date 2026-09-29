@@ -81,7 +81,7 @@ from agentstack.runtime.waits import (
 )
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.registry import ToolNotExposed
-from agentstack.tools.spec import ToolSpec
+from agentstack.tools.spec import Surface, ToolSpec
 from agentstack.tools.validation import InvalidToolArguments
 
 # A turn's p95 is 60s (SPEC.md), and the workflow gives it 120s. A heartbeat every few
@@ -298,7 +298,15 @@ class RunActivities:
         if done is not None:
             return _outcome(done)
 
-        message = self._instruction(intent, run, cycle)
+        # Read once and reused for both what the turn is told and what it is admitted to
+        # propose, so the two agree on the same prior even if the registry moves between
+        # them (an unlikely race, but the two are one activity attempt apart, not two).
+        prior_rollout_event = (
+            self._prior_rollout_event(run.tenant, intent.experiment_id)
+            if intent.stage == ROLLOUT
+            else None
+        )
+        message = self._instruction(intent, run, cycle, prior_rollout_event=prior_rollout_event)
         envelope = turns.envelope(run)
         # A rollout turn is told the frozen cohort's rollout and admitted to propose that
         # and nothing else: a proposal that differs is refused before it is parked, so
@@ -309,8 +317,9 @@ class RunActivities:
                 audit=self._audit,
                 run=run,
                 principal=envelope.principal,
+                prior_rollout_event=prior_rollout_event,
             )
-            if intent.stage == ROLLOUT
+            if intent.stage == ROLLOUT and prior_rollout_event is not None
             else None
         )
         tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=turns.deps.versions)
@@ -355,13 +364,31 @@ class RunActivities:
             )
         return self._turns
 
-    def _instruction(self, intent: TurnIntent, run: Run, cycle: cycles.Cycle) -> str:
+    def _instruction(
+        self, intent: TurnIntent, run: Run, cycle: cycles.Cycle, *, prior_rollout_event: int | None
+    ) -> str:
         """What this stage's turn is told, from the record. Never passed through history."""
         if intent.stage == DRAFT:
             return draft_instruction(tenant=run.tenant, cycle=cycle)
+        assert prior_rollout_event is not None  # every non-draft stage here is a rollout turn
         return rollout_instruction(
-            experiment_id=intent.experiment_id, cohort=self._frozen(run.tenant, cycle)
+            experiment_id=intent.experiment_id,
+            cohort=self._frozen(run.tenant, cycle),
+            prior_rollout_event=prior_rollout_event,
         )
+
+    def _prior_rollout_event(self, tenant: str, experiment_id: str) -> int:
+        """The registry's own compare-and-set key for the next rollout (C2): the id of
+        the last rollout event, read fresh so a racing effect since the last read is
+        what a new proposal, ask or commit-time check is held to - not a value carried
+        from an earlier activity attempt, which `run_turn`'s at-least-once retries make
+        stale as easily as the wall clock does."""
+        history = (
+            self._host()
+            .deps.gateway.surfaces[Surface.REGISTRY]
+            .read(f"{tenant}/experiments/{experiment_id}/history", {})
+        )
+        return int(history["latest_rollout_event"])
 
     def _frozen(self, tenant: str, cycle: cycles.Cycle) -> FrozenCohort:
         assert cycle.run_id is not None  # a proposed cycle names its experiment version
@@ -413,7 +440,11 @@ class RunActivities:
                 self._refuse(
                     run, wait, tracer, span="ask.refuse", kind=NOTHING_TO_ASK, reason=str(exc)
                 )
-            deviates = rollout_deviation(request, cohort)
+            deviates = rollout_deviation(
+                request,
+                cohort,
+                prior_rollout_event=self._prior_rollout_event(run.tenant, intent.experiment_id),
+            )
             if deviates is not None:
                 self._refuse(
                     run,
@@ -564,7 +595,16 @@ class RunActivities:
             )
         )
         assert cycle is not None  # the rollout turn followed the cycle that settled
-        deviates = rollout_deviation(request, self._frozen(run.tenant, cycle))
+        # The request's own prior_rollout_event, not a fresh read (0018): a rerun after a
+        # lost completion is retrying the effect that moved it, so re-deriving it live
+        # would read the retry's own prior attempt as a deviation. Its freshness against
+        # the registry is the surface's own compare-and-set to enforce at the act, not
+        # this check's - which only holds the request to what the cohort's record says.
+        deviates = rollout_deviation(
+            request,
+            self._frozen(run.tenant, cycle),
+            prior_rollout_event=int(request.payload["prior_rollout_event"]),
+        )
         if deviates is not None:
             self._refuse(
                 run,

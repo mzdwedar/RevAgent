@@ -105,7 +105,7 @@ def test_a_proposed_cohort_is_drafted_once_and_audited_with_its_rule(
     # read and the envelope it acted under are nowhere in the recorded history.
     assert "create_experiment_draft" not in history
     assert "vault://" not in history
-    assert "experiments:write" not in history
+    assert "experiments:draft" not in history
 
 
 def test_the_turn_is_told_its_ids_and_the_transcript_keeps_what_was_said(

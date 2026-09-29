@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -84,8 +85,12 @@ class TurnState(TypedDict, total=False):
     proposals: list[dict[str, Any]]
     model_text: str
     # The bundle is deterministic given the message and the stores, so only its
-    # fingerprint is kept - which is all `act` ever used it for.
+    # fingerprints are kept. The whole view's, for the record; and the request's - the
+    # view minus what the session has read - which is what `act` binds approvals to.
+    # Added beside the first rather than replacing it, so a checkpoint without it
+    # resumes exactly as it was written.
     context_fingerprint: str
+    request_fingerprint: str
     blocked_on: list[str]
     resumed_by: str | None
     wait_id: str | None
@@ -99,6 +104,9 @@ class TurnContext:
     envelope: IdentityEnvelope
     deps: TurnDeps
     instructions: str
+    # Reads from earlier turns of this session, as (transcript body, when): the control
+    # plane holds them, and this layer may not import it, so they arrive as plain data.
+    observations: tuple[tuple[str, datetime], ...] = ()
     # Filled as the turn proceeds. Not checkpointed, and not meant to be: these are
     # this process's view of this turn.
     carried: dict[str, Any] = field(default_factory=dict)

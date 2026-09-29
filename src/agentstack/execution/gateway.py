@@ -2,6 +2,7 @@
 
 Order matters here, and it is the order Part 7 argues for:
 
+0. **Binding** - is this request the spec's own: its tool, surface, verb, fixed values?
 1. **Policy** - is this permitted at all?
 2. **Approval** - bound to this run, this action fingerprint, this state snapshot.
 3. **Containment** - is it inside the sandbox even though it is allowed?
@@ -31,6 +32,7 @@ from agentstack.execution.surfaces import (
     SandboxViolation,
     SurfaceClient,
     SurfaceRefused,
+    resource_verb,
 )
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import Tracer
@@ -41,7 +43,7 @@ from agentstack.policy.approval import (
     ApprovalStore,
     require_approval,
 )
-from agentstack.policy.decisions import PolicyDenied, decide
+from agentstack.policy.decisions import PolicyDenied, bound_to, decide
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.precommit import PreCommitPolicy
 from agentstack.tools.action import ActionRequest
@@ -109,6 +111,7 @@ class Gateway:
             run_id=run_id,
             state_snapshot=state_snapshot,
             tracer=tracer,
+            writes=False,
         )
         client = self.surfaces[request.surface]
         data = client.read(request.resource, request.payload)
@@ -166,6 +169,7 @@ class Gateway:
             run_id=run_id,
             state_snapshot=state_snapshot,
             tracer=tracer,
+            writes=True,
         )
         approval_id = approval.id if approval else None
 
@@ -259,9 +263,21 @@ class Gateway:
         run_id: str,
         state_snapshot: str,
         tracer: Tracer,
+        writes: bool,
     ) -> ApprovalRecord | None:
-        """Policy, then approval, then containment. Shared by both verbs."""
-        decision = decide(envelope=envelope, spec=spec, request=request)
+        """Binding, then policy, then approval, then containment. Shared by both verbs.
+
+        Binding first: every later step judges `spec` and trusts that `request` is one of
+        its requests. A request prepared as a rollout and presented beside the abstention
+        spec would otherwise be checked for the annotate scope, granted by the
+        abstention's `PRE_COMMIT` rule, and committed at 100% with nobody asked (H2).
+        The verb is read by the surface's own parser, for the act the caller is about to
+        ask of it - a read and a write of the same resource are different verbs.
+        """
+        verb = resource_verb(request.surface, request.resource, writes=writes)
+        decision = bound_to(spec, request, verb=verb) or decide(
+            envelope=envelope, spec=spec, request=request
+        )
         with tracer.span(
             "policy.decide", tool=spec.name, rule=decision.rule, allowed=decision.allowed
         ):

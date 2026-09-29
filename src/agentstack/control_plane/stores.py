@@ -94,6 +94,18 @@ class TranscriptStore:
         )
         return tuple(TranscriptEvent(*row) for row in rows)
 
+    def recent(self, session_id: str, *, kind: str, limit: int) -> tuple[TranscriptEvent, ...]:
+        """The last `limit` events of one kind, oldest first. Bounded here, in the query,
+        so a long session never loads its whole transcript to hand a turn five items."""
+        rows = self.db.fetch_all(
+            "SELECT session_id, kind, body, at FROM ("
+            "  SELECT id, session_id, kind, body, at FROM transcript_events"
+            "  WHERE session_id = %s AND kind = %s ORDER BY id DESC LIMIT %s"
+            ") latest ORDER BY id",
+            (session_id, kind, limit),
+        )
+        return tuple(TranscriptEvent(*row) for row in rows)
+
     def count_for(self, session_id: str) -> int:
         """The turn index, without loading a transcript to measure its length."""
         row = self.db.fetch_one(

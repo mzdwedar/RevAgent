@@ -17,18 +17,21 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from agentstack.execution.gateway import Gateway
-from agentstack.interfaces.wiring import Stack, envelope_for
+from agentstack.interfaces.inbound import InboundEvent
+from agentstack.interfaces.wiring import Stack, envelope_for, handle
+from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.observability.spans import Tracer
 from agentstack.policy.approval import ApprovalRequired
 from agentstack.policy.approvers import ApprovalReply, ApproverNotAuthorized
 from agentstack.runtime.approvals import ReplyNotApplicable
+from agentstack.runtime.loop import TurnResult
 from agentstack.runtime.run import Run, new_run
 from agentstack.runtime.waits import Wait
-from agentstack.tools.experiments import ROLLOUT, ROLLOUT_STAGE, prepare_rollout
+from agentstack.tools.experiments import HISTORY, ROLLOUT, ROLLOUT_STAGE, prepare_rollout
 
 from .conftest import TENANT, USER
 
-SCOPES = frozenset({"experiments:write", "experiments:rollout"})
+SCOPES = frozenset({"experiments:draft", "experiments:rollout"})
 ROLLOUT_ARGS = {
     "tenant": TENANT,
     "experiment_id": "exp-7",
@@ -36,6 +39,7 @@ ROLLOUT_ARGS = {
     "percentage": 10,
     "targeting_model_version": "tabpfn-3.5",
     "risk_threshold": 0.61,
+    "prior_rollout_event": 0,
 }
 
 
@@ -267,3 +271,184 @@ def test_the_coordinator_commits_nothing_itself() -> None:
     assert "Gateway" not in imported
     assert not any("surface" in name.lower() for name in imported)
     assert "ApprovalCoordinator" in imported
+
+
+# --- through the request path: what the session read is not what was approved ---
+#
+# A read in one turn reaches the next as an observation (STACK.md row 5). That is what
+# the session has looked at, not what the human was asked about. Bound into the
+# approval's snapshot, it made the approval stale on the next read, and the person was
+# asked again - once per read.
+
+READ_SCOPES = frozenset({"experiments:read", "experiments:rollout"})
+ROLL_OUT = (
+    "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 "
+    "experiment_version=exp:5cbf2762 percentage=10 "
+    "targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=0"
+)
+LOOK_AT_HISTORY = "get_rollout_history tenant=acme experiment_id=exp-7"
+
+
+class ReadThenRollOutEngine:
+    """A model that looks before it acts, in one turn - which is what a real one does."""
+
+    def __init__(self) -> None:
+        self.asset = ModelAsset(name="read-then-roll", context_window=8192, max_output_tokens=512)
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        # Only what this run was offered: a fake that ignores exposure proves nothing.
+        if not {HISTORY.name, ROLLOUT.name} <= set(request.tool_names):
+            return ModelResponse(text="nothing I can do here")
+        return ModelResponse(
+            text="checked the history, rolling out",
+            proposals=(
+                ToolCallProposal(
+                    tool=HISTORY.name,
+                    arguments={"tenant": TENANT, "experiment_id": "exp-7"},
+                ),
+                ToolCallProposal(tool=ROLLOUT.name, arguments=dict(ROLLOUT_ARGS)),
+            ),
+        )
+
+
+@pytest.fixture
+def rollout_run(stack: Stack) -> Run:
+    """A drafted experiment, a rollout-stage run, and someone allowed to approve it."""
+    stack.registry_client.commit(
+        f"{TENANT}/experiments/{ROLLOUT_ARGS['experiment_id']}",
+        {
+            "experiment_version": ROLLOUT_ARGS["experiment_version"],
+            "hypothesis": "a discount retains at-risk customers",
+            "variant": "20-percent-off",
+        },
+    )
+    stack.approver_directory.add(
+        tenant=TENANT, slack_user_id="UANA", principal="ana@acme", added_by="ops"
+    )
+    session = stack.resolver.start(user_id=USER, tenant=TENANT)
+    return stack.runs.ensure(
+        new_run(
+            session_id=session.session_id,
+            tenant=TENANT,
+            user=USER,
+            stage=ROLLOUT_STAGE,
+            channel="test",
+        )
+    )
+
+
+def say(stack: Stack, run: Run, text: str) -> TurnResult:
+    event = InboundEvent(
+        channel="test", tenant=TENANT, user_id=USER, session_id=run.session_id, text=text
+    )
+    return handle(stack, event, scopes=READ_SCOPES, run=run)
+
+
+def approve(stack: Stack, run: Run, parked: TurnResult) -> None:
+    """The Slack path: the coordinator binds what the wait recorded."""
+    assert parked.status == "awaiting_approval", parked.text
+    assert parked.pending_wait is not None
+    stack.coordinator.apply(reply(run, parked.pending_wait))
+
+
+def times_asked(stack: Stack, run: Run) -> int:
+    waits = (*stack.waits.pending_for(run.run_id), *stack.waits.satisfied_for(run.run_id))
+    return sum(1 for w in waits if w.kind == "human_approval")
+
+
+def test_a_read_between_approval_and_resume_does_not_ask_again(
+    stack: Stack, rollout_run: Run
+) -> None:
+    """The auditor's reproduction: park, approve, read the history, resume."""
+    run = rollout_run
+    approve(stack, run, say(stack, run, ROLL_OUT))
+
+    looked = say(stack, run, LOOK_AT_HISTORY)
+    assert looked.observations, "the read has to happen for this to test anything"
+
+    resumed = say(stack, run, ROLL_OUT)
+
+    assert [i.kind for i in resumed.bundle.items].count("observation") == 1, (
+        "the read is in the resume turn's context - which is what used to make it stale"
+    )
+    assert resumed.status == "complete", resumed.text
+    assert len(stack.registry_client.rollouts) == 1
+    assert times_asked(stack, run) == 1, "a human is asked once"
+
+
+def test_a_turn_that_reads_before_it_proposes_commits_on_the_first_resume(
+    stack: Stack, rollout_run: Run
+) -> None:
+    """The common case with a real model. The parking turn's own read is appended after
+    it parks, so the first resume always saw one more observation than the ask did."""
+    stack.deps.engine = ReadThenRollOutEngine()
+    run = rollout_run
+
+    parked = say(stack, run, ROLL_OUT)
+    assert parked.observations, "the parking turn read before it proposed"
+    approve(stack, run, parked)
+
+    resumed = say(stack, run, ROLL_OUT)
+
+    assert resumed.status == "complete", resumed.text
+    assert len(stack.registry_client.rollouts) == 1
+    assert times_asked(stack, run) == 1, "a human is asked once"
+
+
+def test_the_request_fingerprint_leaves_out_what_the_session_read(
+    stack: Stack, rollout_run: Run
+) -> None:
+    """The trace keeps the whole view; the approval binds the request. With nothing read
+    they are one value, which is what keeps a wait parked before this change valid."""
+    run = rollout_run
+
+    def fingerprints(result: TurnResult) -> tuple[str, str]:
+        span = next(s for s in result.tracer.spans if s.name == "context.assemble")
+        return span.attributes["fingerprint"], span.attributes["request_fingerprint"]
+
+    whole_1, request_1 = fingerprints(say(stack, run, LOOK_AT_HISTORY))
+    whole_2, request_2 = fingerprints(say(stack, run, LOOK_AT_HISTORY))
+
+    assert whole_1 == request_1, "nothing read yet, so nothing to leave out"
+    assert whole_2 != whole_1, "the second turn was shown the first one's read"
+    assert request_2 == request_1, "and was asked the same thing"
+
+
+def test_a_different_payload_is_not_what_was_approved(stack: Stack, rollout_run: Run) -> None:
+    """Leaving reads out loosens nothing else. Approving 10% does not roll out 25%."""
+    run = rollout_run
+    approve(stack, run, say(stack, run, ROLL_OUT))
+    say(stack, run, LOOK_AT_HISTORY)
+
+    wider = say(stack, run, ROLL_OUT.replace("percentage=10", "percentage=25"))
+
+    assert wider.status == "awaiting_approval"
+    assert wider.pending_request is not None
+    assert wider.pending_request.payload["percentage"] == 25
+    assert stack.registry_client.rollouts == []
+    assert times_asked(stack, run) == 2, "a different act is a different question"
+
+
+def test_an_approval_of_the_same_act_survives_a_differently_worded_request(
+    stack: Stack, rollout_run: Run
+) -> None:
+    """Same act, different request: what the approval binds to is the world the act
+    would change, not the message that produced the proposal (T43).
+
+    An `ALWAYS`-tier commit runs as a Temporal activity handed ids alone (ADR-0008
+    rule 3: no prompt in workflow history), so it has no request fingerprint left to
+    compare against at the act - only the world, observed fresh through the gateway.
+    Wording the same instruction differently is exactly the case an at-least-once
+    retry produces, and it must not ask a person again for an act they already
+    approved: the tool call `roll_out_variant_to_percentage` names is identical, so
+    the approval, bound to that act and the world it was granted against, still
+    applies. `test_a_different_payload_is_not_what_was_approved` is the case that
+    still asks again: an actually different act.
+    """
+    run = rollout_run
+    approve(stack, run, say(stack, run, ROLL_OUT))
+
+    replaced = say(stack, run, f"{ROLL_OUT} and tell finance")
+
+    assert replaced.status == "complete"
+    assert len(stack.registry_client.rollouts) == 1

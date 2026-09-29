@@ -172,7 +172,7 @@ def test_the_question_is_sized_from_the_action_it_binds_not_from_a_constant() ->
         annual_value_at_risk_cents=1_000_000,
         description={},
     )
-    action = prepare_rollout(intended_rollout(cohort) | {"percentage": 25})
+    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0) | {"percentage": 25})
     run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
     wait = Wait(
         wait_id="wait-1",

@@ -106,6 +106,7 @@ class DraftingEngine:
             rollout |= {
                 "percentage": int(told["percentage"]),
                 "risk_threshold": float(told["risk_threshold"]),
+                "prior_rollout_event": int(told["prior_rollout_event"]),
             }
             return ModelResponse(
                 text="proposed the rollout",

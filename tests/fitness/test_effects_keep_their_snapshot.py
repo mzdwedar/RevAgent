@@ -27,6 +27,7 @@ from agentstack.execution.surfaces import RecordingClient, RegistryClient
 from agentstack.runtime.snapshot import approval_snapshot, binds_the_world
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.catalog import build_registry
+from agentstack.tools.experiments import DRAFT, HALT, ROLLOUT
 from agentstack.tools.spec import Approval, Surface, ToolSpec
 
 TENANT = "acme"
@@ -51,6 +52,15 @@ def _arguments(spec: ToolSpec) -> dict[str, Any]:
         kind = schema.get("type")
         if name == "tenant":
             made[name] = TENANT
+        elif name in ("prior_rollout_event", "prior_event"):
+            # These are the registry's own compare-and-set key (C2): the fresh fake
+            # this file builds the world in starts with nothing recorded, so the move
+            # that follows it names 0, not the placeholder every other integer gets.
+            made[name] = 0
+        elif name == "prior_revision":
+            # A fresh draft's own revision list holds one entry (the draft's own
+            # hypothesis), so the first revision past it names 1.
+            made[name] = 1
         elif kind == "integer":
             made[name] = 10
         elif kind == "number":
@@ -85,10 +95,18 @@ def _snapshot(spec: ToolSpec, request: ActionRequest, surfaces: dict[Surface, An
 
 
 def _world_before(spec: ToolSpec) -> dict[Surface, Any]:
-    """The world in which this tool's precondition holds: every effect registered before
-    it already applied (a rollout needs its draft)."""
+    """The world in which this tool's precondition holds.
+
+    Not every effect registered before this one - the catalog is a menu, not a
+    sequence, and revising, discarding, rolling out and halting are divergent branches
+    from one draft, not consecutive steps. The only true prerequisites are the draft
+    itself, always, and a rollout for the one spec that needs a live experiment rather
+    than a draft (a halt)."""
     surfaces = _surfaces()
-    for earlier in EFFECTS[: EFFECTS.index(spec)]:
+    prerequisites = (DRAFT, ROLLOUT) if spec.name == HALT.name else (DRAFT,)
+    for earlier in prerequisites:
+        if earlier.name == spec.name:
+            continue
         request = _prepared(earlier)
         if request.surface is spec.surface:
             surfaces[request.surface].commit(request.resource, request.payload)

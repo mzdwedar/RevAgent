@@ -10,8 +10,14 @@ What a snapshot has to cover is the state of **the resource this action changes*
 * per resource, so committing one charge does not invalidate an approval already
   given for a different charge, and does invalidate one for the same charge;
 * per proposal, so the order of effects within a turn is visible to staleness;
-* including the rendered context, so an approval does not survive the request that
-  produced it being replaced.
+* including the rendered request - instructions, message, what was retrieved and
+  remembered for it - so an approval does not survive the request that produced it
+  being replaced;
+* excluding what the session has read. Earlier reads reach the prompt as observations
+  (STACK.md row 5), but a read is not the world an approval is bound to: bound to it,
+  every read between the ask and the resume made the approval stale, and the human
+  was asked again - once per read. The fingerprint passed in is therefore the
+  request's (`TurnState.request_fingerprint`), not the whole prompt's.
 
 `resource_state` is the seam where the real thing arrives: whatever the domain says
 identifies "this resource, now". A surface that can describe its resource says so

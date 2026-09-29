@@ -63,7 +63,13 @@ def park_approval(
     """What a rollout turn parks: the frozen cohort's rollout, its fingerprint and the
     action itself (A1: the wait holds what it asks about, and an ask reads it from there)."""
     cohort = frozen(stack, run)
-    arguments = intended_rollout(cohort)
+    # `ask_approval` reads the registry's own prior_rollout_event (C2) at ask time, so
+    # the experiment this wait is about has to actually be there to read.
+    stack.registry_client.commit(
+        f"{run.tenant}/experiments/exp-7",
+        {"experiment_version": VERSION, "hypothesis": "a discount retains", "variant": "20-off"},
+    )
+    arguments = intended_rollout(cohort, prior_rollout_event=0)
     return stack.waits.park(
         run_id=run.run_id,
         kind="human_approval",

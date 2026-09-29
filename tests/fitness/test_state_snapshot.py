@@ -126,6 +126,7 @@ def test_the_rollout_does_not_move_its_own_snapshot(stack: Stack) -> None:
             "percentage": 10,
             "targeting_model_version": "tabpfn-3.5",
             "risk_threshold": 0.61,
+            "prior_rollout_event": 0,
         },
     )
     assert stack.registry_client.rollouts, "the rollout happened"

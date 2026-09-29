@@ -457,7 +457,7 @@ def _instruction_openings() -> tuple[str, ...]:
         description="",
     )
     drafted = draft_instruction(tenant="t", cycle=cycle)
-    rolled = rollout_instruction(experiment_id="e", cohort=cohort)
+    rolled = rollout_instruction(experiment_id="e", cohort=cohort, prior_rollout_event=0)
     return (drafted.split(" by calling")[0], rolled.split(" by calling")[0])
 
 
