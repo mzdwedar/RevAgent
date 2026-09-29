@@ -70,7 +70,7 @@ class Wait:
     # and an approval wait is asked again; neither is allowed to lapse quietly.
     deadline: datetime | None = None
     reasks: int = 0
-    # The action itself: the tool and its validated arguments (0015). The fingerprint
+    # The action itself: the tool and its validated arguments (0018). The fingerprint
     # says *which* action; this is the action, so the process that commits it reads it
     # from the record and not from a turn's checkpoint, whose shape can change under it.
     action_tool: str | None = None

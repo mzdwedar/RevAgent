@@ -428,7 +428,7 @@ def test_the_settlement_refuses_what_it_cannot_honestly_record(
     if changes.get("release_first"):
         stack.ledger.abandon(KEY)
     if changes.get("keyless"):
-        # A reconcile wait from before 0016, satisfied and so allowed to name no claim.
+        # A reconcile wait from before 0019, satisfied and so allowed to name no claim.
         stack.runs.db.execute(
             "UPDATE waits SET satisfied = true, satisfied_at = now(), idempotency_key = NULL"
             " WHERE wait_id = %s",

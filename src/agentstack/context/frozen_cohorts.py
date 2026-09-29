@@ -1,4 +1,4 @@
-"""The frozen cohort a proposal rests on, as a record (T40b, migration 0014).
+"""The frozen cohort a proposal rests on, as a record (T40b, migration 0017).
 
 `targeting.select` freezes a cohort and names it with an experiment version. The rest of
 the run needs more than the name, long after the process that scored it is gone: the

@@ -29,7 +29,7 @@ tables are created and versioned by `PostgresSaver.setup()` rather than from her
 `0010` gives every pending trigger and approval wait a deadline, and counts re-asks.
 `0011` moves runs off the retired `experiment` stage onto `draft`, one of the three that replaced it.
 `0012` is the experiment registry: experiments, their versions, draft revisions and events — the last three insert-only.
-`0013` records which run is an experiment's, so a trigger can find (or start) the one Temporal workflow for it.
-`0014` records the frozen cohort a proposal rests on: its predicate for the rollout, its size and value for the approver. Insert-only.
-`0015` makes an approval wait hold the action it asks about, and lets an audit record name the wait and snapshot an answer was about.
-`0016` gives a pending reconcile wait a deadline and the idempotency key of the claim it is about, so a person can find it and settle it.
+`0016` records which run is an experiment's, so a trigger can find (or start) the one Temporal workflow for it.
+`0017` records the frozen cohort a proposal rests on: its predicate for the rollout, its size and value for the approver. Insert-only.
+`0018` makes an approval wait hold the action it asks about, and lets an audit record name the wait and snapshot an answer was about.
+`0019` gives a pending reconcile wait a deadline and the idempotency key of the claim it is about, so a person can find it and settle it.

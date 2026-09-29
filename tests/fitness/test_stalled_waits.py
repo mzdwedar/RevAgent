@@ -308,7 +308,7 @@ def test_a_reconcile_wait_is_parked_due_by_a_deadline(stack: Stack, run: Run) ->
 def test_the_database_refuses_a_reconcile_wait_nobody_could_act_on(
     app_database: Database, run: Run, columns: str, values: str, constraint: str
 ) -> None:
-    """Held below the store too (migrations/0016): no deadline, or no claim to settle."""
+    """Held below the store too (migrations/0019): no deadline, or no claim to settle."""
     with pytest.raises(IntegrityViolation) as caught:
         app_database.execute(
             f"INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at, {columns})"

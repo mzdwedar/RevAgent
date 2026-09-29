@@ -444,7 +444,7 @@ class RunActivities:
         nothing, records the wake and says `not_answered`, and the run goes back to
         waiting (A1, H2). No run advances past an unsatisfied wait.
 
-        The action is the one the wait holds (0015), validated against the tool's schema
+        The action is the one the wait holds (0018), validated against the tool's schema
         again, held to the fingerprint the wait recorded and to the frozen cohort the
         rollout is for. It is never rebuilt from a turn's checkpoint, whose shape can
         change under a parked approval (A1, H4). The snapshot is the world as the surface
