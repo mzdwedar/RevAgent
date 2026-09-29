@@ -1,6 +1,7 @@
 ---
 name: agent-stack-auditor
 description: Audits agent code against The Agent Stack layer model — the ten layers and the six boundary confusions. Use before shipping any change to an AI agent's sessions, runtime, context, memory, tools, execution, approvals or observability. Covers the architectural judgement the fitness tests cannot: tool granularity, approval legibility, memory justification, trust classification, and whether the durability shape matches the real process.
+model: opus
 ---
 
 # Agent Stack Auditor
