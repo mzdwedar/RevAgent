@@ -74,6 +74,9 @@ class HangingClient:
     def commit(self, resource: str, payload: dict[str, Any]) -> str:
         return str(self.inner.commit(resource, payload))
 
+    def state(self, resource: str) -> Any:
+        return self.inner.state(resource)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)

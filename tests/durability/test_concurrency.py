@@ -8,8 +8,9 @@ assert the properties that matter, not a timing:
 * 100 runs each park, are approved, resume and commit **exactly once**, while every
   run's resuming turn is delivered twice at the same moment.
 * A step raced by two workers completes once and the loser is told so, not crashed.
-* A trigger batch with duplicates evaluates each experiment once, never more than
-  `max_in_flight` at a time.
+* A trigger batch with duplicates evaluates each experiment once, never more than the
+  worker's declared activity bound at a time (T45: through a real worker, which
+  replaced `fanout.py`).
 
 Measured on a laptop (Apple silicon, Postgres 16 in Docker), recorded in tasks/todo.md:
 100 runs in ~2.6s at every app pool size from 5 to 40 - one process is bound by Python,
@@ -18,28 +19,47 @@ not by Postgres - and 300 in ~9s with no pool timeout.
 
 from __future__ import annotations
 
+import asyncio
 import random
 import threading
 import time
 from collections import Counter
+from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Any
 
 import pytest
+from temporalio.client import Client, WorkflowHandle
+from temporalio.worker import Worker
 
+from agentstack.context.targeting import TargetingRule
 from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.surfaces import SurfaceRefused
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.triggers import parse_trigger
-from agentstack.interfaces.wiring import Stack, build_stack, envelope_for, handle
+from agentstack.interfaces.wiring import Stack, build_stack, deliver, envelope_for, handle
 from agentstack.observability.spans import Tracer
-from agentstack.policy.triggers import Outcome, TriggerEvent
+from agentstack.policy.triggers import TriggerEvent
+from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime.cycles import CycleStore
-from agentstack.runtime.fanout import DEFAULT_MAX_IN_FLIGHT, fan_out
+from agentstack.runtime.operator import Evaluation, evaluate_trigger
 from agentstack.runtime.run import Run, new_run
 from agentstack.runtime.steps import StepConflict
+from agentstack.runtime.temporal import activities as temporal_activities
+from agentstack.runtime.temporal.contracts import RunProgress, workflow_id
+from agentstack.runtime.temporal.worker import (
+    MAX_CONCURRENT_ACTIVITIES,
+    activity_threads,
+    build_worker,
+)
+from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 from agentstack.runtime.waits import ResumeEvent, resume
 from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.experiments import EVALUATION_STAGE, HALT, prepare_halt
+from tests.conftest import connect_temporal
+from tests.fitness.test_trigger_to_candidate import ROWS, RULE, WATERMARK, StubScorer
+from tests.temporal_support import activities_for, progress_until, time_skipping
 
 RUNS = 100
 TENANT = "acme"
@@ -198,23 +218,26 @@ def test_only_the_complete_once_conflict_is_absorbed(stack: Stack, app_database:
     assert caught.value.constraint == "run_steps_run_id_fkey"
 
 
-# --- trigger fan-out --------------------------------------------------------------------
+# --- trigger fan-out, bounded by the worker (T45) ---------------------------------------
+
+# Every cohort is too small to target, so every cycle abstains: an answer, and no turn
+# follows it. What is under test is how many evaluations run at once, not what they say.
+ABSTAINS = replace(RULE, minimum_cohort=ROWS + 1)
 
 
-def trigger(experiment: int) -> TriggerEvent:
-    return parse_trigger(
-        {
-            "kind": "data_arrival",
-            "experiment_id": f"exp-{experiment}",
-            "data_as_of": "telecom-bigml:f107d488f7bf4651",
-            "tenant": TENANT,
-        },
-        source="load",
-    )
+def payload(experiment: int) -> dict[str, str]:
+    return {
+        "kind": "data_arrival",
+        "experiment_id": f"exp-{experiment}",
+        "data_as_of": WATERMARK,
+        "tenant": TENANT,
+    }
 
 
-class Evaluator:
-    """Counts evaluations and how many ran at once. Slow enough that they overlap."""
+class InFlight:
+    """Wraps the evaluation `evaluate_cycle` runs, and counts evaluations and how many
+    ran at once across the worker's threads. Slow enough that, with nothing holding them
+    back, the runs' evaluations would all overlap."""
 
     def __init__(self, fail_for: str | None = None) -> None:
         self.fail_for = fail_for
@@ -223,58 +246,179 @@ class Evaluator:
         self.peak = 0
         self.evaluated: list[str] = []
 
-    def __call__(self, event: TriggerEvent) -> tuple[Outcome, str | None]:
+    def __call__(
+        self, trigger: TriggerEvent, *, scorer: ChurnScorer, rule: TargetingRule | None
+    ) -> Evaluation:
         with self.lock:
             self.running += 1
             self.peak = max(self.peak, self.running)
-            self.evaluated.append(event.experiment_id)
+            self.evaluated.append(trigger.experiment_id)
         try:
-            time.sleep(0.02)
-            if event.experiment_id == self.fail_for:
+            time.sleep(0.2)
+            if trigger.experiment_id == self.fail_for:
                 raise RuntimeError("this cohort could not be scored")
-            return Outcome.CONTINUE, None
+            return evaluate_trigger(trigger, scorer=scorer, rule=rule)
         finally:
             with self.lock:
                 self.running -= 1
 
 
-def test_a_batch_with_duplicates_evaluates_each_experiment_once_within_the_bound(
+@pytest.fixture
+def evaluations(monkeypatch: pytest.MonkeyPatch) -> Callable[..., InFlight]:
+    """Puts an `InFlight` where `evaluate_cycle` calls the operator. The worker runs its
+    activities in this process, so the patch reaches them."""
+
+    def install(fail_for: str | None = None) -> InFlight:
+        counted = InFlight(fail_for)
+        monkeypatch.setattr(temporal_activities, "evaluate_trigger", counted)
+        return counted
+
+    return install
+
+
+@asynccontextmanager
+async def roomy_worker(
+    client: Client, task_queue: str, db: Database, scorer: StubScorer
+) -> AsyncIterator[Worker]:
+    """The production worker at its declared bound, on an executor with four times as
+    many threads. Threads are then never what holds evaluations back; only the worker's
+    slots can be."""
+    with ThreadPoolExecutor(max_workers=4 * MAX_CONCURRENT_ACTIVITIES) as roomy:
+        worker = build_worker(
+            client,
+            activities=activities_for(db, scorer=scorer, rule=ABSTAINS),
+            executor=roomy,
+            task_queue=task_queue,
+        )
+        async with worker:
+            yield worker
+
+
+def a_run_of(client: Client, run_id: str) -> WorkflowHandle[ExperimentWorkflow, Any]:
+    return client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+
+
+def settled_cycles(db: Database) -> int:
+    row = db.fetch_one("SELECT count(*) FROM trigger_cycles WHERE outcome IS NOT NULL")
+    assert row is not None
+    return int(row[0])
+
+
+@pytest.mark.usefixtures("fixture_dataset")
+def test_a_hundred_triggers_with_duplicates_evaluate_each_once_within_the_bound(
+    stack: Stack,
     app_database: Database,
+    task_queue: str,
+    evaluations: Callable[..., InFlight],
 ) -> None:
-    """100 experiments, each delivered three times, all at once."""
-    deliveries = [trigger(i) for i in range(RUNS) for _ in range(3)]
+    """Criterion 42. 100 experiments, each delivered three times, all waiting on the
+    queue before the worker starts: the stampede a batch landing makes.
+
+    On the in-memory test server, not the dev server: the bound is the worker's, so the
+    server only has to hand out tasks faster than the bound lets them run. The dev
+    server's SQLite can't, for 100 runs, and the peak would then measure the server.
+    """
+    deliveries = [payload(i) for i in range(RUNS) for _ in range(3)]
     random.Random(21).shuffle(deliveries)
-    evaluator = Evaluator()
+    scorer = StubScorer()
+    counted = evaluations()
 
-    results = fan_out(CycleStore(db=app_database), deliveries, evaluator, max_in_flight=8)
+    async def stampede() -> tuple[int | None, list[RunProgress]]:
+        async with time_skipping() as env:
+            client = env.client
+            run_ids = {
+                await deliver(stack, client, p, source="load", task_queue=task_queue)
+                for p in deliveries
+            }
+            async with roomy_worker(client, task_queue, app_database, scorer) as worker:
+                # Watched from the record until every cycle has settled: a hundred runs'
+                # queries polled at once would be workflow tasks competing with the work.
+                deadline = time.monotonic() + 60
+                while settled_cycles(app_database) < RUNS and time.monotonic() < deadline:
+                    await asyncio.sleep(0.2)
+                progress = await asyncio.gather(
+                    *(
+                        progress_until(a_run_of(client, r), lambda p: len(p.cycles) == 3)
+                        for r in sorted(run_ids)
+                    )
+                )
+                return worker.config()["max_concurrent_activities"], progress
 
-    assert len(results) == 3 * RUNS
-    assert [r.error for r in results if r.error] == []
-    assert sorted(Counter(evaluator.evaluated).values()) == [1] * RUNS
-    assert evaluator.peak <= 8, f"{evaluator.peak} evaluations ran at once"
-    assert evaluator.peak > 1, "the batch never ran concurrently; the bound is untested"
+    limit, progress = asyncio.run(stampede())
+
+    assert limit == MAX_CONCURRENT_ACTIVITIES, "the worker runs at the configured bound"
+    assert len(progress) == RUNS, "one run per experiment, however often it was triggered"
+    assert all({c.outcome for c in p.cycles} == {"abstain"} for p in progress)
+    assert sorted(Counter(counted.evaluated).values()) == [1] * RUNS
+    assert scorer.calls == RUNS
+    assert counted.peak <= limit, f"{counted.peak} evaluations ran at once"
+    assert counted.peak > 1, "the batch never ran concurrently; the bound is untested"
+    assert settled_cycles(app_database) == RUNS, "each experiment's cycle settles once"
+    assert CycleStore(db=app_database).unsettled() == ()
 
 
-def test_one_failed_evaluation_does_not_stop_the_batch(app_database: Database) -> None:
-    store = CycleStore(db=app_database)
-    evaluator = Evaluator(fail_for="exp-3")
+@pytest.mark.usefixtures("fixture_dataset")
+def test_one_failed_evaluation_does_not_stop_the_batch(
+    stack: Stack,
+    app_database: Database,
+    temporal_address: str,
+    task_queue: str,
+    evaluations: Callable[..., InFlight],
+) -> None:
+    """A failure that isn't a refusal is retried under the one policy, for as long as it
+    takes. It holds a slot only while it runs, so the other runs are evaluated meanwhile."""
+    counted = evaluations(fail_for="exp-3")
 
-    results = fan_out(store, [trigger(i) for i in range(10)], evaluator, max_in_flight=4)
+    async def batch() -> tuple[list[RunProgress], RunProgress]:
+        client = await connect_temporal(temporal_address)
+        runs = {
+            f"exp-{i}": await deliver(
+                stack, client, payload(i), source="load", task_queue=task_queue
+            )
+            for i in range(10)
+        }
+        async with roomy_worker(client, task_queue, app_database, StubScorer()):
+            others = await asyncio.gather(
+                *(
+                    progress_until(a_run_of(client, run_id), lambda p: len(p.cycles) == 1)
+                    for experiment, run_id in runs.items()
+                    if experiment != "exp-3"
+                )
+            )
+            # The retry policy's first interval is 1s: a second attempt is due soon after.
+            deadline = time.monotonic() + 30
+            while counted.evaluated.count("exp-3") < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
+            failing = await a_run_of(client, runs["exp-3"]).query(ExperimentWorkflow.progress)
+            return others, failing
 
-    failed = [r for r in results if r.error is not None]
-    assert [r.trigger.experiment_id for r in failed] == ["exp-3"]
-    assert all(r.cycle is not None for r in results if r.error is None)
-    assert [c.experiment_id for c in store.unsettled()] == ["exp-3"], (
+    others, failing = asyncio.run(batch())
+
+    assert len(others) == 9
+    assert all([c.outcome for c in p.cycles] == ["abstain"] for p in others)
+    assert counted.evaluated.count("exp-3") >= 2, "the failed evaluation was not retried"
+    assert failing.cycles == (), "a failed evaluation has no outcome to report"
+    assert [c.experiment_id for c in CycleStore(db=app_database).unsettled()] == ["exp-3"], (
         "a failed evaluation must stay visible, not be recorded as an outcome"
     )
 
 
-def test_the_bound_is_below_the_pool_and_must_admit_something(app_database: Database) -> None:
+def test_the_bound_is_below_the_pool_and_is_the_one_that_binds() -> None:
     from agentstack.storage.pool import DEFAULT_MAX_SIZE
 
-    assert 1 <= DEFAULT_MAX_IN_FLIGHT <= DEFAULT_MAX_SIZE
-    with pytest.raises(ValueError, match="would evaluate nothing"):
-        fan_out(CycleStore(db=app_database), [trigger(0)], Evaluator(), max_in_flight=0)
+    assert 1 <= MAX_CONCURRENT_ACTIVITIES <= DEFAULT_MAX_SIZE
+    never_polls = Client.__new__(Client)  # refused before the worker would touch it
+    activities = activities_for(Database.__new__(Database))
+    with (
+        activity_threads(1) as one,
+        pytest.raises(ValueError, match="would run nothing"),
+    ):
+        build_worker(never_polls, activities=activities, executor=one, max_concurrent_activities=0)
+    with (
+        activity_threads(MAX_CONCURRENT_ACTIVITIES - 1) as too_few,
+        pytest.raises(ValueError, match="would bound activities below the declared"),
+    ):
+        build_worker(never_polls, activities=activities, executor=too_few)
 
 
 # --- SPEC-registry.md criterion 4: twenty halts, one halt ------------------------------

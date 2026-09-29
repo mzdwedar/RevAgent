@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -23,7 +22,13 @@ from agentstack.storage import migrate
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
-from agentstack.storage.provision import rebuild_database, truncate_all
+from agentstack.storage.provision import (
+    RUN_TOKEN,
+    drop_database,
+    rebuild_database,
+    run_scoped,
+    truncate_all,
+)
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 TEMPORAL_ADDRESS = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
@@ -52,8 +57,24 @@ def admin_url() -> str:
     return os.environ.get("DATABASE_URL") or DEV_DATABASE_URL
 
 
+# Every database this run has rebuilt, by the name it actually has.
+_REBUILT: set[str] = set()
+
+
 def rebuild(database: str) -> str:
-    return rebuild_database(admin_url(), database)
+    """A database of this run's own, empty: `database` scoped to the run (`run_scoped`),
+    so another run on the same Postgres, from any session, never drops it mid-test."""
+    scoped = run_scoped(database)
+    _REBUILT.add(scoped)
+    return rebuild_database(admin_url(), scoped)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _drop_this_runs_databases() -> Iterator[None]:
+    """Torn down last, after every pool that used them: a run leaves no databases behind."""
+    yield
+    for database in sorted(_REBUILT):
+        drop_database(admin_url(), database)
 
 
 @pytest.fixture(scope="session")
@@ -112,8 +133,9 @@ def temporal_address() -> str:
 
 @pytest.fixture(scope="session")
 def temporal_run_token() -> str:
-    """Names this pytest invocation on a server other invocations may share."""
-    return uuid.uuid4().hex[:12]
+    """Names this pytest invocation on a server other invocations may share: the same
+    token its databases carry, so a run's queues and databases can be matched up."""
+    return RUN_TOKEN
 
 
 @pytest.fixture

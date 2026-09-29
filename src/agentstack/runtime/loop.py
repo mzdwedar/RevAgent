@@ -8,7 +8,7 @@ progress. It does not own authority, and it never touches a surface directly.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -66,6 +66,8 @@ def run_turn(
     deps: TurnDeps,
     instructions: str = "You are a support agent. Prefer the narrowest tool that fits.",
     turn_id: str | None = None,
+    admit: Callable[[ActionRequest], str | None] | None = None,
+    tracer: Tracer | None = None,
     observations: Sequence[tuple[str, datetime]] = (),
 ) -> TurnResult:
     """One turn, executed as a checkpointed graph (ADR-0006).
@@ -76,8 +78,20 @@ def run_turn(
 
     `turn_id` names the checkpoint namespace. Left unset it is unique per call, which
     is the right default for a fresh turn; passing the same one twice resumes that turn.
+
+    `admit`, for a turn told exactly what to propose, refuses anything else before the
+    gateway sees it, so a proposal that differs is never parked and never put to a
+    person. It returns the refusal's reason, or None.
+
+    `tracer` is for a caller that must export the turn's spans however it ends: a turn
+    that meets an effect of unknown outcome parks the run and raises `UnresolvedEffect`,
+    and the spans that led there are the ones someone reconciling will want.
+
+    `observations` are reads from earlier turns of this session, handed in as plain data
+    rather than fetched here, because this layer may not import the control plane.
     """
-    tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
+    if tracer is None:
+        tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
     # The run, not the caller, says what the run is about. Narrowed here rather than
     # trusted to every place that builds an envelope, so no path into a turn - a
     # channel, a resumed run in another process, a worker - can hand a subject-bound
@@ -91,7 +105,8 @@ def run_turn(
         deps=deps,
         instructions=instructions,
         observations=tuple(observations),
-        carried={"tracer": tracer},
+        # Not state: a checkpoint never holds it, and a resumed turn is handed it again.
+        carried={"tracer": tracer, "admit": admit},
     )
     final = advance(
         deps.graph,

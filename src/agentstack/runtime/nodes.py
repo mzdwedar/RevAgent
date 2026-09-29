@@ -9,20 +9,24 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 from langgraph.runtime import Runtime
 
+from agentstack.context.assemble import ContextBundle
 from agentstack.context.assemble import assemble as assemble_context
 from agentstack.context.items import ContextItem, Scope, Trust
+from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.surfaces import SurfaceRefused
 from agentstack.model.contract import ExposedTool, ModelRequest
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.graph import TurnContext, TurnState
-from agentstack.runtime.snapshot import resource_snapshot
+from agentstack.runtime.snapshot import approval_snapshot
+from agentstack.runtime.waits import approval_wait_id, park_reconcile
 from agentstack.tools.registry import ToolNotExposed
-from agentstack.tools.validation import InvalidToolArguments
+from agentstack.tools.validation import InvalidToolArguments, validate_arguments
 
 
 class WrongRun(RuntimeError):
@@ -93,6 +97,20 @@ def check_waits(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, An
 def assemble(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
     ctx = runtime.context
     _same_run(state, ctx)
+    bundle = _assembled(state, ctx)
+    return {
+        "context_fingerprint": bundle.fingerprint(),
+        "request_fingerprint": ctx.carried["request_fingerprint"],
+    }
+
+
+def _assembled(state: TurnState, ctx: TurnContext) -> ContextBundle:
+    """Assemble the turn's context and keep it on this process's view of the turn.
+
+    The bundle is never checkpointed, only its fingerprint. So a process that resumes a
+    turn past `assemble` (after the one that assembled it died) builds it again here,
+    from the checkpointed message and the stores.
+    """
     run = ctx.run
     tracer = ctx.carried["tracer"]
     scope = Scope(tenant=run.tenant, user=run.user, session=run.session_id)
@@ -135,10 +153,8 @@ def assemble(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
     ):
         pass
     ctx.carried["bundle"] = bundle
-    return {
-        "context_fingerprint": bundle.fingerprint(),
-        "request_fingerprint": request.fingerprint(),
-    }
+    ctx.carried["request_fingerprint"] = request.fingerprint()
+    return bundle
 
 
 def _observation_item(body: str, at: datetime, scope: Scope) -> ContextItem:
@@ -173,7 +189,10 @@ def expose(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
 def call_model(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
     ctx = runtime.context
     _same_run(state, ctx)
-    bundle = ctx.carried["bundle"]
+    # Resumed here by a process that never assembled this turn: the one that did died
+    # during the model call. Assemble again, and record what this call actually saw.
+    rebuilt = "bundle" not in ctx.carried
+    bundle = _assembled(state, ctx) if rebuilt else ctx.carried["bundle"]
     exposed = _exposed(ctx)
     response = ctx.deps.engine.generate(
         ModelRequest(
@@ -192,10 +211,13 @@ def call_model(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any
     )
     with ctx.carried["tracer"].span("model.call", proposals=[p.tool for p in response.proposals]):
         pass
-    return {
+    update: dict[str, Any] = {
         "proposals": [{"tool": p.tool, "arguments": dict(p.arguments)} for p in response.proposals],
         "model_text": response.text,
     }
+    if rebuilt:
+        update["context_fingerprint"] = bundle.fingerprint()
+    return update
 
 
 def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
@@ -230,9 +252,26 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 pass
             refusals.append(str(exc))
             continue
+        # Well-formed and exposed is not the same as the one this turn was told to
+        # propose. A turn held to a record refuses anything else here, before the
+        # gateway, so it is never parked and never put to a person.
+        admit = ctx.carried.get("admit")
+        refused = admit(request) if admit is not None else None
+        if refused is not None:
+            with tracer.span("tool.reject", tool=tool, reason=refused):
+                pass
+            refusals.append(refused)
+            continue
         spec = deps.registry.spec(tool)
-        state_snapshot = resource_snapshot(
-            fingerprint, request.resource, committed_against.get(request.resource, [])
+        # For an action a person approves, the world as its surface describes it: the
+        # same snapshot the commit reads again at the act (T43). Otherwise what this turn
+        # knows on its own, which a rerun of the turn computes again unchanged (H1).
+        state_snapshot = approval_snapshot(
+            spec=spec,
+            request=request,
+            observe=partial(deps.gateway.observe, request=request, tracer=tracer),
+            context_fingerprint=fingerprint,
+            committed=committed_against.get(request.resource, []),
         )
         with tracer.span("tool.call", tool=spec.name, resource=request.resource):
             pass
@@ -281,6 +320,24 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 pass
             refusals.append(str(exc))
             continue
+        except UnresolvedEffect as exc:
+            # The effect may have applied, and only the surface knows (E2). The run parks
+            # for someone to settle the claim, and nothing after this proposal runs: the
+            # turn stops here, its checkpoint still before `act`, so once the claim is
+            # settled the same turn resumes and the ledger answers for this proposal.
+            wait = park_reconcile(
+                deps.waits,
+                run_id=run.run_id,
+                action_fingerprint=request.fingerprint(),
+                idempotency_key=exc.key,
+                claimed_at=exc.claimed_at,
+                state_snapshot=state_snapshot,
+            )
+            with tracer.span("response", status="unresolved", wait=wait.wait_id):
+                pass
+            ctx.carried["pending_wait"] = wait
+            ctx.carried["pending_request"] = request
+            raise
         except (ApprovalRequired, ApprovalStale) as exc:
             summary = ApprovalPrompt(
                 spec=spec,
@@ -292,6 +349,9 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 channel=run.channel,
             ).render()
             wait = deps.waits.park(
+                # Derived, not random: a turn that parked this and died before its
+                # checkpoint landed parks the same wait when it runs again (T41).
+                wait_id=approval_wait_id(run.run_id, request.fingerprint(), state_snapshot),
                 run_id=run.run_id,
                 kind="human_approval",
                 state_snapshot=state_snapshot,
@@ -299,6 +359,10 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 # handles the answer may not be this one.
                 action_fingerprint=request.fingerprint(),
                 approval_summary=summary,
+                # And the action itself, validated: the record the act commits from, so
+                # no checkpoint has to be readable for a person's answer to count.
+                action_tool=request.tool,
+                action_arguments=validate_arguments(spec, proposal["arguments"]),
             )
             with tracer.span("response", status="awaiting_approval", wait=wait.wait_id):
                 pass

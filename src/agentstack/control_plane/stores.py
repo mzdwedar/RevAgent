@@ -46,6 +46,23 @@ class SessionStore:
         )
         return session
 
+    def ensure(self, session: Session) -> Session:
+        """Write it if it isn't there, and return what is.
+
+        For a session whose id was chosen before anything was written (an experiment's,
+        claimed by its first trigger), where a redelivery arrives to find it already made.
+        An existing row is never overwritten: its owner and tenant are what it was
+        created with.
+        """
+        self.db.execute(
+            "INSERT INTO sessions (session_id, user_id, tenant, created_at)"
+            " VALUES (%s, %s, %s, %s) ON CONFLICT (session_id) DO NOTHING",
+            (session.session_id, session.user_id, session.tenant, session.created_at),
+        )
+        existing = self.get(session.session_id)
+        assert existing is not None  # just written, or already there
+        return existing
+
     def get(self, session_id: str) -> Session | None:
         row = self.db.fetch_one(
             "SELECT session_id, user_id, tenant, created_at FROM sessions WHERE session_id = %s",

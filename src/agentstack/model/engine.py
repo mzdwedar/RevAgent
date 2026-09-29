@@ -15,7 +15,9 @@ from agentstack.model.contract import (
 class ModelEngine(Protocol):
     """Converts a prepared request into output. Owns nothing around itself."""
 
-    asset: ModelAsset
+    # Read, never written: which asset answered is the engine's to say (ADR-0003).
+    @property
+    def asset(self) -> ModelAsset: ...
 
     def generate(self, request: ModelRequest) -> ModelResponse: ...
 

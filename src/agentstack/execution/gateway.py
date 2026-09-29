@@ -23,6 +23,7 @@ the point: the executor, not the model, owns the boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from agentstack.execution.idempotency import ClaimState, IdempotencyLedger
@@ -54,7 +55,16 @@ class UnresolvedEffect(RuntimeError):
 
     Raised instead of retrying. A retry here is the difference between one refund
     and two.
+
+    Names the claim it is about, so whoever parks the run on it can say which claim a
+    person has to settle: the key, and when it was staked (a released key claimed again
+    is a different claim).
     """
+
+    def __init__(self, message: str, *, key: str, claimed_at: datetime | None) -> None:
+        super().__init__(message)
+        self.key = key
+        self.claimed_at = claimed_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +124,29 @@ class Gateway:
             pass
         return ReadResult(data=data, approval_id=approval.id if approval else None)
 
+    def observe(self, *, request: ActionRequest, tracer: Tracer) -> tuple[str, ...] | None:
+        """What the resource this action changes is, now: the world an approval binds to.
+
+        Not a read. Nothing comes back to the model, and nothing is decided here: the
+        caller hashes it into a state snapshot, and `execute` compares that snapshot with
+        the approval's. It goes through the gateway because this is the only path to a
+        client. A resource outside containment is described as nothing, so that the
+        refusal happens in `execute`, where it is audited.
+        """
+        try:
+            self.sandbox.check(surface=request.surface, resource=request.resource)
+        except SandboxViolation:
+            return None
+        state = self.surfaces[request.surface].state(request.resource)
+        with tracer.span(
+            "execution.observe",
+            surface=request.surface.value,
+            resource=request.resource,
+            described=state is not None,
+        ):
+            pass
+        return state
+
     def execute(
         self,
         *,
@@ -171,7 +204,9 @@ class Gateway:
             raise UnresolvedEffect(
                 f"{request.idempotency_key} was claimed and never settled: the effect "
                 "may already have applied. Reconcile against the surface before "
-                "retrying - an unfinalized claim is an unknown outcome, not a free slot."
+                "retrying - an unfinalized claim is an unknown outcome, not a free slot.",
+                key=request.idempotency_key,
+                claimed_at=claim.claimed_at,
             )
 
         client = self.surfaces[request.surface]
@@ -193,7 +228,9 @@ class Gateway:
             )
             raise UnresolvedEffect(
                 f"{request.idempotency_key}: the surface did not confirm ({exc}). "
-                "Reconcile against the surface; do not retry blind."
+                "Reconcile against the surface; do not retry blind.",
+                key=request.idempotency_key,
+                claimed_at=claim.claimed_at,
             ) from exc
         # Phase two: the surface answered, so the key can settle.
         self.ledger.finalize(request.idempotency_key, receipt)

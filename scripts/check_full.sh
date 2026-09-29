@@ -4,6 +4,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 fail=0
+# Includes both deploy guards, checkpoint_guard and replay_guard: cheap enough for turn end.
 bash scripts/check_task.sh || fail=1
 
 echo "----- release gates (Part 8)"

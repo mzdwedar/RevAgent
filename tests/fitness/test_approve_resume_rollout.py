@@ -429,15 +429,26 @@ def test_a_different_payload_is_not_what_was_approved(stack: Stack, rollout_run:
     assert times_asked(stack, run) == 2, "a different act is a different question"
 
 
-def test_an_approval_does_not_survive_the_request_being_replaced(
+def test_an_approval_of_the_same_act_survives_a_differently_worded_request(
     stack: Stack, rollout_run: Run
 ) -> None:
-    """Same act, different request: the request is still part of what was approved."""
+    """Same act, different request: what the approval binds to is the world the act
+    would change, not the message that produced the proposal (T43).
+
+    An `ALWAYS`-tier commit runs as a Temporal activity handed ids alone (ADR-0008
+    rule 3: no prompt in workflow history), so it has no request fingerprint left to
+    compare against at the act - only the world, observed fresh through the gateway.
+    Wording the same instruction differently is exactly the case an at-least-once
+    retry produces, and it must not ask a person again for an act they already
+    approved: the tool call `roll_out_variant_to_percentage` names is identical, so
+    the approval, bound to that act and the world it was granted against, still
+    applies. `test_a_different_payload_is_not_what_was_approved` is the case that
+    still asks again: an actually different act.
+    """
     run = rollout_run
     approve(stack, run, say(stack, run, ROLL_OUT))
 
     replaced = say(stack, run, f"{ROLL_OUT} and tell finance")
 
-    assert replaced.status == "awaiting_approval"
-    assert "different state" in replaced.text
-    assert stack.registry_client.rollouts == []
+    assert replaced.status == "complete"
+    assert len(stack.registry_client.rollouts) == 1

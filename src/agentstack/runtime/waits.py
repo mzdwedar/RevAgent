@@ -8,6 +8,7 @@ input that satisfies it. Anything less resumes into a world it never saw.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -30,11 +31,21 @@ HUMAN_APPROVAL = "human_approval"
 # A run whose checkpoint this code cannot read. Not stalled - nothing is late, the code
 # moved - and satisfied by migrating the checkpoint, not by an event arriving.
 NEEDS_MIGRATION = "needs_migration"
+# An effect whose outcome is unknown: the surface may have applied it (E2). Satisfied by
+# whoever reconciles the idempotency claim against the surface, never by waiting.
+RECONCILE = "reconcile"
 
 # How long a question sits unanswered before it is put again. A default, unlike a
 # trigger's deadline: how patiently to treat a person does not depend on the workflow,
 # whereas how long to wait for data depends entirely on how often the data arrives.
 APPROVAL_REASK_AFTER = timedelta(hours=24)
+
+# How soon an effect of unknown outcome should have been reconciled. Short, because the
+# effect may be live (a rollout customers can already see) and the run, and every
+# trigger queued behind it, waits until someone looks. `operator stalled` reports a
+# reconcile wait from the moment it is parked, since it never resolves by waiting; past
+# this it is reported as overdue.
+RECONCILE_DUE_AFTER = timedelta(hours=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +70,65 @@ class Wait:
     # and an approval wait is asked again; neither is allowed to lapse quietly.
     deadline: datetime | None = None
     reasks: int = 0
+    # The action itself: the tool and its validated arguments (0018). The fingerprint
+    # says *which* action; this is the action, so the process that commits it reads it
+    # from the record and not from a turn's checkpoint, whose shape can change under it.
+    action_tool: str | None = None
+    action_arguments: dict[str, Any] | None = None
+    # What a reconcile wait is about: the idempotency claim a person has to settle
+    # against the surface. The fingerprint says which action; this says which claim.
+    idempotency_key: str | None = None
+
+
+def approval_wait_id(run_id: str, action_fingerprint: str, state_snapshot: str) -> str:
+    """The one approval wait for this action, against this state, in this run.
+
+    Derived, so a turn that parks it and dies before its checkpoint lands parks the
+    same wait when it runs again, not a second question. A different state is a
+    different question: an approval is bound to the world it was asked about.
+    """
+    digest = hashlib.sha256(f"{run_id}\n{action_fingerprint}\n{state_snapshot}".encode())
+    return f"wait-approval-{digest.hexdigest()[:24]}"
+
+
+def reconcile_wait_id(run_id: str, idempotency_key: str, claimed_at: datetime | None) -> str:
+    """The one reconcile wait for this claim in this run: a rerun parks it again, not a
+    second one. Not bound to a snapshot: what is unknown is the effect, whatever the world
+    was.
+
+    One per *claim*, not per action. Reconciled as not applied, the key is released and
+    the act goes again; if that attempt's answer is lost too, it is a new unknown, and it
+    needs a wait of its own. Reusing the first (already satisfied) one would read as
+    answered, and the run would spin on the claim instead of stopping for a person.
+    """
+    staked = "" if claimed_at is None else claimed_at.astimezone(UTC).isoformat()
+    digest = hashlib.sha256(f"{run_id}\n{idempotency_key}\n{staked}".encode())
+    return f"wait-reconcile-{digest.hexdigest()[:24]}"
+
+
+def park_reconcile(
+    store: WaitStore,
+    *,
+    run_id: str,
+    action_fingerprint: str,
+    idempotency_key: str,
+    claimed_at: datetime | None,
+    state_snapshot: str,
+) -> Wait:
+    """Park the run on an effect of unknown outcome (E2), wherever it was met.
+
+    The turn and the commit both land here, so a reconcile wait is the same thing from
+    either: named for its claim, due `RECONCILE_DUE_AFTER` from now, and saying which
+    action and which claim a person has to settle.
+    """
+    return store.park(
+        wait_id=reconcile_wait_id(run_id, idempotency_key, claimed_at),
+        run_id=run_id,
+        kind=RECONCILE,
+        state_snapshot=state_snapshot,
+        action_fingerprint=action_fingerprint,
+        idempotency_key=idempotency_key,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +141,8 @@ class ResumeEvent:
 
 _COLUMNS = (
     "wait_id, run_id, kind, state_snapshot, created_at, satisfied, payload, "
-    "action_fingerprint, approval_summary, deadline, reasks"
+    "action_fingerprint, approval_summary, deadline, reasks, action_tool, action_arguments, "
+    "idempotency_key"
 )
 
 
@@ -88,15 +159,28 @@ class WaitStore:
         action_fingerprint: str | None = None,
         approval_summary: str | None = None,
         timeout: timedelta | None = None,
+        wait_id: str | None = None,
+        action_tool: str | None = None,
+        action_arguments: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> Wait:
         """Persist a wait, due `timeout` from now.
 
         A trigger wait has no default timeout. The right one is "a little longer than
         the data normally takes to arrive", which only the caller knows, and a default
         chosen here would be a guess that looks like a decision.
+
+        `wait_id` is for a caller that may park the same wait twice: an activity rerun
+        after its first attempt landed. Parking an id that's already there returns the
+        wait as it was first parked, deadline included, instead of a second one.
+
+        A reconcile wait names the claim it is about (`idempotency_key`): the person who
+        settles it has to know which one, and the database refuses one that doesn't say.
         """
         if timeout is None and kind == HUMAN_APPROVAL:
             timeout = APPROVAL_REASK_AFTER
+        if timeout is None and kind == RECONCILE:
+            timeout = RECONCILE_DUE_AFTER
         if timeout is None and kind == TRIGGER:
             raise WaitWithoutDeadline(
                 "a trigger wait needs a deadline: a trigger that never fires must "
@@ -105,12 +189,15 @@ class WaitStore:
         if timeout is not None and timeout <= timedelta(0):
             raise WaitWithoutDeadline(f"a wait cannot be due {timeout} after it was parked")
         now = datetime.now(UTC)
+        wait_id = wait_id or f"wait-{uuid.uuid4()}"
         row = self.db.fetch_one(
             "INSERT INTO waits (wait_id, run_id, kind, state_snapshot, created_at,"
-            "  action_fingerprint, approval_summary, deadline)"
-            f" VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+            "  action_fingerprint, approval_summary, deadline, action_tool, action_arguments,"
+            "  idempotency_key)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)"
+            f" ON CONFLICT (wait_id) DO NOTHING RETURNING {_COLUMNS}",
             (
-                f"wait-{uuid.uuid4()}",
+                wait_id,
                 run_id,
                 kind,
                 state_snapshot,
@@ -118,9 +205,16 @@ class WaitStore:
                 action_fingerprint,
                 approval_summary,
                 None if timeout is None else now + timeout,
+                action_tool,
+                None if action_arguments is None else json.dumps(action_arguments),
+                idempotency_key,
             ),
         )
-        assert row is not None  # RETURNING on a successful insert always yields a row
+        if row is None:
+            # Parked already, by an earlier attempt: that wait, as it was parked.
+            existing = self.get(wait_id)
+            assert existing is not None  # the conflict was on this id
+            return existing
         return Wait(*row)
 
     def get(self, wait_id: str) -> Wait | None:
@@ -145,10 +239,13 @@ class WaitStore:
     def stalled(self, *, now: datetime, older_than: timedelta = timedelta(0)) -> tuple[Wait, ...]:
         """Runs that will not move on their own, parked at least `older_than` before `now`.
 
-        Two kinds, reported together and told apart by `kind` because the remedies
-        differ: a trigger wait past its deadline (find out why the data never came), and
-        a run in `needs_migration` (migrate its checkpoint) - which has no deadline,
-        since it was never going to resume by waiting.
+        Three kinds, reported together and told apart by `kind` because the remedies
+        differ: a trigger wait past its deadline (find out why the data never came), a
+        run in `needs_migration` (migrate its checkpoint), which has no deadline since it
+        was never going to resume by waiting, and a `reconcile` wait (settle the claim
+        against the surface: `agentstack-operator reconcile`). A reconcile wait is
+        reported as soon as it is parked, for the same reason as a migration: nothing
+        settles it but a person. Its deadline says when it became overdue.
 
         The deadline is what makes a trigger wait stalled; `older_than` only narrows the
         report. `now` is an argument so that "a week later" is something a test can say.
@@ -156,9 +253,9 @@ class WaitStore:
         rows = self.db.fetch_all(
             f"SELECT {_COLUMNS} FROM waits"
             " WHERE NOT satisfied AND created_at <= %s"
-            "   AND ((kind = %s AND deadline <= %s) OR kind = %s)"
+            "   AND ((kind = %s AND deadline <= %s) OR kind IN (%s, %s))"
             " ORDER BY kind, deadline, created_at",
-            (now - older_than, TRIGGER, now, NEEDS_MIGRATION),
+            (now - older_than, TRIGGER, now, NEEDS_MIGRATION, RECONCILE),
         )
         return tuple(Wait(*row) for row in rows)
 
@@ -171,17 +268,18 @@ class WaitStore:
         )
         return tuple(Wait(*row) for row in rows)
 
-    def record_reask(self, wait: Wait, *, next_deadline: datetime) -> Wait | None:
-        """Move the deadline on after the question was put again.
+    def record_asked(self, wait_id: str, *, reasks: int, next_deadline: datetime) -> Wait | None:
+        """Record that the question was put for the `reasks`-th time again, and when next.
 
-        Conditional on the deadline still being the one that was read, and on the wait
-        still pending. `None` means someone answered, or another timer got there first.
+        Only moves forward, and only while the wait is pending: a rerun of the same ask
+        (at-least-once) finds `reasks` already there and changes nothing, and an answer
+        that landed first wins. `None` means one of those happened.
         """
         row = self.db.fetch_one(
-            "UPDATE waits SET deadline = %s, reasks = reasks + 1"
-            " WHERE wait_id = %s AND NOT satisfied AND deadline = %s"
+            "UPDATE waits SET deadline = %s, reasks = %s"
+            " WHERE wait_id = %s AND NOT satisfied AND reasks < %s"
             f" RETURNING {_COLUMNS}",
-            (next_deadline, wait.wait_id, wait.deadline),
+            (next_deadline, reasks, wait_id, reasks),
         )
         return None if row is None else Wait(*row)
 

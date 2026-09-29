@@ -126,6 +126,20 @@ def turn_thread(run_id: str, turn_id: str | None = None) -> dict[str, Any]:
     return {"configurable": {"thread_id": f"{run_id}:{turn_id or uuid.uuid4()}"}}
 
 
+def finished_turn(compiled: Any, config: dict[str, Any]) -> dict[str, Any] | None:
+    """The final state of this turn, if it already ran to the end; otherwise None.
+
+    `advance` treats a finished thread as a new turn to start, which is right for a
+    caller that means "take another turn". An at-least-once caller (a Temporal activity
+    rerun after its first attempt finished) means "this turn", and for it a finished
+    turn is the answer: starting it again would call the model again.
+    """
+    snapshot = compiled.get_state(config)
+    if snapshot.values and not snapshot.next:
+        return dict(snapshot.values)
+    return None
+
+
 def advance(
     compiled: Any, config: dict[str, Any], start: TurnState, context: TurnContext
 ) -> dict[str, Any]:

@@ -81,6 +81,16 @@ Stack-specific (from `STACK.md`):
   not a cut; refuse and say which gate stopped it
 - No value at risk from a modelled quantity: the floor is observed ARPU, and a
   dataset without one is loadable and not targetable
+- No identity envelope, credential or prompt in workflow history — history is kept,
+  replayed and shown in a UI; an activity is handed ids and reads the rest at the act
+- No idempotency key derived from Temporal identity — `workflow_id`, `run_id`,
+  `activity_id` and `attempt` each fail one of retry, reset or redelivery (ADR-0008 E1)
+- No gateway refusal retried — a refusal is an answer, and an `UnresolvedEffect` parks
+  the run for reconciliation instead of trying the surface again (ADR-0008 E2)
+- No approval checked against a snapshot carried to the act — the commit reads the world
+  itself, or a stale approval compares equal to itself and commits (ADR-0008 E3)
+- No span emitted in an activity left for the workflow to hold — the workflow never
+  holds spans, so the activity exports them, tagged with the run, never Temporal's ids
 
 ## Enforced with numbers
 
@@ -119,6 +129,8 @@ Stack-specific (from `STACK.md`):
 | Subject binding | An evaluation run that reads a hypothesis naming another experiment cannot halt it, even with a human grant, and the denial is audited `subject.boundary`. It can still halt its own subject. The subject survives a round trip through `runs` | `uv run pytest tests/fitness/test_untrusted_content.py tests/fitness/test_identity_envelope.py tests/infra/test_run_subject.py` | every edit |
 | Checkpoint compatibility | An incompatible checkpoint change ships a version bump, drops the old version, and a migration note — or fails the build | `uv run python scripts/checkpoint_guard.py --base main` | task end, CI |
 | Bar integrity | No weakened constraint in the diff | `uv run python scripts/stack_guard.py --base main` | task end, CI |
+| Durable-runtime boundaries | Workflow code has no path to an effect; only declared activities run; every refusal is one attempt; one run per id; nothing secret in any recorded history | `uv run pytest tests/fitness/test_temporal_boundaries.py` (needs the Temporal dev server) | task end, CI |
+| Replay safety | Every recorded workflow history replays against this code — a change that would strand a live run fails unless it is behind `workflow.patched()` | `uv run python scripts/replay_guard.py` | task end, CI |
 | Release gates | 100% of Part-8 gate evals pass | `uv run python -m evals run --gates` | CI |
 | Dependencies | Nothing at high or above | `osv-scanner scan source -r .` | CI |
 
@@ -145,7 +157,7 @@ landed.
 | Metric | Today | Direction |
 |---|---|---|
 | Project coverage | 98% | must not fall (tolerance 0.5%) |
-| Fitness test count | 36 | must not fall |
+| Fitness test count | 44 | must not fall |
 | Required span types | 9 | must not fall |
 | p95 turn latency | not yet measured | record before first deploy |
 | Cost per turn | not yet measured | record before first deploy |

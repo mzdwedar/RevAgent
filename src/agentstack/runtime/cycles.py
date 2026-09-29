@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind, authorize, subject_of
@@ -22,6 +22,12 @@ from agentstack.storage.database import Database
 from agentstack.tools.experiments import EVALUATION_STAGE
 
 _COLUMNS = "experiment_id, data_as_of, kind, outcome, run_id, claimed_at, settled_at"
+
+# How long a claimed cycle may stay unsettled before it is reported. Every cycle is
+# unsettled while it scores (at most two minutes an attempt), and a dead attempt is
+# finished by the next one (`evaluate_to_settled`). Unsettled past this means layer 8
+# refused the outcome, or the cycle is stuck retrying. Either way a person should know.
+UNSETTLED_AFTER = timedelta(minutes=10)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +122,44 @@ def evaluate(store: CycleStore, trigger: TriggerEvent, evaluator: Evaluator) -> 
         return cycle
     outcome, run_id = evaluator(trigger)
     authorize(trigger.kind, outcome)
+    return store.settle(trigger, outcome, run_id)
+
+
+BeforeSettle = Callable[[Outcome, str | None], None]
+
+
+def evaluate_to_settled(
+    store: CycleStore,
+    trigger: TriggerEvent,
+    evaluator: Evaluator,
+    *,
+    before_settle: BeforeSettle | None = None,
+) -> Cycle:
+    """`evaluate` for a caller that is the cycle's only evaluator and may run it twice.
+
+    That caller is the Temporal activity (SPEC-durable-runtime). The run's one workflow
+    evaluates its cycles one at a time, and a lost completion or a killed worker makes
+    it run the same cycle again. Its second attempt finds its own claim. If the first
+    attempt settled, that is the answer. If it didn't, the attempt died before it could
+    (or layer 8 refused its outcome), and `evaluate` would hand back "no outcome" as if
+    that were one. So it evaluates again and settles, or is refused again.
+
+    `evaluate` keeps its meaning for a caller that is not the only evaluator (the eval
+    runner, and callers racing one trigger): an unsettled claim it finds may belong to
+    another caller, still working, so it doesn't evaluate it a second time.
+
+    `before_settle` records what the outcome rests on (T40b: the frozen cohort). It runs
+    after layer 8 authorised the outcome, so a refused one leaves nothing behind, and
+    before the cycle settles, so a death between the two is finished by the rerun. The
+    other order would lose it: a settled cycle is never evaluated again.
+    """
+    cycle, _ = store.claim(trigger)
+    if cycle.settled:
+        return cycle
+    outcome, run_id = evaluator(trigger)
+    authorize(trigger.kind, outcome)
+    if before_settle is not None:
+        before_settle(outcome, run_id)
     return store.settle(trigger, outcome, run_id)
 
 

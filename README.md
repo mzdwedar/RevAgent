@@ -88,14 +88,14 @@ failure, so the loop fails closed whether or not anyone remembers to run them.
 | `CLAUDE.md` / `AGENTS.md` | what an agent must read before writing code here |
 | `docs/spec-template.md` | six core areas plus the three Agent Stack sections |
 | `docs/adr/` | one ADR per boundary decision |
-| `src/agentstack/` | 11 packages across the ten layers, dependency direction enforced by five `.importlinter` contracts |
+| `src/agentstack/` | 11 packages across the ten layers, dependency direction enforced by six `.importlinter` contracts |
 | `migrations/` | versioned SQL; an applied migration is immutable, a version gap is refused |
 | `experiments/` | targeting thresholds, versioned — change a number here, not in code |
-| `tests/fitness/` | 41 tests, one per collapsed-boundary failure mode |
+| `tests/fitness/` | 44 tests, one per collapsed-boundary failure mode |
 | `tests/live/` | checks needing real datasets or the model; excluded from CI, declared in `CONSTRAINTS.md` |
-| `tests/durability/` | spawns a real process, kills it with SIGKILL, and resumes the run from Postgres |
+| `tests/durability/` | spawns real worker processes, kills them with SIGKILL, and a fresh one resumes the run from Temporal's history and the Postgres record |
 | `evals/` | 13 release gates that judge the path, not just the answer |
-| `scripts/` | the three check stages and the bar guard |
+| `scripts/` | the three check stages, the bar guard, and the checkpoint and replay guards |
 | `.claude/` | hooks, the `agent-stack-auditor` subagent, and `/spec` `/plan` `/stack-audit` |
 
 ## Workflow
@@ -117,9 +117,11 @@ whether a memory should exist at all.
 - **No recorded TabPFN scores yet** (`data/scores/`). Producing them needs the licence
   above. Everything around them — the gate, the fold assignment, the cross-fitting, the
   replay guards — is built and tested without it.
-- **LangGraph is not wired in.** The `Wait` / `ResumeEvent` / `StepLedger` semantics are
-  the contract and are already durable; `docs/adr/0002` records the backend decision and
-  the fitness tests assert the invariants rather than a vendor, so whichever runtime runs
-  them has to satisfy them rather than replace them.
+- **Two runtimes, one record.** A turn is a checkpointed LangGraph graph
+  (`docs/adr/0006`); a run is a Temporal workflow (`docs/adr/0007`–`0009`). Both own
+  position only: waits, claims, approvals and audit stay in Postgres, and the fitness
+  tests assert those invariants rather than either vendor. Still open: no reconcile
+  command for an unresolved effect, and `operator stalled` does not list reconcile waits
+  (`operator status` shows them).
 - **Credential storage and PII retention** are named debts, not oversights.
   `DATABASE_URL` and `TABPFN_TOKEN` are environment variables today.

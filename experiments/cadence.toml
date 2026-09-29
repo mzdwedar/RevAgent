@@ -1,0 +1,23 @@
+# How long a run waits for its next trigger before it is stalled. Change a number here,
+# not in code (SPEC.md: "one line in experiments/, versioned like everything else").
+#
+# A trigger wait's deadline is "a little longer than the data normally takes to
+# arrive", and only the data source knows how long that is. SPEC.md leaves the
+# production source and its cadence open, so `default` is an assumption, written down
+# where it can be read and changed, and not a guess buried in code (see waits.py).
+#
+# Past the deadline nothing expires: the run keeps waiting, `operator stalled` reports
+# it, and the workflow's position says it is overdue. A deadline only decides when
+# somebody is told.
+#
+# Durations are a number and a unit: s, m, h or d.
+
+# Assumed: daily batches. Stalled once a whole day is missed, plus half a day of slack
+# for a late batch.
+[profiles.default]
+trigger_deadline = "36h"
+
+# In dev, no batch ever arrives on its own; triggers are sent by hand. A week keeps a
+# run someone is working on from reading as stalled, and still surfaces one they forgot.
+[profiles.dev]
+trigger_deadline = "7d"

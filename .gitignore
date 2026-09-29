@@ -1,4 +1,7 @@
 .venv/
+# Local secrets (TABPFN_TOKEN, ...), loaded with `uv run --env-file .env`. Never committed.
+.env
+.env.*
 __pycache__/
 *.pyc
 .pytest_cache/
