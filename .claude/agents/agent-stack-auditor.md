@@ -13,9 +13,12 @@ cannot decide, which is exactly where the expensive mistakes live.
 
 ## First, read the ground truth
 
-1. `STACK.md` — the layer ledger and the six boundary confusions
-2. `CONSTRAINTS.md` — the floor and the numbers
-3. The diff under review (`git diff` against the base branch)
+1. The diff under review (`git diff` against the base branch), and the touched-layer
+   ledger rows you were handed (`scripts/layer_of.py --base <base> --sections`)
+2. `STACK.md` — the six boundary confusions section, always; the rest only where a
+   finding needs it
+3. `CONSTRAINTS.md` — grep the floor/numbers for the layers touched rather than reading
+   the whole file; read a section in full only when you cite it
 
 ## Then ask, per layer touched
 

@@ -9,6 +9,16 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# One green run per tree. The Stop hook, the gatekeeper and check_full.sh all reach this
+# script; when the tree is byte-identical to one that already passed, say so and stop.
+# Only a pass is remembered, so a red tree always re-runs. CHECK_NO_CACHE=1 forces it.
+key=$(bash scripts/tree_key.sh)
+marker=".tmp/green/task.$key"
+if [ -z "${CHECK_NO_CACHE:-}" ] && [ -f "$marker" ]; then
+  echo "ok    check_task (cached: this tree $key already passed)"
+  exit 0
+fi
+
 fail=0
 bash scripts/check_fast.sh || fail=1
 
@@ -32,4 +42,7 @@ uv run python scripts/checkpoint_guard.py || fail=1
 echo "----- workflow replay"
 uv run python scripts/replay_guard.py || fail=1
 
+if [ "$fail" -eq 0 ]; then
+  mkdir -p .tmp/green && : > "$marker"
+fi
 exit $fail

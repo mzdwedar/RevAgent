@@ -8,7 +8,7 @@ context="This project is built to The Agent Stack (Parts 1-8).
 
 Before writing code:
   1. Read CONSTRAINTS.md. Do not weaken it to make a change pass.
-  2. Read STACK.md and name the layer(s) your change touches.
+  2. Name the layer(s) your change touches (table below; STACK.md has the invariants).
   3. Never collapse two layers to save a file.
 
 Gates that will run whether or not you remember them:
@@ -16,8 +16,14 @@ Gates that will run whether or not you remember them:
   scripts/check_task.sh  at the end of every turn (Stop hook, blocking)
   scripts/stack_guard.py watches the diff for a weakened bar
 
-Layer ledger:
-$(sed -n '/^| # | Layer/,/^$/p' "$ROOT/STACK.md" 2>/dev/null | cut -c1-200)
+Layers (number | name | owner module) - the invariants live in STACK.md:
+$(sed -n '/^| # | Layer/,/^$/p' "$ROOT/STACK.md" 2>/dev/null | awk -F'|' 'NF>4 {print "|" $2 "|" $3 "|" $4 "|"}')
+
+Never collapse: session/authorization, transcript/context, memory/learning,
+capability/execution, approval/isolation, observability/evaluation.
+
+Read only what your change needs: 'uv run python scripts/layer_of.py --base main --sections'
+names the layers touched and prints their ledger rows.
 
 /stack-audit is mandatory before /ship."
 

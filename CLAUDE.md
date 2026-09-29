@@ -6,7 +6,10 @@ A production, multi-user, side-effecting AI agent, built to the invariants in
 ## Before writing any code
 
 1. Read `CONSTRAINTS.md`. **Do not weaken it to make a change pass.**
-2. Read `STACK.md`. Name the layer(s) your change touches before you touch them.
+2. Name the layer(s) your change touches before you touch them. The session-start
+   context lists the layers; `uv run python scripts/layer_of.py <paths> --sections`
+   prints the ledger rows for the ones you touch. Read the rest of `STACK.md` only when
+   a change needs it (the six boundary confusions are in the session-start context).
 3. Never collapse two layers to save a file. The six boundary confusions in `STACK.md`
    are the ones that matter; if a change needs to blur one, write an ADR in `docs/adr/`.
 
