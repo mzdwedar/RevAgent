@@ -24,12 +24,26 @@ its experiment's version, variant and hypothesis.
 A surface that can't describe its resource falls back to what the run itself has
 committed against it, plus the rendered context: the part the runtime can know on its
 own.
+
+**Only an `ALWAYS` action is bound to the world** (`binds_the_world`). That tier is the
+one whose approval is carried across time: a person answers hours after the turn
+parked, and the commit reads the world again to find out whether what they approved
+still exists (ADR-0008 rule 3). A `PRE_COMMIT` grant is minted by a rule at the act
+itself, so there is nothing for the world to have moved away from, and binding it to
+the world costs exactly one thing: an effect that moves its own description (a draft
+*creates* the experiment the registry then describes) makes the rerun that should
+deduplicate read its own grant as stale, and park a question nobody is asked (H1). The
+catalog-wide statement of that is `tests/fitness/test_effects_keep_their_snapshot.py`:
+no tool's own effect moves the snapshot its approval is checked against.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+
+from agentstack.tools.action import ActionRequest
+from agentstack.tools.spec import Approval, ToolSpec
 
 
 def resource_snapshot(
@@ -50,3 +64,34 @@ def world_snapshot(resource: str, world: Sequence[str]) -> str:
     commit rather than carried to it.
     """
     return resource_snapshot("world", resource, world)
+
+
+def binds_the_world(spec: ToolSpec) -> bool:
+    """Whether this action's approval is checked against the world its surface describes.
+
+    `ALWAYS` only: the tier a person answers, later, about a world the commit has to
+    read again. Anything else is granted (or needs nothing) at the act, against what the
+    run itself knows.
+    """
+    return spec.approval is Approval.ALWAYS
+
+
+def approval_snapshot(
+    *,
+    spec: ToolSpec,
+    request: ActionRequest,
+    observe: Callable[[], Sequence[str] | None],
+    context_fingerprint: str,
+    committed: Sequence[str],
+) -> str:
+    """The state this action's approval binds to, as the turn computes it.
+
+    `observe` is only called for an action bound to the world (a read through the
+    gateway, so only then is the surface asked). When the surface can't describe the
+    resource, or the action isn't bound to the world, the snapshot is what this turn
+    knows: its context and what the run already committed against the resource.
+    """
+    world = observe() if binds_the_world(spec) else None
+    if world is not None:
+        return world_snapshot(request.resource, world)
+    return resource_snapshot(context_fingerprint, request.resource, committed)

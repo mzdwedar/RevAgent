@@ -66,6 +66,7 @@ def run_turn(
     instructions: str = "You are a support agent. Prefer the narrowest tool that fits.",
     turn_id: str | None = None,
     admit: Callable[[ActionRequest], str | None] | None = None,
+    tracer: Tracer | None = None,
 ) -> TurnResult:
     """One turn, executed as a checkpointed graph (ADR-0006).
 
@@ -79,8 +80,13 @@ def run_turn(
     `admit`, for a turn told exactly what to propose, refuses anything else before the
     gateway sees it, so a proposal that differs is never parked and never put to a
     person. It returns the refusal's reason, or None.
+
+    `tracer` is for a caller that must export the turn's spans however it ends: a turn
+    that meets an effect of unknown outcome parks the run and raises `UnresolvedEffect`,
+    and the spans that led there are the ones someone reconciling will want.
     """
-    tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
+    if tracer is None:
+        tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=deps.versions)
     context = TurnContext(
         run=run,
         envelope=envelope,

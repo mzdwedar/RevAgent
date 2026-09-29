@@ -17,6 +17,8 @@ production worker by `tests/durability/test_recorded_histories.py`:
   back to waiting; then a person's "no", refused by the gateway;
 - `unresolved_reconciled`: the rollout's answer lost, a reconcile wait, woken,
   deduplicated.
+- `draft_unresolved_reconciled`: the draft's answer lost inside its turn, a reconcile
+  wait, settled by `operator reconcile`, the same turn taken again, the rollout asked.
 
 A change that must reach live runs goes behind `workflow.patched("<id>")`, which
 replays the old history down the old branch. The guard then passes.

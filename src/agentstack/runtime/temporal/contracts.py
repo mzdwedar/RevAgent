@@ -43,6 +43,10 @@ REASK_EVERY = timedelta(hours=24)
 # workflow and the activity agree on it without the workflow importing the activity.
 NOT_ANSWERED = "not_answered"
 
+# The status of a turn or an act that met an effect of unknown outcome and parked a
+# reconcile wait: the run waits for a person to settle the claim, then goes again.
+UNRESOLVED = "unresolved"
+
 
 def workflow_id(run_id: str) -> str:
     """The one workflow per run. The server refuses a second start under the same id
@@ -175,7 +179,8 @@ class TurnOutcome:
     refusals: int = 0
     # Set when the activity itself was refused (a gateway or layer-8 refusal type).
     refusal: str | None = None
-    # Set when the turn stopped for a person: the approval wait it parked.
+    # Set when the turn stopped for a person: the approval wait it parked, or, with
+    # status `UNRESOLVED`, the reconcile wait for an effect of unknown outcome.
     wait_id: str | None = None
 
 

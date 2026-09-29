@@ -8,6 +8,7 @@ needs beyond plain state comes from `runtime.context`, which is not checkpointed
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 from langgraph.runtime import Runtime
@@ -15,13 +16,14 @@ from langgraph.runtime import Runtime
 from agentstack.context.assemble import ContextBundle
 from agentstack.context.assemble import assemble as assemble_context
 from agentstack.context.items import ContextItem, Scope, Trust
+from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.surfaces import SurfaceRefused
 from agentstack.model.contract import ExposedTool, ModelRequest
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.graph import TurnContext, TurnState
-from agentstack.runtime.snapshot import resource_snapshot, world_snapshot
-from agentstack.runtime.waits import approval_wait_id
+from agentstack.runtime.snapshot import approval_snapshot
+from agentstack.runtime.waits import approval_wait_id, park_reconcile
 from agentstack.tools.registry import ToolNotExposed
 from agentstack.tools.validation import InvalidToolArguments, validate_arguments
 
@@ -219,15 +221,15 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
             refusals.append(refused)
             continue
         spec = deps.registry.spec(tool)
-        # The world as its surface describes it, when it can: the same snapshot a commit
-        # reads again at the act (T43). Otherwise what this turn knows on its own.
-        world = deps.gateway.observe(request=request, tracer=tracer)
-        state_snapshot = (
-            world_snapshot(request.resource, world)
-            if world is not None
-            else resource_snapshot(
-                fingerprint, request.resource, committed_against.get(request.resource, [])
-            )
+        # For an action a person approves, the world as its surface describes it: the
+        # same snapshot the commit reads again at the act (T43). Otherwise what this turn
+        # knows on its own, which a rerun of the turn computes again unchanged (H1).
+        state_snapshot = approval_snapshot(
+            spec=spec,
+            request=request,
+            observe=partial(deps.gateway.observe, request=request, tracer=tracer),
+            context_fingerprint=fingerprint,
+            committed=committed_against.get(request.resource, []),
         )
         with tracer.span("tool.call", tool=spec.name, resource=request.resource):
             pass
@@ -267,6 +269,24 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 pass
             refusals.append(str(exc))
             continue
+        except UnresolvedEffect as exc:
+            # The effect may have applied, and only the surface knows (E2). The run parks
+            # for someone to settle the claim, and nothing after this proposal runs: the
+            # turn stops here, its checkpoint still before `act`, so once the claim is
+            # settled the same turn resumes and the ledger answers for this proposal.
+            wait = park_reconcile(
+                deps.waits,
+                run_id=run.run_id,
+                action_fingerprint=request.fingerprint(),
+                idempotency_key=exc.key,
+                claimed_at=exc.claimed_at,
+                state_snapshot=state_snapshot,
+            )
+            with tracer.span("response", status="unresolved", wait=wait.wait_id):
+                pass
+            ctx.carried["pending_wait"] = wait
+            ctx.carried["pending_request"] = request
+            raise
         except (ApprovalRequired, ApprovalStale) as exc:
             summary = ApprovalPrompt(
                 spec=spec,

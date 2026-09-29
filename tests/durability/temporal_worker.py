@@ -113,6 +113,17 @@ class HangingGateway:
         raise AssertionError("a hanging gateway outlived its test")
 
 
+class HangingAfterTheEffect(HangingGateway):
+    """The first commit goes through the real gateway (the surface applies it, the ledger
+    settles it) and then announces itself and never returns: the process dies between
+    the effect and the step recording it, which is audit finding H1's window.
+    """
+
+    def execute(self, **kwargs: Any) -> Any:
+        self.inner.execute(**kwargs)
+        return super().execute(**kwargs)
+
+
 class RecordingAsker:
     """The production asker, noting each question it puts in a file both processes can
     read: "asked once" has to be counted across a kill."""
@@ -143,6 +154,10 @@ async def serve(args: argparse.Namespace) -> None:
             if args.hang_before_gateway:
                 stack.deps.gateway = HangingGateway(
                     stack.deps.gateway, Path(args.hang_before_gateway)
+                )
+            if args.hang_after_gateway:
+                stack.deps.gateway = HangingAfterTheEffect(
+                    stack.deps.gateway, Path(args.hang_after_gateway)
                 )
             activities = RunActivities(
                 runs=RunStore(db=db),
@@ -177,6 +192,7 @@ def main() -> None:
     parser.add_argument("--model-calls", default=None)
     parser.add_argument("--asks", default=None)
     parser.add_argument("--hang-before-gateway", default=None, metavar="REACHED_FILE")
+    parser.add_argument("--hang-after-gateway", default=None, metavar="REACHED_FILE")
     args = parser.parse_args()
     _fixture_dataset()
     asyncio.run(serve(args))

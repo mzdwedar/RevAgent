@@ -24,6 +24,7 @@ from agentstack.runtime.temporal.client import notify_answer
 from agentstack.runtime.temporal.contracts import (
     NOT_ANSWERED,
     REASK_EVERY,
+    UNRESOLVED,
     CommitOutcome,
     RunProgress,
     Trigger,
@@ -36,6 +37,7 @@ from agentstack.tools.spec import Surface
 from tests.durability.test_approval_wait import PAYLOAD, propose_and_wait
 from tests.durability.test_approval_wait import stack as stack  # the same fixture
 from tests.durability.test_commit import LosesTheFirstRolloutAnswer, acted
+from tests.durability.test_reconcile import LosesTheFirstDraftAnswer, drive, reconcile
 from tests.durability.test_slack_answer import APPROVER, slack_click
 from tests.fitness.test_trigger_to_candidate import RULE, WATERMARK, StubScorer
 from tests.temporal_support import keep_history, progress_until, time_skipping, worker_on
@@ -186,3 +188,29 @@ def test_an_unresolved_rollout_reconciled_then_deduplicated(
     assert unresolved.status == "unresolved"
     assert deduplicated == CommitOutcome(status="deduplicated")
     assert done.reconciling is None
+
+
+def test_a_draft_unresolved_in_its_turn_reconciled_then_taken_again(
+    stack: Stack, app_database: Database
+) -> None:
+    """M1's path through the workflow: the drafting turn comes back unresolved, the run
+    waits on its reconcile wait, `operator reconcile` settles it and wakes the run, and
+    the same turn is taken again before the rollout is proposed."""
+    surface = LosesTheFirstDraftAnswer(stack.deps.gateway.surfaces[Surface.REGISTRY])
+    stack.deps.gateway.surfaces[Surface.REGISTRY] = surface
+
+    async def settle_and_keep(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
+        assert surface.receipt is not None
+        code = await reconcile(
+            env.client, app_database, parked.reconciling or "", receipt=surface.receipt
+        )
+        assert code == 0
+        done = await progress_until(handle, lambda p: p.awaiting_approval is not None)
+        await keep_history(handle, "draft_unresolved_reconciled")
+        return done
+
+    _, _, done = drive(stack, app_database, settle_and_keep)
+
+    unresolved, drafted, proposed = done.turns
+    assert unresolved.status == UNRESOLVED
+    assert drafted.receipts == 1 and proposed.status == "awaiting_approval"

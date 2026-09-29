@@ -273,6 +273,10 @@ REFUSAL_TYPES: dict[str, type[Exception]] = {
 # Everything the policy stops after one attempt, as the exception an activity would raise.
 FAILS_ONCE: dict[str, Callable[[str], Exception]] = {
     **REFUSAL_TYPES,
+    # Names the claim it is about, as the gateway raises it (M1).
+    UnresolvedEffect.__name__: lambda message: UnresolvedEffect(
+        message, key="refund:acme:ch-7:1999", claimed_at=None
+    ),
     IntegrityViolation.__name__: lambda message: IntegrityViolation(
         "runs_session_id_fkey", message
     ),
