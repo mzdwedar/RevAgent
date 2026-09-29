@@ -1870,3 +1870,33 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     `tests/fitness/test_temporal_boundaries.py` and the README's fitness count against
     CONSTRAINTS.md's ratchet, and run the full gate list before this merge is
     considered shippable.
+  - **Gate run (commit 272e4b5, after re-recording histories):** all green, no code
+    fix was needed beyond the re-recorded histories.
+    - Re-recorded all 5 histories (`replay_guard.py --record`), including
+      `draft_unresolved_reconciled`; `replay_guard.py` (no `--record`) then passes:
+      "5 recorded histories replay against this code".
+    - `tests/fitness/test_temporal_boundaries.py`: 23/23 passed, no secrets in the
+      decoded payloads.
+    - README fitness count vs. CONSTRAINTS.md ratchet: already matched reality — 43
+      files under `tests/fitness/test_*.py`, README says "43 tests", ratchet says 43;
+      `test_the_readme_counts_match_what_is_actually_here` passes. No edit needed.
+    - `stack_guard.py --base c333575`: "the bar is intact". `checkpoint_guard.py --base
+      c333575`: "v1 is safe to ship over v1".
+    - `check_task.sh`: fully green — ruff/format/mypy/lint-imports/capabilities ok;
+      373 tests passed (98% coverage, matching the CONSTRAINTS.md ratchet); changed-line
+      coverage "no changed executable lines in src/" (only fixture JSON changed);
+      stack_guard and checkpoint_guard clean; replay_guard clean.
+    - `check_full.sh`: green through release gates — 16/16 Part-8 gate cases pass;
+      `osv-scanner` and `gitleaks` skipped (not installed locally; CI enforces both).
+    - The four suite/file ERRORs reported from the half-merged tree
+      (`tests/infra/test_registry_store.py`, `tests/infra/test_temporal_substrate.py`,
+      `tests/test_cli_smoke.py`, `tests/test_validation_and_ledger_edges.py`) and the
+      36% changed-line-coverage reading do **not** reproduce on the merged, quiet tree:
+      52/52 passed running those four files together in isolation. Consistent with the
+      task's own hypothesis — two suites racing on the half-merged tree, not a real
+      regression. One transient failure was seen in
+      `tests/durability/test_timers.py::test_continuing_as_new_is_invisible_to_the_record`
+      while two full suites ran back-to-back; it passed in isolation and on a clean,
+      single full run (373/373), so treated as load-induced flake, not a merge bug.
+    - Commit: `272e4b5` "Re-record the replay histories on the merged A1+A2 workflow".
+      No separate fix commit was needed — the merge itself had no gate-breaking bug.
