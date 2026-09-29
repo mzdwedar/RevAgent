@@ -43,13 +43,6 @@ def _is_id(value: Any) -> bool:
     return isinstance(value, str) and _ID.fullmatch(value) is not None
 
 
-def _is_cents(value: Any) -> bool:
-    """`cents` names the unit of an integer amount. The declared `integer` type already
-    holds the shape; the format is there for the reader and the approval prompt, so it
-    adds no check of its own - and says so here, rather than by being silently skipped."""
-    return isinstance(value, int)
-
-
 # Every `format` the catalog declares, and what a value must be to meet it. A format
 # not in this table is refused rather than waved through: a declared constraint nothing
 # enforces is exactly what `format: id` was (C1). `tests/fitness/test_request_binding.py`
@@ -57,7 +50,6 @@ def _is_cents(value: Any) -> bool:
 # ships - it fires on the one that would have shipped unchecked.
 _FORMATS: dict[str, tuple[Callable[[Any], bool], str]] = {
     "id": (_is_id, "a single id: letters, digits and ._:- with no '/'"),
-    "cents": (_is_cents, "a whole number of cents"),
 }
 
 

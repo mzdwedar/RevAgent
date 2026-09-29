@@ -5,8 +5,8 @@ the fourth, and it gets one thing right that a naive version does not: **it reco
 intent before the effect, not success after it.**
 
 A ledger whose only state is "already returned" cannot help with the failure that
-matters. The surface applies the refund, the socket times out, nothing is recorded,
-the run retries, and the money leaves twice. So there are three states, and the third
+matters. The surface applies the rollout, the socket times out, nothing is recorded,
+the run retries, and the customers are exposed twice. So there are three states, and the third
 is the load-bearing one:
 
     FRESH      nobody has tried this key - go ahead

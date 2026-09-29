@@ -8,8 +8,8 @@ Two tools, and the difference between them is the whole design:
   Irreversible, so `ALWAYS`: a person, every time.
 
 Each lives on its own stage. A run drafting an experiment is never shown the rollout
-tool, and a refund run is shown neither - which is the exposure filter doing its actual
-job rather than being a field nobody reads. Exposing both to every run would hand a
+tool, and a run on no stage is shown neither - which is the exposure filter doing its
+actual job rather than being a field nobody reads. Exposing both to every run would hand a
 prompt injection a menu with the irreversible item on it. (They once shared a single
 `experiment` stage, which is exactly that menu; `migrations/0011` moved those runs.)
 

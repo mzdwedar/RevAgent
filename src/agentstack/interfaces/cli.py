@@ -2,10 +2,10 @@
 
     uv run agentstack
 
-Walks one refund through the whole stack: assembled context, exposed tools, a policy
+Walks one rollout through the whole stack: assembled context, exposed tools, a policy
 decision, a wait parked because a human is needed, an approval bound to that exact
 action, a resume against the same run id, the commit - and then a retry that is
-deduplicated instead of refunding twice.
+deduplicated instead of rolling out twice.
 """
 
 from __future__ import annotations
@@ -18,11 +18,13 @@ from agentstack.runtime.waits import ResumeEvent, resume
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import open_pool
+from agentstack.tools.experiments import ROLLOUT_STAGE
 
-SCOPES = frozenset({"billing:read", "billing:refund"})
+SCOPES = frozenset({"experiments:rollout"})
 MESSAGE = (
-    "customer wants a refund: issue_refund tenant=acme customer_id=c-42 "
-    "charge_id=ch-7 amount_cents=1999"
+    "roll out the discount: roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 "
+    "experiment_version=exp:v1 percentage=10 targeting_model_version=tabpfn-3.5 "
+    "risk_threshold=0.61 prior_rollout_event=0"
 )
 
 
@@ -57,12 +59,27 @@ def walk_through(stack: Stack) -> None:
         session_id=session.session_id,
         text=MESSAGE,
     )
+    # What an earlier drafting turn wrote: the registry will not roll out a draft it
+    # has never seen. Only when nobody has, so the demo can be run again.
+    if stack.registry_client.state("acme/experiments/exp-7") is None:
+        stack.registry_client.commit(
+            "acme/experiments/exp-7",
+            {
+                "experiment_version": "exp:v1",
+                "hypothesis": "a discount retains",
+                "variant": "20-off",
+            },
+        )
     run = new_run(
-        session_id=session.session_id, tenant="acme", user="agent-operator", channel="cli"
+        session_id=session.session_id,
+        tenant="acme",
+        user="agent-operator",
+        stage=ROLLOUT_STAGE,
+        channel="cli",
     )
 
     first = handle(stack, event, scopes=SCOPES, run=run)
-    _report("turn 1 - refund prepared, run parked on a human approval", first)
+    _report("turn 1 - rollout prepared, run parked on a human approval", first)
 
     wait = first.pending_wait
     request = first.pending_request
@@ -73,7 +90,7 @@ def walk_through(stack: Stack) -> None:
         run_id=run.run_id,
         request=request,
         state_snapshot=wait.state_snapshot,
-        approver="finance-oncall",
+        approver="experiment-owner",
         summary=summary,
     )
     resume(
@@ -82,19 +99,19 @@ def walk_through(stack: Stack) -> None:
             run_id=run.run_id,
             wait_id=wait.wait_id,
             state_snapshot=wait.state_snapshot,
-            payload={"approved_by": "finance-oncall"},
+            payload={"approved_by": "experiment-owner"},
         ),
     )
     print(f"\napproval granted, bound to action {request.fingerprint()} in run {run.run_id}")
 
     second = handle(stack, event, scopes=SCOPES, run=run)
-    _report("turn 2 - resumed against the same run, refund committed", second)
+    _report("turn 2 - resumed against the same run, rollout committed", second)
 
     third = handle(stack, event, scopes=SCOPES, run=run)
     _report("turn 3 - retried, and the step boundary means it does not happen twice", third)
 
     print("\n--- evidence")
-    print(f"  surface commits : {len(stack.client.calls)} (one refund, not three)")
+    print(f"  surface commits : {len(stack.registry_client.rollouts)} (one rollout, not three)")
     audited = stack.audit.for_run(run.run_id)
     print(f"  audit records   : {len(audited)} in a sink separate from traces")
     steps = [f"{r.name}:{r.status}" for r in stack.steps.records_for(run.run_id)]

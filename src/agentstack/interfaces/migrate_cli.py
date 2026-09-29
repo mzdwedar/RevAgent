@@ -5,7 +5,7 @@
     uv run agentstack-migrate down --to 3
 
 Kept out of `agentstack.interfaces.cli`, which is the stack walkthrough: migrating a
-database and demonstrating a refund are not two modes of one command.
+database and demonstrating a rollout are not two modes of one command.
 """
 
 from __future__ import annotations

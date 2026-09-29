@@ -16,7 +16,7 @@ from agentstack.observability.spans import Tracer
 from agentstack.runtime.run import Run
 from agentstack.storage.database import Database
 
-from .conftest import SCOPES, approve_and_resume
+from .conftest import SCOPES, approve_and_resume, seed_experiment
 
 
 def test_they_are_different_sinks(stack: Stack) -> None:
@@ -47,20 +47,21 @@ def test_a_denied_action_is_audited_too(stack: Stack, event: InboundEvent, run: 
     first = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, first, run)
     with contextlib.suppress(PermissionError):
-        handle(stack, event, scopes=frozenset({"billing:read"}), run=run)
+        handle(stack, event, scopes=frozenset({"experiments:read"}), run=run)
     outcomes = {r.outcome for r in stack.audit.for_run(run.run_id)}
     assert "denied" in outcomes, "a refusal is evidence and belongs in the audit trail"
 
 
 def test_a_read_only_call_is_traced_but_not_audited(stack: Stack, run: Run) -> None:
+    seed_experiment(stack)
     lookup = InboundEvent(
         channel="test",
         tenant=run.tenant,
         user_id=run.user,
         session_id=run.session_id,
-        text="lookup_subscription tenant=acme customer_id=c-42",
+        text="get_experiment tenant=acme experiment_id=exp-7",
     )
-    result = handle(stack, lookup, scopes=SCOPES, run=run)
+    result = handle(stack, lookup, scopes=frozenset({"experiments:read"}), run=run)
     assert result.status == "complete"
     assert "execution.read" in result.tracer.names()
     assert "execution.commit" not in result.tracer.names(), "a read is not a commit"
@@ -81,18 +82,20 @@ def test_a_refused_approval_is_audited(stack: Stack, event: InboundEvent, run: R
 def test_a_containment_violation_is_audited(stack: Stack, run: Run) -> None:
     """A human approved it and containment stopped it anyway - the most interesting
     event the system can produce, and it used to leave nothing behind."""
-    from agentstack.execution.surfaces import SandboxViolation
+    import dataclasses
+
+    from agentstack.execution.surfaces import Sandbox, SandboxViolation
     from agentstack.interfaces.wiring import envelope_for
     from agentstack.observability.spans import Tracer
     from agentstack.tools.action import ActionRequest
-    from agentstack.tools.catalog import REFUND
+    from agentstack.tools.experiments import ROLLOUT
     from agentstack.tools.spec import Surface
 
     outside = ActionRequest(
-        tool=REFUND.name,
-        surface=Surface.API,
-        resource=f"{run.tenant}/invoices/i-1",
-        payload={"amount_cents": 1},
+        tool=ROLLOUT.name,
+        surface=Surface.REGISTRY,
+        resource=f"{run.tenant}/experiments/exp-7/rollout",
+        payload={"percentage": 1},
         idempotency_key="k-contained",
     )
     stack.approvals.grant(
@@ -100,14 +103,24 @@ def test_a_containment_violation_is_audited(stack: Stack, run: Run) -> None:
         request=outside,
         state_snapshot="s",
         approver="finance-oncall",
-        summary="refund 0.01 on invoice i-1",
+        summary="roll out exp-7 to 1%",
     )
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)
+    # A run scoped to exp-9 alone: exp-7 is the same tenant and a well-formed rollout,
+    # so nothing but containment stands between it and the registry.
+    scoped = dataclasses.replace(
+        stack.deps.gateway,
+        sandbox=Sandbox(
+            tenant=run.tenant,
+            allowed_surfaces=frozenset({Surface.REGISTRY}),
+            allowed_resource_prefixes=frozenset({f"{run.tenant}/experiments/exp-9/"}),
+        ),
+    )
     with pytest.raises(SandboxViolation):
-        stack.deps.gateway.execute(
+        scoped.execute(
             request=outside,
-            spec=REFUND,
+            spec=ROLLOUT,
             envelope=envelope_for(view, scopes=SCOPES),
             run_id=run.run_id,
             state_snapshot="s",
@@ -137,7 +150,7 @@ def test_deleting_the_run_does_not_delete_what_it_was_accountable_for(
 ) -> None:
     """Every other table cascades from the session. This one must not.
 
-    "We deleted the session" is not an answer to "who authorised this refund". An
+    "We deleted the session" is not an answer to "who authorised this rollout". An
     audit trail that a retention job can erase as a side effect of tidying up is a
     debug log with a longer TTL, which is the Part 8 boundary collapsing.
     """
@@ -145,7 +158,7 @@ def test_deleting_the_run_does_not_delete_what_it_was_accountable_for(
     approve_and_resume(stack, first, run)
     handle(stack, event, scopes=SCOPES, run=run)
     before = stack.audit.for_run(run.run_id)
-    assert before, "expected the committed refund to be audited"
+    assert before, "expected the committed rollout to be audited"
 
     app_database.execute("DELETE FROM sessions WHERE session_id = %s", (run.session_id,))
 

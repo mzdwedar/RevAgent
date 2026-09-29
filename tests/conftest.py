@@ -96,8 +96,8 @@ def app_database(_migrated: Database) -> Database:
 
     T2 shared this across the session on the reasoning that sessions are uuid-keyed
     and everything else hangs off a session id, so tests could not collide. That was
-    wrong, and T4 is where it showed: an idempotency key is `refund:{tenant}:{charge}:
-    {amount}`, deliberately stable across runs, so the first test to refund ch-7
+    wrong, and T4 is where it showed: an idempotency key is `rollout:{tenant}:{experiment}:
+    {version}:...`, deliberately stable across runs, so the first test to roll out exp-7
     settles that key for every test after it. Emptying the tables is the fix; a
     per-run key would have traded a real safety property for test convenience.
     """

@@ -382,7 +382,7 @@ src/agentstack/
     evidence.py         NEW  assembles the cycle's working set: cohort stats,
                              predictions, policy verdict, prior decisions
   tools/
-    catalog.py          REPLACE the placeholder refund tools
+    catalog.py          the experiment tools only (placeholder refund tools removed, ADR-0010)
   execution/
     surfaces.py         registry + rollout clients land here (and nowhere else)
   prediction/           NEW  TabPFN adapters (classifier + regressor), the frozen

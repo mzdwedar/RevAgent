@@ -7,18 +7,17 @@ import pathlib
 
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.catalog import build_registry
+from agentstack.tools.experiments import ROLLOUT, ROLLOUT_STAGE
+
+from .conftest import ROLLOUT_ARGS
 
 SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "agentstack"
 
 
 def test_preparing_a_tool_call_changes_nothing() -> None:
     registry = build_registry()
-    exposed = registry.expose_for(tenant="acme")
-    request = registry.prepare(
-        "issue_refund",
-        {"tenant": "acme", "customer_id": "c-1", "charge_id": "ch-1", "amount_cents": 100},
-        exposed=exposed,
-    )
+    exposed = registry.expose_for(tenant="acme", stage=ROLLOUT_STAGE)
+    request = registry.prepare(ROLLOUT.name, ROLLOUT_ARGS, exposed=exposed)
     assert isinstance(request, ActionRequest)
     assert request.fingerprint(), "a prepared action is inspectable before it is committed"
 

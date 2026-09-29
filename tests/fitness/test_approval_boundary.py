@@ -12,12 +12,12 @@ from agentstack.observability.spans import Tracer
 from agentstack.policy.approval import ApprovalRequired, ApprovalStale, require_approval
 from agentstack.runtime.run import Run
 from agentstack.storage.database import Database, IntegrityViolation
-from agentstack.tools.catalog import LOOKUP, REFUND, _refund
+from agentstack.tools.experiments import GET, ROLLOUT, prepare_get, prepare_rollout
 from agentstack.tools.spec import Approval
 
-from .conftest import SCOPES, TENANT, approve_and_resume
+from .conftest import ROLLOUT_ARGS, SCOPES, TENANT, approve_and_resume
 
-ARGS = {"tenant": "acme", "customer_id": "c-42", "charge_id": "ch-7", "amount_cents": 1999}
+ARGS = ROLLOUT_ARGS
 
 
 def test_an_ungated_action_never_reaches_the_surface(
@@ -29,8 +29,8 @@ def test_an_ungated_action_never_reaches_the_surface(
 
 def test_approval_at_task_start_does_not_authorize_a_later_act(stack: Stack, run: Run) -> None:
     """The classic failure: 'can I complete this task?' asked ten steps too early."""
-    vague = _refund({**ARGS, "amount_cents": 1})
-    actual = _refund(ARGS)
+    vague = prepare_rollout({**ARGS, "percentage": 1})
+    actual = prepare_rollout(ARGS)
     stack.approvals.grant(
         run_id=run.run_id,
         request=vague,
@@ -41,7 +41,7 @@ def test_approval_at_task_start_does_not_authorize_a_later_act(stack: Stack, run
     with pytest.raises(ApprovalRequired):
         require_approval(
             store=stack.approvals,
-            spec=REFUND,
+            spec=ROLLOUT,
             request=actual,
             run_id=run.run_id,
             state_snapshot="fp",
@@ -49,18 +49,18 @@ def test_approval_at_task_start_does_not_authorize_a_later_act(stack: Stack, run
 
 
 def test_a_stale_approval_is_refused(stack: Stack, run: Run) -> None:
-    request = _refund(ARGS)
+    request = prepare_rollout(ARGS)
     stack.approvals.grant(
         run_id=run.run_id,
         request=request,
         state_snapshot="state-as-shown",
         approver="someone",
-        summary="refund 19.99",
+        summary="roll out exp-7 to 10%",
     )
     with pytest.raises(ApprovalStale, match="re-ask"):
         require_approval(
             store=stack.approvals,
-            spec=REFUND,
+            spec=ROLLOUT,
             request=request,
             run_id=run.run_id,
             state_snapshot="the-world-moved",
@@ -68,12 +68,12 @@ def test_a_stale_approval_is_refused(stack: Stack, run: Run) -> None:
 
 
 def test_a_read_only_tool_needs_no_approval(stack: Stack, run: Run) -> None:
-    assert LOOKUP.approval is Approval.NONE
+    assert GET.approval is Approval.NONE
     assert (
         require_approval(
             store=stack.approvals,
-            spec=LOOKUP,
-            request=_refund(ARGS),
+            spec=GET,
+            request=prepare_get(ARGS),
             run_id=run.run_id,
             state_snapshot="x",
         )
@@ -86,8 +86,8 @@ def test_the_approval_prompt_names_the_action_not_the_task(
 ) -> None:
     result = handle(stack, event, scopes=SCOPES, run=run)
     summary = result.approval_summary or ""
-    assert "issue_refund" in summary
-    assert "acme/customers/c-42/charges/ch-7" in summary
+    assert "roll_out_variant_to_percentage" in summary
+    assert "acme/experiments/exp-7/rollout" in summary
     assert "irreversible" in summary.lower()
     assert "agent-operator" in summary, "an approver must see which identity will act"
 
@@ -104,10 +104,10 @@ def test_containment_still_applies_after_approval(
     approve_and_resume(stack, first, run)
 
     outside = ActionRequest(
-        tool=REFUND.name,
-        surface=Surface.API,
-        resource="globex/customers/c-1/charges/ch-1",
-        payload={"amount_cents": 1},
+        tool=ROLLOUT.name,
+        surface=Surface.REGISTRY,
+        resource="globex/experiments/exp-7/rollout",
+        payload={"percentage": 1},
         idempotency_key="k",
     )
     stack.approvals.grant(
@@ -122,7 +122,7 @@ def test_containment_still_applies_after_approval(
     with pytest.raises((SandboxViolation, Exception)) as excinfo:
         stack.deps.gateway.execute(
             request=outside,
-            spec=REFUND,
+            spec=ROLLOUT,
             envelope=envelope_for(view, scopes=SCOPES),
             run_id=run.run_id,
             state_snapshot="s",
@@ -136,7 +136,7 @@ def test_an_approval_with_nothing_shown_to_the_approver_is_refused(stack: Stack,
     with pytest.raises(ValueError, match="summary"):
         stack.approvals.grant(
             run_id=run.run_id,
-            request=_refund(ARGS),
+            request=prepare_rollout(ARGS),
             state_snapshot="s",
             approver="someone",
             summary="",
@@ -144,10 +144,10 @@ def test_an_approval_with_nothing_shown_to_the_approver_is_refused(stack: Stack,
     with pytest.raises(ValueError, match="approver"):
         stack.approvals.grant(
             run_id=run.run_id,
-            request=_refund(ARGS),
+            request=prepare_rollout(ARGS),
             state_snapshot="s",
             approver="",
-            summary="refund 19.99",
+            summary="roll out exp-7 to 10%",
         )
 
 
@@ -155,13 +155,13 @@ def test_an_approval_outlives_the_process_that_recorded_it(
     stack: Stack, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """An approval that dies with the process is a human asked twice for one decision."""
-    request = _refund(ARGS)
+    request = prepare_rollout(ARGS)
     granted = stack.approvals.grant(
         run_id=run.run_id,
         request=request,
         state_snapshot="state-as-shown",
         approver="finance-oncall",
-        summary="refund 19.99 on ch-7",
+        summary="roll out exp-7 to 10%",
     )
 
     restarted = build_stack(app_database, checkpointer, tenant=TENANT)
@@ -178,20 +178,20 @@ def test_an_approval_outlives_the_process_that_recorded_it(
 def test_the_approval_matching_this_state_wins_over_a_later_one(stack: Stack, run: Run) -> None:
     """Approved twice for one action. Reporting the non-matching one as stale is a
     false alarm, and false alarms are how people learn to click through real ones."""
-    request = _refund(ARGS)
+    request = prepare_rollout(ARGS)
     matching = stack.approvals.grant(
         run_id=run.run_id,
         request=request,
         state_snapshot="state-a",
         approver="ana",
-        summary="refund 19.99",
+        summary="roll out exp-7 to 10%",
     )
     stack.approvals.grant(
         run_id=run.run_id,
         request=request,
         state_snapshot="state-b",
         approver="ben",
-        summary="refund 19.99",
+        summary="roll out exp-7 to 10%",
     )
 
     found = stack.approvals.find(
@@ -205,14 +205,14 @@ def test_without_a_state_snapshot_the_most_recent_approval_is_returned(
     stack: Stack, run: Run
 ) -> None:
     """Ordered by sequence, not by clock: two grants can share a microsecond."""
-    request = _refund(ARGS)
+    request = prepare_rollout(ARGS)
     for approver in ("ana", "ben", "cai"):
         latest = stack.approvals.grant(
             run_id=run.run_id,
             request=request,
             state_snapshot=f"state-{approver}",
             approver=approver,
-            summary="refund 19.99",
+            summary="roll out exp-7 to 10%",
         )
 
     found = stack.approvals.find(run_id=run.run_id, action_fingerprint=request.fingerprint())
@@ -226,7 +226,7 @@ def test_the_database_refuses_a_blank_approver_or_summary(run: Run, app_database
         ("approver", "   ", "approval_names_an_approver"),
         ("summary", "", "approval_records_what_was_shown"),
     ):
-        values = {"approver": "someone", "summary": "refund 19.99"}
+        values = {"approver": "someone", "summary": "roll out exp-7 to 10%"}
         values[column] = value
         with pytest.raises(IntegrityViolation) as caught:
             app_database.execute(
@@ -241,10 +241,10 @@ def test_an_approval_for_a_run_that_does_not_exist_is_refused(stack: Stack) -> N
     with pytest.raises(IntegrityViolation) as caught:
         stack.approvals.grant(
             run_id="run-never-created",
-            request=_refund(ARGS),
+            request=prepare_rollout(ARGS),
             state_snapshot="s",
             approver="someone",
-            summary="refund 19.99",
+            summary="roll out exp-7 to 10%",
         )
 
     assert caught.value.constraint == "approvals_run_id_fkey"

@@ -6,7 +6,7 @@ from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, handle
 from agentstack.runtime.run import Run
 
-from .conftest import SCOPES, approve_and_resume
+from .conftest import SCOPES, approve_and_resume, fresh_run
 
 
 def test_every_span_carries_the_run_and_session_id(
@@ -41,7 +41,7 @@ def test_an_approval_does_not_carry_across_runs(
     first = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, first, run)
 
-    other = handle(stack, event, scopes=SCOPES)  # a fresh run id
+    other = handle(stack, event, scopes=SCOPES, run=fresh_run(stack, event.session_id))
     assert other.status == "awaiting_approval", (
         "an approval granted in one run must not authorize another run"
     )

@@ -124,14 +124,14 @@ def test_working_state_round_trips_and_the_latest_write_wins(
     stack: Stack, app_database: Database, checkpointer: Any
 ) -> None:
     session = stack.resolver.start(user_id="u-1", tenant=TENANT)
-    stack.working_state.put(session.session_id, "draft", {"amount_cents": 1999})
-    stack.working_state.put(session.session_id, "draft", {"amount_cents": 2500})
+    stack.working_state.put(session.session_id, "draft", {"percentage": 10})
+    stack.working_state.put(session.session_id, "draft", {"percentage": 25})
     stack.working_state.put(session.session_id, "step", "prepared")
 
     restarted = build_stack(app_database, checkpointer, tenant=TENANT)
 
     assert restarted.working_state.get(session.session_id) == {
-        "draft": {"amount_cents": 2500},
+        "draft": {"percentage": 25},
         "step": "prepared",
     }
 
@@ -141,8 +141,8 @@ def test_two_sessions_of_one_user_share_no_transcript_and_no_scratchpad(stack: S
     a = stack.resolver.start(user_id="u-1", tenant=TENANT)
     b = stack.resolver.start(user_id="u-1", tenant=TENANT)
 
-    stack.transcripts.append(session_id=a.session_id, kind="user", body="about the refund")
-    stack.working_state.put(a.session_id, "draft", {"charge_id": "ch-7"})
+    stack.transcripts.append(session_id=a.session_id, kind="user", body="about the rollout")
+    stack.working_state.put(a.session_id, "draft", {"experiment_id": "exp-7"})
 
     assert stack.transcripts.for_session(b.session_id) == ()
     assert stack.working_state.get(b.session_id) == {}

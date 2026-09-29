@@ -4,7 +4,7 @@
   "gate": true,
   "description": "The draft commits and the process dies before its step is recorded. The rerun of the same turn deduplicates against the ledger and finishes; it does not read its own policy grant as stale and park a human approval nobody is asked for (audit H1).",
   "message": "create_experiment_draft tenant=acme experiment_id=exp-eval experiment_version=v1 hypothesis=discounts-retain variant=20-percent-off",
-  "scopes": ["experiments:write"],
+  "scopes": ["experiments:draft"],
   "stage": "draft",
   "dies_before_step_completes": true,
   "expect": {

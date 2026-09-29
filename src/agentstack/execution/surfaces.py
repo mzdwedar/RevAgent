@@ -39,7 +39,7 @@ class SurfaceRefused(RuntimeError):
 
     The gateway releases the idempotency claim for it. Raising it for an effect that
     *might* have applied would turn an unknown outcome into a free slot, which is the
-    double-refund the two-phase ledger exists to prevent.
+    double rollout the two-phase ledger exists to prevent.
     """
 
 

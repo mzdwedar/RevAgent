@@ -13,13 +13,21 @@ from agentstack.observability.spans import Tracer
 from agentstack.policy.decisions import PolicyDenied, decide
 from agentstack.policy.envelope import REQUIRED_ENVELOPE_FIELDS, IdentityEnvelope
 from agentstack.runtime.run import Run
-from agentstack.tools.catalog import REFUND, _refund
-from agentstack.tools.experiments import GET, HALT, LIST, prepare_get, prepare_halt, prepare_list
+from agentstack.tools.experiments import (
+    GET,
+    HALT,
+    LIST,
+    ROLLOUT,
+    prepare_get,
+    prepare_halt,
+    prepare_list,
+    prepare_rollout,
+)
 from agentstack.tools.spec import ActsAs
 
-from .conftest import SCOPES, approve_and_resume
+from .conftest import ROLLOUT_ARGS, SCOPES, approve_and_resume
 
-ARGS = {"tenant": "acme", "customer_id": "c-1", "charge_id": "ch-1", "amount_cents": 100}
+ARGS = ROLLOUT_ARGS
 
 
 def _envelope(
@@ -27,7 +35,7 @@ def _envelope(
     principal: str = "u-1",
     acts_as: ActsAs = ActsAs.DELEGATED,
     tenant: str = "acme",
-    delegation_scopes: frozenset[str] = frozenset({"billing:refund"}),
+    delegation_scopes: frozenset[str] = frozenset({"experiments:rollout"}),
     expires_at: datetime | None = None,
 ) -> IdentityEnvelope:
     return IdentityEnvelope(
@@ -54,17 +62,17 @@ def test_an_envelope_with_no_scopes_is_refused() -> None:
 def test_policy_refuses_an_expired_credential() -> None:
     decision = decide(
         envelope=_envelope(expires_at=datetime.now(UTC) - timedelta(seconds=1)),
-        spec=REFUND,
-        request=_refund(ARGS),
+        spec=ROLLOUT,
+        request=prepare_rollout(ARGS),
     )
     assert not decision.allowed and decision.rule == "envelope.expired"
 
 
 def test_policy_refuses_a_missing_scope() -> None:
     decision = decide(
-        envelope=_envelope(delegation_scopes=frozenset({"billing:read"})),
-        spec=REFUND,
-        request=_refund(ARGS),
+        envelope=_envelope(delegation_scopes=frozenset({"experiments:read"})),
+        spec=ROLLOUT,
+        request=prepare_rollout(ARGS),
     )
     assert not decision.allowed and decision.rule == "scope.missing"
 
@@ -72,15 +80,15 @@ def test_policy_refuses_a_missing_scope() -> None:
 def test_policy_refuses_across_the_tenant_boundary() -> None:
     decision = decide(
         envelope=_envelope(tenant="globex"),
-        spec=REFUND,
-        request=_refund(ARGS),
+        spec=ROLLOUT,
+        request=prepare_rollout(ARGS),
     )
     assert not decision.allowed and decision.rule == "tenant.boundary"
 
 
 def test_policy_refuses_the_wrong_acting_identity() -> None:
     decision = decide(
-        envelope=_envelope(acts_as=ActsAs.SERVICE), spec=REFUND, request=_refund(ARGS)
+        envelope=_envelope(acts_as=ActsAs.SERVICE), spec=ROLLOUT, request=prepare_rollout(ARGS)
     )
     assert not decision.allowed and decision.rule == "identity.mismatch"
 
@@ -170,5 +178,5 @@ def test_a_run_without_the_scope_is_refused_at_the_gateway(
 ) -> None:
     first = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, first, run)
-    with pytest.raises(PolicyDenied, match="billing:refund"):
-        handle(stack, event, scopes=frozenset({"billing:read"}), run=run)
+    with pytest.raises(PolicyDenied, match="experiments:rollout"):
+        handle(stack, event, scopes=frozenset({"experiments:read"}), run=run)

@@ -82,14 +82,14 @@ def test_the_reversal_note_says_what_reversing_does_not_undo() -> None:
 # --- the exposure filter separates drafting from rolling out ---
 
 
-def test_a_refund_run_is_shown_neither_experiment_tool(stack: Stack) -> None:
+def test_a_run_on_no_stage_is_shown_neither_experiment_tool(stack: Stack) -> None:
     names = {s.name for s in stack.deps.registry.expose_for(tenant=TENANT, stage="default")}
 
     assert "create_experiment_draft" not in names
     assert "roll_out_variant_to_percentage" not in names
 
 
-def test_an_experiment_run_is_shown_neither_refund_tool(stack: Stack) -> None:
+def test_an_experiment_run_is_shown_only_experiment_tools(stack: Stack) -> None:
     """Exposing every tool on every run is the cheapest way to hand an injection a menu."""
     names = {s.name for stage in (DRAFT_STAGE, ROLLOUT_STAGE) for s in exposed(stack, stage)}
 
@@ -141,10 +141,10 @@ def test_an_extra_argument_is_refused(stack: Stack) -> None:
 
 def test_a_tool_this_run_was_not_shown_is_refused(stack: Stack) -> None:
     """A proposal is not an entitlement."""
-    refund_stage = stack.deps.registry.expose_for(tenant=TENANT, stage="default")
+    no_stage = stack.deps.registry.expose_for(tenant=TENANT, stage="default")
 
     with pytest.raises(ToolNotExposed):
-        stack.deps.registry.prepare(ROLLOUT.name, GOOD_ROLLOUT, exposed=refund_stage)
+        stack.deps.registry.prepare(ROLLOUT.name, GOOD_ROLLOUT, exposed=no_stage)
 
     assert stack.registry_client.rollouts == []
 

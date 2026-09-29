@@ -10,11 +10,11 @@ Two consequences the audit named:
     across a world that moved underneath it.
 
 (b) is fixed here: the snapshot is computed per proposal and scoped to the resource
-the action touches, so committing one charge does not invalidate an approval for a
-different charge, and does invalidate one for the same charge.
+the action touches, so committing one experiment does not invalidate an approval for a
+different experiment, and does invalidate one for the same experiment.
 
-(a) needs to know what "the world" is - the charge's status, the subscription's
-version - which is a domain question, deferred to SPEC.md. `resource_state` is the
+(a) needs to know what "the world" is - the experiment's status, its version - which is
+a domain question, deferred to SPEC.md. `resource_state` is the
 seam it will arrive through.
 """
 
@@ -32,31 +32,31 @@ from agentstack.tools.spec import Surface
 from .conftest import TENANT
 
 BUNDLE = "fp-abc123"
-CH7 = "acme/customers/c-42/charges/ch-7"
-CH8 = "acme/customers/c-42/charges/ch-8"
+EXP7 = "acme/experiments/exp-7/rollout"
+EXP8 = "acme/experiments/exp-8/rollout"
 
 
 def test_two_resources_in_one_turn_get_different_snapshots() -> None:
-    assert resource_snapshot(BUNDLE, CH7, ()) != resource_snapshot(BUNDLE, CH8, ())
+    assert resource_snapshot(BUNDLE, EXP7, ()) != resource_snapshot(BUNDLE, EXP8, ())
 
 
 def test_committing_one_resource_does_not_move_another() -> None:
-    """A refund on ch-7 must not invalidate an approval already given for ch-8."""
-    before = resource_snapshot(BUNDLE, CH8, ())
-    after_ch7_committed = resource_snapshot(BUNDLE, CH8, ())
-    assert before == after_ch7_committed
+    """A rollout of exp-7 must not invalidate an approval already given for exp-8."""
+    before = resource_snapshot(BUNDLE, EXP8, ())
+    after_exp7_committed = resource_snapshot(BUNDLE, EXP8, ())
+    assert before == after_exp7_committed
 
 
 def test_committing_a_resource_does_move_its_own_snapshot() -> None:
-    before = resource_snapshot(BUNDLE, CH7, ())
-    after = resource_snapshot(BUNDLE, CH7, ("receipt-1",))
+    before = resource_snapshot(BUNDLE, EXP7, ())
+    after = resource_snapshot(BUNDLE, EXP7, ("receipt-1",))
     assert before != after, (
         "an approval granted before this resource changed must not survive the change"
     )
 
 
 def test_the_snapshot_still_moves_when_the_prompt_moves() -> None:
-    assert resource_snapshot(BUNDLE, CH7, ()) != resource_snapshot("fp-different", CH7, ())
+    assert resource_snapshot(BUNDLE, EXP7, ()) != resource_snapshot("fp-different", EXP7, ())
 
 
 # --- the world, read at the act (T43, ADR-0008 rule 3) ---
@@ -135,7 +135,7 @@ def test_the_rollout_does_not_move_its_own_snapshot(stack: Stack) -> None:
 
 def test_a_surface_that_cannot_describe_its_resource_falls_back(stack: Stack) -> None:
     """The reference API has no resource model, so `act` binds as it did before T43."""
-    assert _observe(stack, CH7, Surface.API) is None
+    assert _observe(stack, EXP7, Surface.API) is None
 
 
 def test_outside_containment_is_described_as_nothing(stack: Stack) -> None:

@@ -3,12 +3,28 @@
   "part": 6,
   "gate": true,
   "description": "A proposal that does not match the declared schema is refused, traceably, without reaching a surface.",
-  "message": "issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=lots",
-  "scopes": ["billing:read", "billing:refund"],
+  "stage": "rollout",
+  "message": "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:5cbf2762 percentage=lots targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=0",
+  "scopes": [
+    "experiments:rollout"
+  ],
+  "registry": [
+    {
+      "resource": "acme/experiments/exp-7",
+      "payload": {
+        "experiment_version": "exp:5cbf2762",
+        "hypothesis": "a discount retains at-risk customers",
+        "variant": "20-percent-off"
+      }
+    }
+  ],
   "expect": {
     "status": "rejected",
-    "surface_calls": 0,
+    "rollouts": 0,
     "audit_records": 0,
-    "spans_include": ["tool.reject", "response"]
+    "spans_include": [
+      "tool.reject",
+      "response"
+    ]
   }
 }

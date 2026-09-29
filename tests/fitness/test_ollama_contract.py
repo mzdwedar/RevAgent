@@ -27,15 +27,15 @@ from agentstack.model.ollama_engine import (
 )
 from agentstack.runtime.run import Run
 
-from .conftest import SCOPES, TENANT, USER
+from .conftest import ROLLOUT_ARGS, SCOPES, TENANT, USER
 
-REFUND_TOOL = ExposedTool(
-    name="issue_refund",
-    description="Refund one charge.",
+ROLLOUT_TOOL = ExposedTool(
+    name="roll_out_variant_to_percentage",
+    description="Expose a variant to a percentage of the targeted cohort.",
     parameters={
         "type": "object",
-        "properties": {"tenant": {"type": "string"}, "amount_cents": {"type": "integer"}},
-        "required": ["tenant", "amount_cents"],
+        "properties": {"tenant": {"type": "string"}, "percentage": {"type": "integer"}},
+        "required": ["tenant", "percentage"],
     },
 )
 
@@ -66,10 +66,10 @@ def engine(answer: dict[str, Any] | None = None) -> tuple[OllamaEngine, FakeClie
     return model, build(model.host)
 
 
-def request(tools: tuple[ExposedTool, ...] = (REFUND_TOOL,)) -> ModelRequest:
+def request(tools: tuple[ExposedTool, ...] = (ROLLOUT_TOOL,)) -> ModelRequest:
     return ModelRequest(
         instructions="You are a support agent.",
-        rendered_context="refund ch-7 for c-42",
+        rendered_context="roll out exp-7 to 10 percent",
         exposed_tools=tools,
         max_output_tokens=256,
     )
@@ -137,8 +137,8 @@ def test_the_model_is_shown_the_schemas_not_just_the_names() -> None:
     model.generate(request())
 
     tools = client.calls[0]["tools"]
-    assert [t["function"]["name"] for t in tools] == ["issue_refund"]
-    assert tools[0]["function"]["parameters"]["required"] == ["tenant", "amount_cents"]
+    assert [t["function"]["name"] for t in tools] == ["roll_out_variant_to_percentage"]
+    assert tools[0]["function"]["parameters"]["required"] == ["tenant", "percentage"]
 
 
 def test_the_model_is_not_shown_the_authority_metadata() -> None:
@@ -166,7 +166,12 @@ def test_a_tool_call_becomes_a_proposal() -> None:
             "message": {
                 "content": "",
                 "tool_calls": [
-                    {"function": {"name": "issue_refund", "arguments": {"tenant": "acme"}}}
+                    {
+                        "function": {
+                            "name": "roll_out_variant_to_percentage",
+                            "arguments": {"tenant": "acme"},
+                        }
+                    }
                 ],
             }
         }
@@ -174,7 +179,7 @@ def test_a_tool_call_becomes_a_proposal() -> None:
 
     response = model.generate(request())
 
-    assert [p.tool for p in response.proposals] == ["issue_refund"]
+    assert [p.tool for p in response.proposals] == ["roll_out_variant_to_percentage"]
     assert response.proposals[0].arguments == {"tenant": "acme"}
 
 
@@ -198,7 +203,12 @@ def test_malformed_arguments_are_reported_faithfully() -> None:
             "message": {
                 "content": "",
                 "tool_calls": [
-                    {"function": {"name": "issue_refund", "arguments": {"amount_cents": "lots"}}}
+                    {
+                        "function": {
+                            "name": "roll_out_variant_to_percentage",
+                            "arguments": {"percentage": "lots"},
+                        }
+                    }
                 ],
             }
         }
@@ -206,7 +216,7 @@ def test_malformed_arguments_are_reported_faithfully() -> None:
 
     response = model.generate(request())
 
-    assert response.proposals[0].arguments == {"amount_cents": "lots"}
+    assert response.proposals[0].arguments == {"percentage": "lots"}
 
 
 def test_a_tool_call_with_no_name_is_dropped_and_the_turn_still_answers() -> None:
@@ -226,7 +236,7 @@ def test_an_object_shaped_answer_reads_the_same_as_a_dict() -> None:
     """The real client returns pydantic models; fixtures and fakes return dicts."""
 
     class Function:
-        name = "issue_refund"
+        name = "roll_out_variant_to_percentage"
         arguments = {"tenant": "acme"}
 
     class Call:
@@ -244,7 +254,7 @@ def test_an_object_shaped_answer_reads_the_same_as_a_dict() -> None:
     response = model.generate(request())
 
     assert response.text == "ok"
-    assert [p.tool for p in response.proposals] == ["issue_refund"]
+    assert [p.tool for p in response.proposals] == ["roll_out_variant_to_percentage"]
 
 
 class _ClientReturning:
@@ -302,7 +312,7 @@ def test_a_malformed_proposal_is_rejected_and_the_turn_still_answers(
 ) -> None:
     """The existing `tool.reject` path, now driven by a real adapter.
 
-    The model asked for a refund with the amount as prose. The registry refuses it
+    The model asked for a rollout with the percentage as prose. The registry refuses it
     against the schema, the refusal is traced, and the turn answers instead of raising.
     """
     stack.deps.engine = OllamaEngine(
@@ -310,17 +320,12 @@ def test_a_malformed_proposal_is_rejected_and_the_turn_still_answers(
             host,
             {
                 "message": {
-                    "content": "refunding",
+                    "content": "rolling out",
                     "tool_calls": [
                         {
                             "function": {
-                                "name": "issue_refund",
-                                "arguments": {
-                                    "tenant": TENANT,
-                                    "customer_id": "c-42",
-                                    "charge_id": "ch-7",
-                                    "amount_cents": "nineteen ninety nine",
-                                },
+                                "name": ROLLOUT_TOOL.name,
+                                "arguments": {**ROLLOUT_ARGS, "percentage": "ten percent"},
                             }
                         }
                     ],
@@ -333,7 +338,7 @@ def test_a_malformed_proposal_is_rejected_and_the_turn_still_answers(
         tenant=TENANT,
         user_id=USER,
         session_id=run.session_id,
-        text="refund ch-7",
+        text="roll out exp-7",
     )
 
     result = handle(stack, event, scopes=SCOPES, run=run)
@@ -341,7 +346,7 @@ def test_a_malformed_proposal_is_rejected_and_the_turn_still_answers(
     assert result.status == "rejected"
     assert "tool.reject" in result.tracer.names()
     assert result.text, "a refused proposal must still leave the turn with an answer"
-    assert stack.client.calls == [], "a malformed proposal reached the surface"
+    assert stack.registry_client.rollouts == [], "a malformed proposal reached the surface"
 
 
 def test_the_configured_host_reaches_the_client_factory() -> None:

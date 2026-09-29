@@ -25,9 +25,10 @@ from agentstack.runtime.run import Run
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import open_pool
+from agentstack.tools.experiments import ROLLOUT_STAGE
 
-SCOPES = frozenset({"billing:read", "billing:refund"})
-MESSAGE = "lookup_subscription tenant=acme customer_id=c-42"
+SCOPES = frozenset({"experiments:read"})
+MESSAGE = "get_experiment tenant=acme experiment_id=exp-7"
 # A stray worker must not outlive the test that started it.
 HANG_LIMIT_SECONDS = 60.0
 
@@ -94,13 +95,16 @@ def main(argv: list[str] | None = None) -> int:
         from agentstack.tools.spec import Surface
 
         stack.deps.engine = RecordingEngine(stack.deps.engine, args.model_calls)
-        stack.deps.gateway.surfaces[Surface.API] = HangingClient(stack.client, args.reached)
+        stack.deps.gateway.surfaces[Surface.REGISTRY] = HangingClient(
+            stack.registry_client, args.reached
+        )
 
         run = Run(
             run_id=args.run_id,
             session_id=args.session_id,
             tenant="acme",
             user="agent-operator",
+            stage=ROLLOUT_STAGE,
             channel="durability",
         )
         view = stack.resolver.resolve(

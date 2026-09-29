@@ -56,14 +56,14 @@ from agentstack.runtime.temporal.worker import (
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 from agentstack.runtime.waits import ResumeEvent, resume
 from agentstack.storage.database import Database, IntegrityViolation
-from agentstack.tools.experiments import EVALUATION_STAGE, HALT, prepare_halt
+from agentstack.tools.experiments import EVALUATION_STAGE, HALT, ROLLOUT_STAGE, prepare_halt
 from tests.conftest import connect_temporal
 from tests.fitness.test_trigger_to_candidate import ROWS, RULE, WATERMARK, StubScorer
 from tests.temporal_support import activities_for, progress_until, time_skipping
 
 RUNS = 100
 TENANT = "acme"
-SCOPES = frozenset({"billing:read", "billing:refund"})
+SCOPES = frozenset({"experiments:rollout"})
 
 
 @pytest.fixture
@@ -72,18 +72,32 @@ def stack(app_database: Database, checkpointer: Any) -> Stack:
 
 
 def a_run(stack: Stack, i: int) -> tuple[Run, InboundEvent]:
-    """A run of its own, refunding a charge of its own - so its idempotency key is its own."""
+    """A run of its own, rolling out an experiment of its own - so its key is its own."""
     user = f"user-{i}"
     session = stack.resolver.start(user_id=user, tenant=TENANT)
     run = stack.runs.ensure(
-        new_run(session_id=session.session_id, tenant=TENANT, user=user, channel="load")
+        new_run(
+            session_id=session.session_id,
+            tenant=TENANT,
+            user=user,
+            stage=ROLLOUT_STAGE,
+            channel="load",
+        )
+    )
+    stack.registry_client.commit(
+        f"{TENANT}/experiments/exp-{i}",
+        {"experiment_version": "exp:v1", "hypothesis": "a discount retains", "variant": "20-off"},
     )
     event = InboundEvent(
         channel="load",
         tenant=TENANT,
         user_id=user,
         session_id=session.session_id,
-        text=f"issue_refund tenant=acme customer_id=c-{i} charge_id=ch-{i} amount_cents=1999",
+        text=(
+            f"roll_out_variant_to_percentage tenant=acme experiment_id=exp-{i} "
+            "experiment_version=exp:v1 percentage=10 targeting_model_version=tabpfn-3.5 "
+            "risk_threshold=0.61 prior_rollout_event=0"
+        ),
     )
     return run, event
 
@@ -150,10 +164,10 @@ def test_a_hundred_runs_at_once_each_commit_exactly_once(
     # as unresolved - safe, and never a second effect. Anything else is a defect.
     assert all(isinstance(exc, UnresolvedEffect) for exc in losers), Counter(map(repr, losers))
 
-    # The charge is in the resource: `{tenant}/customers/{customer}/charges/{charge}`.
-    committed = [resource for resource, _ in stack.client.calls]
+    # The experiment is in the resource: `{tenant}/experiments/{experiment}/rollout`.
+    committed = [resource for resource, _ in stack.registry_client.rollouts]
     assert len(committed) == RUNS, f"{len(committed)} commits for {RUNS} runs"
-    assert len(set(committed)) == RUNS, "a charge was refunded twice"
+    assert len(set(committed)) == RUNS, "an experiment was rolled out twice"
     assert stack.ledger.unresolved_keys() == (), "a claim was left unsettled"
     for run, _ in runs:
         executed = [
@@ -177,7 +191,7 @@ def test_a_step_raced_by_two_workers_completes_once(stack: Stack) -> None:
     both_inside = threading.Barrier(2)
 
     def worker(_: int) -> None:
-        with stack.steps.step(run.run_id, "execute:refund:fp") as slot:
+        with stack.steps.step(run.run_id, "execute:rollout:fp") as slot:
             both_inside.wait()  # neither has written `completed` yet
             slot[0] = "receipt-1"
 
@@ -192,7 +206,7 @@ def test_two_different_effects_for_one_step_are_refused_loudly(stack: Stack) -> 
     both_inside = threading.Barrier(2)
 
     def worker(i: int) -> None:
-        with stack.steps.step(run.run_id, "execute:refund:fp") as slot:
+        with stack.steps.step(run.run_id, "execute:rollout:fp") as slot:
             both_inside.wait()
             slot[0] = f"receipt-{i}"
 
@@ -210,7 +224,7 @@ def test_only_the_complete_once_conflict_is_absorbed(stack: Stack, app_database:
 
     with (
         pytest.raises(IntegrityViolation) as caught,
-        stack.steps.step(run.run_id, "execute:refund:fp") as slot,
+        stack.steps.step(run.run_id, "execute:rollout:fp") as slot,
     ):
         app_database.execute("DELETE FROM runs WHERE run_id = %s", (run.run_id,))
         slot[0] = "receipt-1"

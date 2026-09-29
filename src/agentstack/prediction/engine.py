@@ -12,7 +12,7 @@ On the boundary question: this module downloads model weights over the network, 
 `CONSTRAINTS.md` says only `agentstack.execution` reaches the world. Fetching a model
 asset is not an execution surface. Part 2 separates the model *asset* from the serving
 system from the interaction contract; pulling the asset is closer to pulling a
-container image than to issuing a refund - it happens once at startup, it is not the
+container image than to issuing a rollout - it happens once at startup, it is not the
 agent acting on anyone, and it is gated by `licence.preflight` rather than by policy
 and approval. `lint-imports` contract 3 still forbids this package an HTTP client of
 its own.

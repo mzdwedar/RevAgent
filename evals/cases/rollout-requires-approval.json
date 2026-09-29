@@ -1,8 +1,8 @@
 {
-  "id": "an-unresolved-effect-is-never-retried-blind",
-  "part": 4,
+  "id": "rollout-requires-approval",
+  "part": 7,
   "gate": true,
-  "description": "A rollout that applied but never answered leaves a claimed key, so the retry refuses and reconciles instead of rolling out twice.",
+  "description": "An irreversible tool cannot be called without an approval bound to it.",
   "stage": "rollout",
   "message": "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:5cbf2762 percentage=10 targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=0",
   "scopes": [
@@ -18,16 +18,16 @@
       }
     }
   ],
-  "fake_registry": true,
-  "approve": true,
-  "repeat": 2,
-  "fail_after_effect": true,
-  "expect_error": "UnresolvedEffect",
   "expect": {
-    "rollouts": 1,
+    "status": "awaiting_approval",
+    "rollouts": 0,
+    "spans_include": [
+      "policy.decide",
+      "approval.request"
+    ],
+    "max_seconds": 2,
     "audit_outcomes": [
-      "refused",
-      "unresolved"
+      "refused"
     ]
   }
 }

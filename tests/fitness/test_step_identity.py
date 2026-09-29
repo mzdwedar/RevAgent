@@ -2,11 +2,11 @@
 
 The key was `execute:{tool_name}`. EchoEngine returns at most one proposal per turn,
 which is why nothing caught it. Real models return several tool calls in one turn and
-run_turn loops over them: two refunds on two different charges both key to
-`execute:issue_refund`. The first completes, the second finds the completed record,
-yields the first's receipt, skips the gateway entirely - and the run reports
-status="complete" with evidence that looks correct while the customer is owed two
-refunds and got one.
+run_turn loops over them: two rollouts of two different experiments both key to
+`execute:roll_out_variant_to_percentage`. The first completes, the second finds the
+completed record, yields the first's receipt, skips the gateway entirely - and the run
+reports status="complete" with evidence that looks correct while one experiment never
+went out.
 
 The action fingerprint is already computed for exactly this purpose.
 """
@@ -22,37 +22,32 @@ from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.runtime.run import Run
 from agentstack.storage.database import Database, IntegrityViolation
-from agentstack.tools.catalog import _refund
+from agentstack.tools.experiments import prepare_rollout
 
-from .conftest import SCOPES, TENANT, USER, drive_to_completion
+from .conftest import ROLLOUT_ARGS, SCOPES, TENANT, USER, drive_to_completion, seed_experiment
 
-CHARGES = ("ch-7", "ch-8")
+EXPERIMENTS = ("exp-7", "exp-8")
 
 
-class TwoRefundsEngine:
+class TwoRolloutsEngine:
     """A model that proposes two tool calls in one turn, which real models do."""
 
     def __init__(self) -> None:
-        self.asset = ModelAsset(name="two-refunds", context_window=8192, max_output_tokens=512)
+        self.asset = ModelAsset(name="two-rollouts", context_window=8192, max_output_tokens=512)
 
     def generate(self, request: ModelRequest) -> ModelResponse:
         # Propose only what this run was actually offered - a fake that ignores the
         # exposure filter would make the wrong tests pass.
-        if "issue_refund" not in request.tool_names:
+        if "roll_out_variant_to_percentage" not in request.tool_names:
             return ModelResponse(text="nothing I can do here")
         return ModelResponse(
-            text="refunding both charges",
+            text="rolling out both experiments",
             proposals=tuple(
                 ToolCallProposal(
-                    tool="issue_refund",
-                    arguments={
-                        "tenant": TENANT,
-                        "customer_id": "c-42",
-                        "charge_id": charge,
-                        "amount_cents": 1999,
-                    },
+                    tool="roll_out_variant_to_percentage",
+                    arguments={**ROLLOUT_ARGS, "experiment_id": experiment},
                 )
-                for charge in CHARGES
+                for experiment in EXPERIMENTS
             ),
         )
 
@@ -63,71 +58,74 @@ def _event(run: Run) -> InboundEvent:
         tenant=TENANT,
         user_id=USER,
         session_id=run.session_id,
-        text="refund both charges",
+        text="roll out both experiments",
     )
+
+
+def _draft_both(stack: Stack) -> None:
+    for experiment in EXPERIMENTS:
+        seed_experiment(stack, experiment)
 
 
 def test_two_effects_in_one_turn_are_two_steps(stack: Stack, run: Run) -> None:
-    stack.deps.engine = TwoRefundsEngine()
+    _draft_both(stack)
+    stack.deps.engine = TwoRolloutsEngine()
     result = drive_to_completion(stack, _event(run), run)
 
     assert result.status == "complete"
-    assert len(stack.client.calls) == 2, (
-        f"{len(stack.client.calls)} refund(s) committed for two distinct charges; "
+    commits = stack.registry_client.rollouts
+    assert len(commits) == 2, (
+        f"{len(commits)} rollout(s) committed for two distinct experiments; "
         "the second was swallowed by the first's step record"
     )
-    assert {resource for resource, _ in stack.client.calls} == {
-        f"{TENANT}/customers/c-42/charges/{charge}" for charge in CHARGES
+    assert {resource for resource, _ in commits} == {
+        f"{TENANT}/experiments/{experiment}/rollout" for experiment in EXPERIMENTS
     }
     assert len(set(result.receipts)) == 2, "the run reported one receipt twice"
 
 
 def test_the_step_name_carries_the_action_not_just_the_tool(stack: Stack, run: Run) -> None:
-    stack.deps.engine = TwoRefundsEngine()
+    _draft_both(stack)
+    stack.deps.engine = TwoRolloutsEngine()
     drive_to_completion(stack, _event(run), run)
 
     names = {record.name for record in stack.steps.records_for(run.run_id)}
     assert len(names) == 2, f"two distinct actions produced {len(names)} step name(s): {names}"
-    for charge in CHARGES:
-        fingerprint = _refund(
-            {
-                "tenant": TENANT,
-                "customer_id": "c-42",
-                "charge_id": charge,
-                "amount_cents": 1999,
-            }
-        ).fingerprint()
+    for experiment in EXPERIMENTS:
+        fingerprint = prepare_rollout({**ROLLOUT_ARGS, "experiment_id": experiment}).fingerprint()
         assert any(fingerprint in name for name in names)
 
 
 def test_a_repeat_of_the_same_action_is_still_one_step(stack: Stack, run: Run) -> None:
     """Distinguishing steps must not stop the boundary doing its actual job."""
-    from .conftest import REFUND_MESSAGE, approve_and_resume
+    from .conftest import ROLLOUT_MESSAGE, approve_and_resume
 
+    seed_experiment(stack)
     event = InboundEvent(
-        channel="test", tenant=TENANT, user_id=USER, session_id=run.session_id, text=REFUND_MESSAGE
+        channel="test", tenant=TENANT, user_id=USER, session_id=run.session_id, text=ROLLOUT_MESSAGE
     )
     first = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, first, run)
     for _ in range(3):
         handle(stack, event, scopes=SCOPES, run=run)
-    assert len(stack.client.calls) == 1
+    assert len(stack.registry_client.rollouts) == 1
 
 
 def test_a_completed_step_is_skipped_by_a_process_that_did_not_run_it(
     stack: Stack, run: Run, app_database: Database, checkpointer: Any
 ) -> None:
     """The reason step records are durable: replay happens in a new process."""
-    stack.deps.engine = TwoRefundsEngine()
+    _draft_both(stack)
+    stack.deps.engine = TwoRolloutsEngine()
     drive_to_completion(stack, _event(run), run)
-    assert len(stack.client.calls) == 2
+    assert len(stack.registry_client.rollouts) == 2
 
     restarted = build_stack(app_database, checkpointer, tenant=TENANT)
-    restarted.deps.engine = TwoRefundsEngine()
+    restarted.deps.engine = TwoRolloutsEngine()
     result = drive_to_completion(restarted, _event(run), run)
 
     assert result.status == "complete"
-    assert restarted.client.calls == [], "the replay re-committed through a fresh surface"
+    assert len(restarted.registry_client.rollouts) == 2, "the replay re-committed"
     assert len(restarted.steps.records_for(run.run_id)) == len(stack.steps.records_for(run.run_id))
 
 

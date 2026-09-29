@@ -1,8 +1,8 @@
 {
-  "id": "an-unresolved-effect-is-never-retried-blind",
+  "id": "rollout-commits-exactly-once",
   "part": 4,
   "gate": true,
-  "description": "A rollout that applied but never answered leaves a claimed key, so the retry refuses and reconciles instead of rolling out twice.",
+  "description": "After approval the rollout commits, and three retries do not repeat it.",
   "stage": "rollout",
   "message": "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:5cbf2762 percentage=10 targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=0",
   "scopes": [
@@ -18,16 +18,18 @@
       }
     }
   ],
-  "fake_registry": true,
   "approve": true,
-  "repeat": 2,
-  "fail_after_effect": true,
-  "expect_error": "UnresolvedEffect",
+  "repeat": 3,
   "expect": {
+    "status": "complete",
     "rollouts": 1,
     "audit_outcomes": [
-      "refused",
-      "unresolved"
-    ]
+      "committed",
+      "refused"
+    ],
+    "spans_include": [
+      "execution.commit"
+    ],
+    "max_seconds": 2
   }
 }

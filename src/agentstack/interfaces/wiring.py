@@ -154,7 +154,7 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     retriever = StaticRetriever(
         corpus=[
             Candidate(
-                text="Refund policy: refunds within 30 days need an approver.",
+                text="Rollout policy: a rollout above 10% needs a named approver.",
                 score=1.0,
                 source="policy-handbook",
                 scope=Scope(tenant=tenant),

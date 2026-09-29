@@ -1,8 +1,8 @@
 """Run the gate cases against the real stack.
 
 Deterministic assertions, not a model grader. A model grader is the right tool for
-"was the tone appropriate"; it is the wrong tool for "was the refund approved before
-it was issued", which has an answer.
+"was the tone appropriate"; it is the wrong tool for "was the rollout approved before
+it went out", which has an answer.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.items import Scope, Trust
 from agentstack.context.retrieval import Candidate, StaticRetriever
 from agentstack.context.targeting import Cohort, TargetingRule
+from agentstack.execution.surfaces import PostgresRegistryClient, RegistryClient
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.slack import RecordingNotifier
 from agentstack.interfaces.triggers import parse_trigger
@@ -36,6 +37,7 @@ from agentstack.runtime.waits import HUMAN_APPROVAL, ResumeEvent, resume
 from agentstack.storage.database import Database
 from agentstack.storage.provision import truncate_all
 from agentstack.tools.experiments import ROLLOUT_STAGE
+from agentstack.tools.spec import Surface
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 TENANT = "acme"
@@ -76,6 +78,9 @@ class Case:
     description: str = ""
     # The stage the run is on, which decides its menu.
     stage: str = "default"
+    # Run against the in-memory registry, the fake held to the same contract as Postgres,
+    # so the surface can lose an answer (`fail_after_effect`) and its reads can be counted.
+    fake_registry: bool = False
     # What the registry already holds, written before the turn as an earlier run would
     # have: [{"resource": ..., "payload": ...}], committed in order.
     registry: list[dict[str, Any]] = field(default_factory=list)
@@ -101,7 +106,7 @@ class Outcome:
 
 def _stack_for(case: Case, db: Database, checkpointer: Any) -> Stack:
     # Each case starts from an empty substrate. Idempotency keys are stable across
-    # runs by design, so two cases refunding the same charge would otherwise share
+    # runs by design, so two cases rolling out the same experiment would otherwise share
     # one - and the second would deduplicate against the first.
     truncate_all(db)
     stack = build_stack(db, checkpointer, tenant=TENANT)
@@ -197,13 +202,22 @@ def _run_rollout_case(case: Case, db: Database, checkpointer: Any, started: floa
     )
     turns = ExperimentTurns(stack)
     envelope = turns.envelope(run)
+    # The registry's own compare-and-set key, as the worker reads it; an experiment it has
+    # no events for has none, so 0.
+    history = stack.deps.gateway.surfaces[Surface.REGISTRY].read(
+        f"{TENANT}/experiments/{case.frozen_cohort['experiment_id']}/history", {}
+    )
     result = run_turn(
         run=run,
         envelope=envelope,
         message=case.message,
         deps=stack.deps,
         admit=rollout_admission(
-            cohort=cohort, audit=stack.audit, run=run, principal=envelope.principal
+            cohort=cohort,
+            audit=stack.audit,
+            run=run,
+            principal=envelope.principal,
+            prior_rollout_event=int(history.get("latest_rollout_event", 0)),
         ),
     )
 
@@ -350,8 +364,12 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
         return _run_rerun_case(case, db, checkpointer, started)
     failures: list[str] = []
     stack = _stack_for(case, db, checkpointer)
+    registry: RegistryClient | PostgresRegistryClient = stack.registry_client
+    if case.fake_registry:
+        registry = RegistryClient()
+        stack.deps.gateway.surfaces[Surface.REGISTRY] = registry
     for seed in case.registry:
-        stack.registry_client.commit(seed["resource"], seed["payload"])
+        registry.commit(seed["resource"], seed["payload"])
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
     run = new_run(
         session_id=session.session_id,
@@ -399,7 +417,9 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
                         payload={"approved_by": "eval-approver"},
                     ),
                 )
-            stack.client.fail_after_effect = case.fail_after_effect
+            if case.fail_after_effect:
+                assert isinstance(registry, RegistryClient), "a lost answer needs fake_registry"
+                registry.fail_after_effect = True
             for _ in range(case.repeat):
                 result = handle(stack, event, scopes=scopes, run=run)
                 span_names |= result.tracer.names()
@@ -444,8 +464,12 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
 
     if "surface_calls" in expect and len(stack.client.calls) != expect["surface_calls"]:
         failures.append(f"{len(stack.client.calls)} surface calls != {expect['surface_calls']}")
-    if "surface_reads" in expect and len(stack.client.reads) != expect["surface_reads"]:
-        failures.append(f"{len(stack.client.reads)} surface reads != {expect['surface_reads']}")
+    if "rollouts" in expect and len(registry.rollouts) != expect["rollouts"]:
+        failures.append(f"{len(registry.rollouts)} rollouts != {expect['rollouts']}")
+    if "surface_reads" in expect:
+        reads = registry.reads if isinstance(registry, RegistryClient) else stack.client.reads
+        if len(reads) != expect["surface_reads"]:
+            failures.append(f"{len(reads)} surface reads != {expect['surface_reads']}")
     if "registry_events" in expect:
         # Rollouts, halts, discards and abstentions: every registry effect after a draft.
         row = db.fetch_one("SELECT count(*) FROM registry_events")

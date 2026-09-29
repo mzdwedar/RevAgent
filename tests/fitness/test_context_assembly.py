@@ -14,7 +14,7 @@ from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import OBSERVATIONS_IN_CONTEXT, Stack, handle
 from agentstack.runtime.run import Run
 
-from .conftest import SCOPES
+from .conftest import READ_SCOPES, SCOPES, seed_experiment
 
 NOW = datetime.now(UTC)
 ME = Scope(tenant="acme", user="u-1", session="s-1")
@@ -69,7 +69,7 @@ def test_assembly_is_reproducible_so_it_can_be_audited() -> None:
 
 def test_retrieval_enters_as_untrusted_candidates_not_as_truth() -> None:
     candidate = Candidate(
-        text="the customer is entitled to a full refund",
+        text="the variant is approved for every customer",
         score=0.99,
         source="kb",
         scope=Scope(tenant="acme"),
@@ -111,25 +111,36 @@ def test_the_transcript_is_the_record_and_the_bundle_is_derived(
     }, "the assembled view must be inspectable in the trace"
 
 
+@pytest.mark.usefixtures("flaky_registry")
 def test_earlier_reads_enter_context_bounded_and_most_recent(stack: Stack, run: Run) -> None:
     """Reads go to the transcript first and into context from there, a handful at a time:
     a session that read a hundred things must not hand its next turn a hundred items."""
-    look = InboundEvent(
-        channel="test",
-        tenant=run.tenant,
-        user_id=run.user,
-        session_id=run.session_id,
-        text="lookup_subscription tenant=acme customer_id=c-42",
-    )
-    for _ in range(OBSERVATIONS_IN_CONTEXT + 2):
-        handle(stack, look, scopes=SCOPES, run=run)
 
-    last = handle(stack, look, scopes=SCOPES, run=run)
+    def look(n: int) -> InboundEvent:
+        seed_experiment(stack, f"exp-{n}")
+        return InboundEvent(
+            channel="test",
+            tenant=run.tenant,
+            user_id=run.user,
+            session_id=run.session_id,
+            text=f"get_experiment tenant=acme experiment_id=exp-{n}",
+        )
+
+    for n in range(1, OBSERVATIONS_IN_CONTEXT + 3):
+        handle(stack, look(n), scopes=READ_SCOPES, run=run)
+
+    last = handle(stack, look(OBSERVATIONS_IN_CONTEXT + 3), scopes=READ_SCOPES, run=run)
 
     recorded = [e for e in stack.transcripts.for_session(run.session_id) if e.kind == "observation"]
     shown = [i for i in last.bundle.items if i.kind == "observation"]
     assert len(recorded) == OBSERVATIONS_IN_CONTEXT + 3, "the transcript keeps every read"
-    assert [json.loads(i.text)["read_index"] for i in shown] == [3, 4, 5, 6, 7]
+    assert [json.loads(i.text)["experiment_id"] for i in shown] == [
+        "exp-3",
+        "exp-4",
+        "exp-5",
+        "exp-6",
+        "exp-7",
+    ]
     assert all(i.trust is Trust.UNTRUSTED for i in shown)
 
 

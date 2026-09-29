@@ -24,7 +24,7 @@ from agentstack.runtime.run import Run, new_run
 from agentstack.storage.database import Database
 from agentstack.tools.spec import Surface
 
-from .conftest import SCOPES
+from .conftest import READ_SCOPES, SCOPES
 
 
 def test_checkpoints_are_written_synchronously() -> None:
@@ -105,11 +105,11 @@ def test_a_turn_that_died_resumes_without_re_running_what_it_finished(
     stack.deps.engine = engine
 
     # The surface is unreachable, so `act` dies after the model has already answered.
-    surface = RefusingClient(stack.client)
-    stack.deps.gateway.surfaces[Surface.API] = surface
+    surface = RefusingClient(stack.registry_client)
+    stack.deps.gateway.surfaces[Surface.REGISTRY] = surface
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
-    envelope = envelope_for(view, scopes=SCOPES)
-    message = "lookup_subscription tenant=acme customer_id=c-42"
+    envelope = envelope_for(view, scopes=READ_SCOPES)
+    message = "get_experiment tenant=acme experiment_id=exp-7"
 
     with pytest.raises(RuntimeError, match="the process died here"):
         run_turn(run=run, envelope=envelope, message=message, deps=stack.deps, turn_id="t1")
@@ -148,8 +148,8 @@ def test_a_turn_that_died_during_the_model_call_resumes_there(stack: Stack, run:
     engine = DyingOnceEngine(stack.deps.engine)
     stack.deps.engine = engine
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
-    envelope = envelope_for(view, scopes=SCOPES)
-    message = "lookup_subscription tenant=acme customer_id=c-42"
+    envelope = envelope_for(view, scopes=READ_SCOPES)
+    message = "get_experiment tenant=acme experiment_id=exp-7"
 
     with pytest.raises(RuntimeError, match="during the model call"):
         run_turn(run=run, envelope=envelope, message=message, deps=stack.deps, turn_id="t1")
@@ -181,7 +181,7 @@ def test_a_fresh_turn_does_run_the_model(stack: Stack, run: Run) -> None:
     engine = CountingEngine(stack.deps.engine)
     stack.deps.engine = engine
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
-    envelope = envelope_for(view, scopes=SCOPES)
+    envelope = envelope_for(view, scopes=READ_SCOPES)
 
     run_turn(run=run, envelope=envelope, message="hi", deps=stack.deps, turn_id="turn-a")
     run_turn(run=run, envelope=envelope, message="hi", deps=stack.deps, turn_id="turn-b")
@@ -197,7 +197,7 @@ def test_a_node_refuses_a_context_describing_a_different_run(stack: Stack, run: 
     other = new_run(session_id=run.session_id, tenant=run.tenant, user=run.user, channel="test")
     context = TurnContext(
         run=other,
-        envelope=envelope_for(view, scopes=SCOPES),
+        envelope=envelope_for(view, scopes=READ_SCOPES),
         deps=stack.deps,
         instructions="x",
     )
@@ -244,8 +244,8 @@ def test_the_checkpointed_state_holds_no_live_objects(stack: Stack, run: Run) ->
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
     run_turn(
         run=run,
-        envelope=envelope_for(view, scopes=SCOPES),
-        message="lookup_subscription tenant=acme customer_id=c-42",
+        envelope=envelope_for(view, scopes=READ_SCOPES),
+        message="get_experiment tenant=acme experiment_id=exp-7",
         deps=stack.deps,
         turn_id="serialisable",
     )
@@ -281,8 +281,8 @@ def test_checkpoints_are_written_to_postgres(
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
     run_turn(
         run=run,
-        envelope=envelope_for(view, scopes=SCOPES),
-        message="lookup_subscription tenant=acme customer_id=c-42",
+        envelope=envelope_for(view, scopes=READ_SCOPES),
+        message="get_experiment tenant=acme experiment_id=exp-7",
         deps=stack.deps,
         turn_id="stored",
     )
@@ -310,11 +310,11 @@ def test_a_turn_resumes_from_storage_in_a_stack_that_never_saw_it(
 
     engine = CountingEngine(stack.deps.engine)
     stack.deps.engine = engine
-    surface = RefusingClient(stack.client)
-    stack.deps.gateway.surfaces[Surface.API] = surface
+    surface = RefusingClient(stack.registry_client)
+    stack.deps.gateway.surfaces[Surface.REGISTRY] = surface
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
-    envelope = envelope_for(view, scopes=SCOPES)
-    message = "lookup_subscription tenant=acme customer_id=c-42"
+    envelope = envelope_for(view, scopes=READ_SCOPES)
+    message = "get_experiment tenant=acme experiment_id=exp-7"
 
     with pytest.raises(RuntimeError, match="the process died here"):
         run_turn(run=run, envelope=envelope, message=message, deps=stack.deps, turn_id="t2")

@@ -26,23 +26,23 @@ from agentstack.runtime.waits import NEEDS_MIGRATION, ResumeEvent, resume
 from agentstack.storage.database import Database
 from agentstack.tools.spec import Surface
 
-from .conftest import SCOPES, TENANT
+from .conftest import READ_SCOPES, TENANT
 from .test_turn_graph import CountingEngine, RefusingClient
 
-MESSAGE = "lookup_subscription tenant=acme customer_id=c-42"
+MESSAGE = "get_experiment tenant=acme experiment_id=exp-7"
 
 
 def envelope(stack: Stack, run: Run) -> Any:
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
-    return envelope_for(view, scopes=SCOPES)
+    return envelope_for(view, scopes=READ_SCOPES)
 
 
 def died_mid_turn(stack: Stack, run: Run, turn_id: str = "t1") -> tuple[CountingEngine, Any]:
     """A turn that answered, then died before acting: a checkpoint with work left."""
     engine = CountingEngine(stack.deps.engine)
     stack.deps.engine = engine
-    surface = RefusingClient(stack.client)
-    stack.deps.gateway.surfaces[Surface.API] = surface
+    surface = RefusingClient(stack.registry_client)
+    stack.deps.gateway.surfaces[Surface.REGISTRY] = surface
     with pytest.raises(RuntimeError, match="the process died here"):
         run_turn(
             run=run,
@@ -115,7 +115,7 @@ def test_an_incompatible_checkpoint_parks_the_run_and_fails_loudly(
     assert parked.state_snapshot.startswith(f"{run.run_id}:t1@")
     assert parked.state_snapshot.endswith("schema v1")
     assert engine.calls == 1, "the model was asked again from a state nobody could read"
-    assert stack.client.calls == [], "an effect was committed from a misread checkpoint"
+    assert stack.registry_client.rollouts == [], "an effect was committed from a misread checkpoint"
 
 
 def test_a_checkpoint_that_does_not_say_its_version_is_not_guessed(stack: Stack, run: Run) -> None:
@@ -153,7 +153,7 @@ def test_the_parked_run_takes_no_other_turn_either(
 
     assert fresh.status == "blocked"
     assert NEEDS_MIGRATION in fresh.text
-    assert stack.client.calls == []
+    assert stack.registry_client.rollouts == []
 
 
 def test_asking_again_does_not_park_it_twice(

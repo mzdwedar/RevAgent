@@ -11,7 +11,7 @@ from agentstack.interfaces.wiring import build_stack
 from agentstack.storage.database import Database
 
 
-def test_the_walkthrough_runs_and_commits_exactly_one_refund(
+def test_the_walkthrough_runs_and_commits_exactly_one_rollout(
     app_database: Database, checkpointer: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Driven against the test database, not `main()`.

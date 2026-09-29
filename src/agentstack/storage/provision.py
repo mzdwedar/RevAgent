@@ -103,7 +103,7 @@ def truncate_all(db: Database) -> None:
     whose whole job is to delete everything should not take the caller's word for it.
 
     Needed because not every key in this system is unique per run. An idempotency key
-    is deliberately stable across runs - refunding charge ch-7 twice is the thing the
+    is deliberately stable across runs - rolling exp-7 out twice is the thing the
     ledger exists to stop, even from a different run - so tests sharing a database
     share those keys. The answer is a clean substrate per test, not a weaker key.
     """

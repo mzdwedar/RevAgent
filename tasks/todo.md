@@ -2062,3 +2062,15 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
       single full run (373/373), so treated as load-induced flake, not a merge bug.
     - Commit: `272e4b5` "Re-record the replay histories on the merged A1+A2 workflow".
       No separate fix commit was needed — the merge itself had no gate-breaking bug.
+
+- **ADR-0010 follow-ups closed.**
+  - `evals run --gates` fixed (runner passes `prior_rollout_event`; two stale cases repaired:
+    `experiments:write` → `experiments:draft`, and two frozen-cohort messages gained
+    `prior_rollout_event=0`). 20/20 gate cases pass.
+  - `CONSTRAINTS.md` / `README.md` conflicts resolved (fitness count recorded as 45, the
+    real file count).
+  - `test_a_turn_longer_than_its_heartbeat_timeout_is_not_retried_while_alive`: not
+    reproduced in 3 clean runs and 3 runs under 12 CPU burners. Left unchanged; treated as
+    an unproven one-off.
+  - Spikes frozen with a README; `Surface.API` / `RecordingClient` retained (ADR-0010).
+  - `tests/live/test_ollama.py` run against `qwen3:8b`: passes.

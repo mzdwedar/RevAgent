@@ -275,7 +275,7 @@ FAILS_ONCE: dict[str, Callable[[str], Exception]] = {
     **REFUSAL_TYPES,
     # Names the claim it is about, as the gateway raises it (M1).
     UnresolvedEffect.__name__: lambda message: UnresolvedEffect(
-        message, key="refund:acme:ch-7:1999", claimed_at=None
+        message, key="rollout:acme:exp-7:10", claimed_at=None
     ),
     IntegrityViolation.__name__: lambda message: IntegrityViolation(
         "runs_session_id_fkey", message

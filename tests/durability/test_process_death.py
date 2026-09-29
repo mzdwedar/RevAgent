@@ -26,6 +26,7 @@ from agentstack.interfaces.wiring import build_stack, envelope_for
 from agentstack.runtime.loop import run_turn
 from agentstack.runtime.run import Run, new_run
 from agentstack.storage.database import Database
+from agentstack.tools.experiments import ROLLOUT_STAGE
 from tests.durability.worker import MESSAGE, SCOPES, RecordingEngine
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,8 +45,13 @@ def parked(
             session_id=session.session_id,
             tenant="acme",
             user="agent-operator",
+            stage=ROLLOUT_STAGE,
             channel="durability",
         )
+    )
+    stack.registry_client.commit(
+        "acme/experiments/exp-7",
+        {"experiment_version": "exp:v1", "hypothesis": "a discount retains", "variant": "20-off"},
     )
     model_calls = tmp_path / "model-calls.txt"
     reached = tmp_path / "reached.txt"
@@ -116,7 +122,7 @@ def test_it_died_inside_the_surface_read_it_was_supposed_to(parked: dict[str, An
     pid, resource, _ = parked["reached"].read_text().split(maxsplit=2)
 
     assert int(pid) == parked["worker_pid"]
-    assert resource == "acme/customers/c-42/subscription"
+    assert resource == "acme/experiments/exp-7"
 
 
 def test_the_checkpoint_outlived_the_process_that_wrote_it(
@@ -182,4 +188,6 @@ def test_the_resumed_turn_actually_reached_the_surface(
     )
 
     assert result.status == "complete"
-    assert stack.client.reads, "the resumed turn never reached the surface the worker hung on"
+    assert "execution.read" in result.tracer.names(), (
+        "the resumed turn never reached the surface the worker hung on"
+    )

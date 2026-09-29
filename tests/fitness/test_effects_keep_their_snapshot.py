@@ -116,7 +116,7 @@ def _world_before(spec: ToolSpec) -> dict[Surface, Any]:
 def test_the_catalog_has_effects_to_ask_about() -> None:
     """An empty parametrisation passes vacuously; this says what it covers."""
     names = {spec.name for spec in EFFECTS}
-    assert {"create_experiment_draft", "roll_out_variant_to_percentage", "issue_refund"} <= names
+    assert {"create_experiment_draft", "roll_out_variant_to_percentage"} <= names
 
 
 @pytest.mark.parametrize("spec", EFFECTS, ids=lambda spec: spec.name)

@@ -3,14 +3,25 @@
   "part": 8,
   "gate": true,
   "description": "A read returns data on its own verb: traced as execution.read, never audited, and never entered in the effect ledger.",
-  "message": "lookup_subscription tenant=acme customer_id=c-42",
+  "stage": "rollout",
+  "message": "get_experiment tenant=acme experiment_id=exp-7",
   "scopes": [
-    "billing:read",
-    "billing:refund"
+    "experiments:read"
   ],
+  "registry": [
+    {
+      "resource": "acme/experiments/exp-7",
+      "payload": {
+        "experiment_version": "exp:5cbf2762",
+        "hypothesis": "a discount retains at-risk customers",
+        "variant": "20-percent-off"
+      }
+    }
+  ],
+  "fake_registry": true,
   "expect": {
     "status": "complete",
-    "surface_calls": 0,
+    "rollouts": 0,
     "surface_reads": 1,
     "audit_records": 0,
     "spans_include": [

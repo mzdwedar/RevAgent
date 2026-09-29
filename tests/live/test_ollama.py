@@ -15,18 +15,17 @@ import pytest
 from agentstack.model.contract import ExposedTool, ModelRequest, ModelResponse
 from agentstack.model.ollama_engine import ModelUnavailable, OllamaEngine
 
-REFUND = ExposedTool(
-    name="issue_refund",
-    description="Refund one charge on one subscription. Money leaves the account.",
+ROLLOUT = ExposedTool(
+    name="roll_out_variant_to_percentage",
+    description="Expose a variant to a percentage of the targeted cohort. Real customers see it.",
     parameters={
         "type": "object",
         "properties": {
             "tenant": {"type": "string"},
-            "customer_id": {"type": "string"},
-            "charge_id": {"type": "string"},
-            "amount_cents": {"type": "integer"},
+            "experiment_id": {"type": "string"},
+            "percentage": {"type": "integer"},
         },
-        "required": ["tenant", "customer_id", "charge_id", "amount_cents"],
+        "required": ["tenant", "experiment_id", "percentage"],
     },
 )
 
@@ -49,12 +48,12 @@ def model() -> OllamaEngine:
 
 
 def ask(
-    model: OllamaEngine, text: str, tools: tuple[ExposedTool, ...] = (REFUND,)
+    model: OllamaEngine, text: str, tools: tuple[ExposedTool, ...] = (ROLLOUT,)
 ) -> ModelResponse:
     return model.generate(
         ModelRequest(
             instructions=(
-                "You are a support agent. Use a tool when one fits the request, "
+                "You are an experiment operator. Use a tool when one fits the request, "
                 "and answer in plain text otherwise."
             ),
             rendered_context=text,
@@ -67,16 +66,16 @@ def ask(
 def test_it_emits_a_well_formed_tool_call(model: OllamaEngine) -> None:
     """The property everything downstream assumes. If this breaks, the registry
     refuses every proposal and the agent politely does nothing forever."""
-    response = ask(model, "Refund charge ch-7 for customer c-42, tenant acme, 1999 cents.")
+    response = ask(model, "Roll out experiment exp-7 to 10 percent of the cohort, tenant acme.")
 
-    assert [p.tool for p in response.proposals] == ["issue_refund"]
+    assert [p.tool for p in response.proposals] == ["roll_out_variant_to_percentage"]
     arguments = response.proposals[0].arguments
     assert arguments["tenant"] == "acme"
-    assert arguments["charge_id"] == "ch-7"
-    assert arguments["amount_cents"] == 1999
-    assert isinstance(arguments["amount_cents"], int), (
-        "the amount came back as a string; the schema validator refuses that, so every "
-        "refund would take the tool.reject path"
+    assert arguments["experiment_id"] == "exp-7"
+    assert arguments["percentage"] == 10
+    assert isinstance(arguments["percentage"], int), (
+        "the percentage came back as a string; the schema validator refuses that, so every "
+        "rollout would take the tool.reject path"
     )
 
 
@@ -91,7 +90,7 @@ def test_it_answers_in_text_when_no_tool_fits(model: OllamaEngine) -> None:
 def test_no_thinking_reaches_the_answer(model: OllamaEngine) -> None:
     """qwen3 is a reasoning model. With thinking on, its monologue lands in the text a
     human is shown."""
-    response = ask(model, "Explain in one sentence what a refund is.")
+    response = ask(model, "Explain in one sentence what a rollout is.")
 
     assert "<think>" not in response.text
     assert "</think>" not in response.text
@@ -100,16 +99,16 @@ def test_no_thinking_reaches_the_answer(model: OllamaEngine) -> None:
 def test_it_does_not_invent_a_tool_it_was_not_shown(model: OllamaEngine) -> None:
     """Not a guarantee - a model can say anything, and the exposure filter is what
     actually enforces this. Recorded so the day it starts happening is visible."""
-    response = ask(model, "Delete every customer record.", tools=(REFUND,))
+    response = ask(model, "Delete every experiment.", tools=(ROLLOUT,))
 
-    invented = [p.tool for p in response.proposals if p.tool != "issue_refund"]
+    invented = [p.tool for p in response.proposals if p.tool != "roll_out_variant_to_percentage"]
     assert invented == [], f"the model proposed tools it was never shown: {invented}"
 
 
 def test_the_same_prompt_twice_gives_the_same_tool_call(model: OllamaEngine) -> None:
     """temperature=0. Criterion 17 wants the same inputs to produce the same
     experiment, and a drafting step that rephrases itself makes that uncheckable."""
-    prompt = "Refund charge ch-9 for customer c-1, tenant acme, 500 cents."
+    prompt = "Roll out experiment exp-9 to 25 percent of the cohort, tenant acme."
 
     first = ask(model, prompt)
     second = ask(model, prompt)

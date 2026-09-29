@@ -30,13 +30,20 @@ from agentstack.policy.precommit import PreCommitPolicy
 from agentstack.runtime.run import Run
 from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.action import ActionRequest
-from agentstack.tools.catalog import LOOKUP, REFUND, _refund
-from agentstack.tools.experiments import DRAFT, HALT, prepare_draft, prepare_halt
+from agentstack.tools.experiments import (
+    DRAFT,
+    GET,
+    HALT,
+    ROLLOUT,
+    prepare_draft,
+    prepare_halt,
+    prepare_rollout,
+)
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 
-from .conftest import SCOPES
+from .conftest import ROLLOUT_ARGS, SCOPES
 
-ARGS = {"tenant": "acme", "customer_id": "c-42", "charge_id": "ch-7", "amount_cents": 1999}
+ARGS = ROLLOUT_ARGS
 
 
 def draft_request(tenant: str = "acme") -> ActionRequest:
@@ -112,10 +119,10 @@ def test_a_policy_grant_is_never_mistakable_for_a_person(stack: Stack, run: Run)
     )
     human_record = stack.approvals.grant(
         run_id=run.run_id,
-        request=_refund(ARGS),
+        request=prepare_rollout(ARGS),
         state_snapshot="s",
         approver="finance-oncall",
-        summary="refund 19.99",
+        summary="roll out exp-7 to 10%",
     )
 
     assert policy_record is not None
@@ -160,7 +167,7 @@ def test_a_policy_grant_does_not_satisfy_an_always_tool(stack: Stack, run: Run) 
     The record exists, matches the run, the fingerprint and the state snapshot - every
     check the old implementation made. Only its source disqualifies it.
     """
-    request = _refund(ARGS)
+    request = prepare_rollout(ARGS)
     stack.approvals.grant_by_policy(
         run_id=run.run_id,
         request=request,
@@ -172,7 +179,7 @@ def test_a_policy_grant_does_not_satisfy_an_always_tool(stack: Stack, run: Run) 
     with pytest.raises(ApprovalRequired, match="not by a person"):
         require_approval(
             store=stack.approvals,
-            spec=REFUND,
+            spec=ROLLOUT,
             request=request,
             run_id=run.run_id,
             state_snapshot="s",
@@ -182,18 +189,18 @@ def test_a_policy_grant_does_not_satisfy_an_always_tool(stack: Stack, run: Run) 
 
 
 def test_an_always_tool_still_accepts_a_human_approval(stack: Stack, run: Run) -> None:
-    request = _refund(ARGS)
+    request = prepare_rollout(ARGS)
     granted = stack.approvals.grant(
         run_id=run.run_id,
         request=request,
         state_snapshot="s",
         approver="finance-oncall",
-        summary="refund 19.99",
+        summary="roll out exp-7 to 10%",
     )
 
     found = require_approval(
         store=stack.approvals,
-        spec=REFUND,
+        spec=ROLLOUT,
         request=request,
         run_id=run.run_id,
         state_snapshot="s",
@@ -208,8 +215,8 @@ def test_an_always_tool_with_no_approval_still_refuses(stack: Stack, run: Run) -
     with pytest.raises(ApprovalRequired, match="bound to this exact action"):
         require_approval(
             store=stack.approvals,
-            spec=REFUND,
-            request=_refund(ARGS),
+            spec=ROLLOUT,
+            request=prepare_rollout(ARGS),
             run_id=run.run_id,
             state_snapshot="s",
             envelope=envelope(stack, run),
@@ -221,7 +228,7 @@ def test_a_none_tier_needs_nothing(stack: Stack, run: Run) -> None:
     assert (
         require_approval(
             store=stack.approvals,
-            spec=LOOKUP,
+            spec=GET,
             request=draft_request(),
             run_id=run.run_id,
             state_snapshot="s",
@@ -285,7 +292,7 @@ def test_an_irreversible_tool_cannot_be_registered_as_pre_commit() -> None:
             description="Irreversible and hopeful.",
             input_schema={"type": "object", "properties": {}, "required": []},
             acts_as=ActsAs.DELEGATED,
-            scope="billing:refund",
+            scope="experiments:rollout",
             surface=Surface.API,
             side_effecting=True,
             reversible=False,

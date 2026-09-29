@@ -13,13 +13,14 @@ from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, envelope_for, handle
 from agentstack.observability.spans import Tracer
 from agentstack.runtime.run import Run
-from agentstack.tools.catalog import REFUND, build_registry
+from agentstack.tools.catalog import build_registry
+from agentstack.tools.experiments import ROLLOUT, prepare_rollout
 from agentstack.tools.spec import ToolSpec
 
-from .conftest import SCOPES, approve_and_resume
+from .conftest import ROLLOUT_ARGS, SCOPES, approve_and_resume
 
 
-def test_a_retry_does_not_refund_twice(stack: Stack, event: InboundEvent, run: Run) -> None:
+def test_a_retry_does_not_roll_out_twice(stack: Stack, event: InboundEvent, run: Run) -> None:
     first = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, first, run)
 
@@ -27,8 +28,9 @@ def test_a_retry_does_not_refund_twice(stack: Stack, event: InboundEvent, run: R
     handle(stack, event, scopes=SCOPES, run=run)
     handle(stack, event, scopes=SCOPES, run=run)
 
-    assert len(stack.client.calls) == 1, (
-        f"the surface was hit {len(stack.client.calls)} times; a recorded step boundary "
+    commits = len(stack.registry_client.rollouts)
+    assert commits == 1, (
+        f"the surface was hit {commits} times; a recorded step boundary "
         "plus an idempotency key is what stops a retry from duplicating a committed effect"
     )
 
@@ -51,7 +53,7 @@ def test_the_gateway_deduplicates_even_without_a_step_boundary(
 
     a = gateway.execute(
         request=request,
-        spec=REFUND,
+        spec=ROLLOUT,
         envelope=envelope,
         run_id=run.run_id,
         state_snapshot=snapshot,
@@ -59,7 +61,7 @@ def test_the_gateway_deduplicates_even_without_a_step_boundary(
     )
     b = gateway.execute(
         request=request,
-        spec=REFUND,
+        spec=ROLLOUT,
         envelope=envelope,
         run_id=run.run_id,
         state_snapshot=snapshot,
@@ -67,14 +69,12 @@ def test_the_gateway_deduplicates_even_without_a_step_boundary(
     )
     assert a.receipt == b.receipt
     assert b.deduplicated is True
-    assert len(stack.client.calls) == 1
+    assert len(stack.registry_client.rollouts) == 1
 
 
 def test_the_idempotency_key_is_the_business_identity_of_the_effect() -> None:
-    from agentstack.tools.catalog import _refund
-
-    args = {"tenant": "acme", "customer_id": "c-1", "charge_id": "ch-9", "amount_cents": 500}
-    assert _refund(args).idempotency_key == _refund(dict(args)).idempotency_key, (
+    args = ROLLOUT_ARGS
+    assert prepare_rollout(args).idempotency_key == prepare_rollout(dict(args)).idempotency_key, (
         "a retry must reproduce the key, so it cannot be a random uuid"
     )
 

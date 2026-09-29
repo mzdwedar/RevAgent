@@ -7,6 +7,7 @@ import dataclasses
 import pytest
 
 from agentstack.tools.catalog import build_registry
+from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT, ROLLOUT_STAGE
 from agentstack.tools.spec import (
     REQUIRED_TOOL_FIELDS,
     ActsAs,
@@ -15,6 +16,8 @@ from agentstack.tools.spec import (
     Surface,
     ToolSpec,
 )
+
+from .conftest import ROLLOUT_ARGS
 
 REGISTRY = build_registry()
 
@@ -74,20 +77,16 @@ def test_an_irreversible_tool_cannot_settle_for_pre_commit_approval() -> None:
 
 
 def test_exposure_is_filtered_per_run() -> None:
-    triage = {s.name for s in REGISTRY.expose_for(tenant="acme", stage="triage")}
-    default = {s.name for s in REGISTRY.expose_for(tenant="acme", stage="default")}
-    assert "issue_refund" not in triage, "blast radius: the refund tool is not a triage tool"
-    assert "issue_refund" in default
-    assert triage < default
+    drafting = {s.name for s in REGISTRY.expose_for(tenant="acme", stage=DRAFT_STAGE)}
+    rolling_out = {s.name for s in REGISTRY.expose_for(tenant="acme", stage=ROLLOUT_STAGE)}
+    assert ROLLOUT.name not in drafting, "blast radius: a drafting run is never shown the rollout"
+    assert ROLLOUT.name in rolling_out
+    assert drafting != rolling_out
 
 
 def test_a_tool_that_was_not_exposed_cannot_be_prepared() -> None:
     from agentstack.tools.registry import ToolNotExposed
 
-    exposed = REGISTRY.expose_for(tenant="acme", stage="triage")
+    exposed = REGISTRY.expose_for(tenant="acme", stage=DRAFT_STAGE)
     with pytest.raises(ToolNotExposed):
-        REGISTRY.prepare(
-            "issue_refund",
-            {"tenant": "acme", "customer_id": "c", "charge_id": "x", "amount_cents": 1},
-            exposed=exposed,
-        )
+        REGISTRY.prepare(ROLLOUT.name, ROLLOUT_ARGS, exposed=exposed)

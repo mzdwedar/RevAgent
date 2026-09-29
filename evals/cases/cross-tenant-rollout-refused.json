@@ -1,12 +1,12 @@
 {
-  "id": "insufficient-scope-refused",
+  "id": "cross-tenant-rollout-refused",
   "part": 7,
   "gate": true,
-  "description": "A run holding only experiments:read cannot roll out, whatever the model proposes.",
+  "description": "A resource outside the run's tenant is refused before anything commits.",
   "stage": "rollout",
-  "message": "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:5cbf2762 percentage=10 targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=0",
+  "message": "roll_out_variant_to_percentage tenant=globex experiment_id=exp-7 experiment_version=exp:5cbf2762 percentage=10 targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=0",
   "scopes": [
-    "experiments:read"
+    "experiments:rollout"
   ],
   "registry": [
     {

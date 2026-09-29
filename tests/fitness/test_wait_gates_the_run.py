@@ -3,7 +3,7 @@
 `run_turn` parked a wait and then never read `deps.waits` on the way in, and `handle`
 just called `run_turn` again. In every driver - the CLI, the eval runner, the test
 conftest - `resume(...)` and the follow-up `handle(...)` were two independent
-statements, and deleting the `resume` call from either left the refund committing
+statements, and deleting the `resume` call from either left the rollout committing
 anyway, because the only thing the continuation actually consulted was the
 ApprovalStore.
 
@@ -40,12 +40,12 @@ def test_an_approved_run_with_an_unsatisfied_wait_still_cannot_commit(
         request=first.pending_request,
         state_snapshot=first.pending_wait.state_snapshot,
         approver="finance-oncall",
-        summary=first.approval_summary or "refund",
+        summary=first.approval_summary or "roll out",
     )
 
     second = handle(stack, event, scopes=SCOPES, run=run)
     assert second.status == "blocked"
-    assert stack.client.calls == [], (
+    assert stack.registry_client.rollouts == [], (
         "the approval store alone let the run continue; the wait was decorative"
     )
     assert stack.waits.pending_for(run.run_id), "the wait is still pending, as it should be"
@@ -61,7 +61,7 @@ def test_a_rejected_resume_leaves_the_run_blocked(
         request=first.pending_request,
         state_snapshot=first.pending_wait.state_snapshot,
         approver="finance-oncall",
-        summary=first.approval_summary or "refund",
+        summary=first.approval_summary or "roll out",
     )
 
     with pytest.raises(ResumeRejected):
@@ -76,7 +76,7 @@ def test_a_rejected_resume_leaves_the_run_blocked(
         )
 
     assert handle(stack, event, scopes=SCOPES, run=run).status == "blocked"
-    assert stack.client.calls == []
+    assert stack.registry_client.rollouts == []
 
 
 def test_a_satisfied_wait_lets_the_run_through_and_carries_its_approver(
@@ -89,7 +89,7 @@ def test_a_satisfied_wait_lets_the_run_through_and_carries_its_approver(
         request=first.pending_request,
         state_snapshot=first.pending_wait.state_snapshot,
         approver="finance-oncall",
-        summary=first.approval_summary or "refund",
+        summary=first.approval_summary or "roll out",
     )
     resume(
         stack.waits,
@@ -103,7 +103,7 @@ def test_a_satisfied_wait_lets_the_run_through_and_carries_its_approver(
 
     second = handle(stack, event, scopes=SCOPES, run=run)
     assert second.status == "complete"
-    assert len(stack.client.calls) == 1
+    assert len(stack.registry_client.rollouts) == 1
 
     start = next(span for span in second.tracer.spans if span.name == "run.start")
     assert start.attributes.get("resumed_by") == "finance-oncall", (

@@ -2,21 +2,31 @@
   "id": "policy-document-is-retrieved",
   "part": 5,
   "gate": true,
-  "description": "Refund questions pull the refund policy into context, labelled and scoped.",
-  "message": "customer wants a refund: issue_refund tenant=acme customer_id=c-42 charge_id=ch-7 amount_cents=1999",
+  "description": "Rollout requests pull the rollout policy into context, labelled and scoped.",
+  "stage": "rollout",
+  "message": "the owner wants a rollout: roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:5cbf2762 percentage=10 targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=0",
   "scopes": [
-    "billing:read",
-    "billing:refund"
+    "experiments:rollout"
+  ],
+  "registry": [
+    {
+      "resource": "acme/experiments/exp-7",
+      "payload": {
+        "experiment_version": "exp:5cbf2762",
+        "hypothesis": "a discount retains at-risk customers",
+        "variant": "20-percent-off"
+      }
+    }
   ],
   "corpus": [
-    "Refund policy: any refund above 10.00 needs a second approver."
+    "Rollout policy: any rollout above 10 percent needs a second approver."
   ],
   "expect": {
     "status": "awaiting_approval",
     "context_mentions": [
-      "refund policy"
+      "rollout policy"
     ],
     "untrusted_items_min": 2,
-    "surface_calls": 0
+    "rollouts": 0
   }
 }

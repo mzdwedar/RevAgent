@@ -53,7 +53,7 @@ from agentstack.tools.spec import Surface, ToolSpec
 class UnresolvedEffect(RuntimeError):
     """The effect may or may not have applied, and only the surface knows which.
 
-    Raised instead of retrying. A retry here is the difference between one refund
+    Raised instead of retrying. A retry here is the difference between one rollout
     and two.
 
     Names the claim it is about, so whoever parks the run on it can say which claim a

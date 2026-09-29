@@ -1,7 +1,7 @@
 """Edge coverage for the two modules this audit introduced.
 
 Both sit on a path where being wrong is expensive - one reads untrusted model output,
-the other decides whether money moves twice - so their branches get exercised rather
+the other decides whether a rollout lands twice - so their branches get exercised rather
 than inferred.
 """
 
@@ -14,11 +14,19 @@ import pytest
 from agentstack.execution.idempotency import ClaimState, IdempotencyLedger
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.storage.database import Database
-from agentstack.tools.catalog import LOOKUP, REFUND
+from agentstack.tools.experiments import GET, ROLLOUT
 from agentstack.tools.spec import ActsAs, Approval, Idempotency, Surface, ToolSpec
 from agentstack.tools.validation import InvalidToolArguments, validate_arguments
 
-GOOD = {"tenant": "acme", "customer_id": "c-42", "charge_id": "ch-7", "amount_cents": 1999}
+GOOD = {
+    "tenant": "acme",
+    "experiment_id": "exp-7",
+    "experiment_version": "exp:5cbf2762",
+    "percentage": 10,
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.61,
+    "prior_rollout_event": 0,
+}
 
 
 def test_a_non_object_schema_is_refused() -> None:
@@ -39,25 +47,25 @@ def test_a_non_object_schema_is_refused() -> None:
 
 
 def test_stringly_typed_transport_is_accepted_when_it_is_the_declared_type() -> None:
-    """A model emits text; "1999" is an integer, "quite a lot" is not."""
-    assert validate_arguments(REFUND, {**GOOD, "amount_cents": "1999"})["amount_cents"] == 1999
+    """A model emits text; "10" is an integer, "ten percent" is not."""
+    assert validate_arguments(ROLLOUT, {**GOOD, "percentage": "10"})["percentage"] == 10
     with pytest.raises(InvalidToolArguments, match="must be integer"):
-        validate_arguments(REFUND, {**GOOD, "amount_cents": "1,999"})
+        validate_arguments(ROLLOUT, {**GOOD, "percentage": "ten percent"})
 
 
 def test_a_boolean_is_not_an_integer() -> None:
-    """Python says True == 1. An approval prompt showing "True dollars" says otherwise."""
+    """Python says True == 1. An approval prompt showing "True percent" says otherwise."""
     with pytest.raises(InvalidToolArguments, match="boolean"):
-        validate_arguments(REFUND, {**GOOD, "amount_cents": True})
+        validate_arguments(ROLLOUT, {**GOOD, "percentage": True})
 
 
 def test_a_wrongly_typed_non_string_value_is_refused() -> None:
     with pytest.raises(InvalidToolArguments, match="must be string"):
-        validate_arguments(REFUND, {**GOOD, "charge_id": 7})
+        validate_arguments(ROLLOUT, {**GOOD, "experiment_id": 7})
 
 
 def test_an_undeclared_property_type_passes_through_unchanged() -> None:
-    assert validate_arguments(LOOKUP, {"tenant": "acme", "customer_id": "c-1"})["tenant"] == "acme"
+    assert validate_arguments(GET, {"tenant": "acme", "experiment_id": "exp-1"})["tenant"] == "acme"
 
 
 def test_a_number_and_a_boolean_arrive_from_text() -> None:
@@ -104,17 +112,17 @@ def test_recorded_returns_only_a_settled_receipt(app_database: Database) -> None
 
 def test_the_prompt_renders_ids_plainly_and_truncates_long_text() -> None:
     rendered = ApprovalPrompt(
-        spec=REFUND,
-        resource="acme/customers/c-42/charges/ch-7",
+        spec=ROLLOUT,
+        resource="acme/experiments/exp-7/rollout",
         # "q" appears in none of the prompt's own labels, so counting it counts
         # only the payload text.
-        payload={"charge_id": "ch-7", "amount_cents": 1999, "note": "q" * 400},
+        payload={"experiment_id": "exp-7", "percentage": 10, "note": "q" * 400},
         principal="p",
         acts_as=ActsAs.DELEGATED,
         requested_by="r",
         channel="cli",
     ).render()
-    assert "ch-7" in rendered
+    assert "exp-7" in rendered
     note_line = next(line for line in rendered.splitlines() if line.startswith("  note"))
     assert note_line.endswith("[untrusted text, from the model's proposal]")
     assert "…" in note_line, "an approver should not have to scroll past 400 characters"

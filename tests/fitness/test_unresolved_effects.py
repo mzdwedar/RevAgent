@@ -4,9 +4,9 @@
 that had already come back. `RecordingClient` never fails, which is why every
 idempotency test passed anyway.
 
-Replace it with an HTTP client and the first socket timeout on a refund the provider
+Replace it with an HTTP client and the first socket timeout on a rollout the registry
 did apply leaves no ledger row: the step ledger writes `failed`, the run retries,
-`recorded()` returns None, and the money leaves twice. The ledger cannot prevent that
+`recorded()` returns None, and the rollout lands twice. The ledger cannot prevent that
 while its only state is "already returned".
 
 Two phases, and a third state: claim the key before committing, finalize it with the
@@ -31,9 +31,9 @@ from agentstack.observability.spans import Tracer
 from agentstack.runtime.run import Run
 from agentstack.runtime.waits import RECONCILE, RECONCILE_DUE_AFTER, reconcile_wait_id
 from agentstack.storage.database import Database, IntegrityViolation
-from agentstack.tools.catalog import REFUND
+from agentstack.tools.experiments import ROLLOUT, ROLLOUT_STAGE
 
-from .conftest import SCOPES, TENANT, approve_and_resume
+from .conftest import ROLLOUT_ARGS, SCOPES, TENANT, FlakyRegistry, approve_and_resume
 
 
 def test_the_ledger_distinguishes_unknown_from_not_yet_done(app_database: Database) -> None:
@@ -54,33 +54,33 @@ def _approved_run(stack: Stack, event: InboundEvent, run: Run) -> None:
 
 
 def test_an_effect_that_applied_but_never_answered_is_not_repeated(
-    stack: Stack, event: InboundEvent, run: Run
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
 ) -> None:
     _approved_run(stack, event, run)
-    stack.client.fail_after_effect = True
+    flaky_registry.fail_after_effect = True
 
     with pytest.raises(UnresolvedEffect):
         handle(stack, event, scopes=SCOPES, run=run)
-    assert len(stack.client.calls) == 1, "the effect applied once"
+    assert len(flaky_registry.rollouts) == 1, "the effect applied once"
 
     # The retry is the dangerous moment. It must not re-commit: the run is parked on the
     # effect's reconcile wait (M1), so the next turn doesn't reach the surface at all.
-    stack.client.fail_after_effect = False
+    flaky_registry.fail_after_effect = False
     retried = handle(stack, event, scopes=SCOPES, run=run)
     assert retried.status == "blocked"
     (parked,) = stack.waits.pending_for(run.run_id)
     assert parked.kind == RECONCILE
-    assert len(stack.client.calls) == 1, "the money left twice"
+    assert len(flaky_registry.rollouts) == 1, "the rollout landed twice"
 
 
 def test_an_unresolved_effect_in_a_turn_parks_the_run_for_reconciliation(
-    stack: Stack, event: InboundEvent, run: Run
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
 ) -> None:
     """Audit finding M1. The claim used to stay IN_FLIGHT with nothing parked: listed by
     `unresolved_keys()`, and invisible to anything that watches runs. It parks a
     reconcile wait that says which action and which claim, and is due by a deadline."""
     _approved_run(stack, event, run)
-    stack.client.fail_after_effect = True
+    flaky_registry.fail_after_effect = True
     before = datetime.now(UTC)
 
     with pytest.raises(UnresolvedEffect) as unresolved:
@@ -107,10 +107,10 @@ def test_a_reconcile_wait_is_one_per_claim(run: Run) -> None:
 
 
 def test_an_unresolved_effect_is_audited_so_someone_can_reconcile_it(
-    stack: Stack, event: InboundEvent, run: Run
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
 ) -> None:
     _approved_run(stack, event, run)
-    stack.client.fail_after_effect = True
+    flaky_registry.fail_after_effect = True
     with pytest.raises(UnresolvedEffect):
         handle(stack, event, scopes=SCOPES, run=run)
 
@@ -120,10 +120,10 @@ def test_an_unresolved_effect_is_audited_so_someone_can_reconcile_it(
 
 
 def test_reconciliation_settles_the_key_and_the_retry_deduplicates(
-    stack: Stack, event: InboundEvent, run: Run
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
 ) -> None:
     _approved_run(stack, event, run)
-    stack.client.fail_after_effect = True
+    flaky_registry.fail_after_effect = True
     with pytest.raises(UnresolvedEffect):
         handle(stack, event, scopes=SCOPES, run=run)
 
@@ -131,13 +131,9 @@ def test_reconciliation_settles_the_key_and_the_retry_deduplicates(
     key = next(iter(stack.ledger.unresolved_keys()))
     stack.ledger.finalize(key, "receipt-reconciled")
 
-    stack.client.fail_after_effect = False
-    exposed = stack.deps.registry.expose_for(tenant=run.tenant)
-    request = stack.deps.registry.prepare(
-        "issue_refund",
-        {"tenant": "acme", "customer_id": "c-42", "charge_id": "ch-7", "amount_cents": 1999},
-        exposed=exposed,
-    )
+    flaky_registry.fail_after_effect = False
+    exposed = stack.deps.registry.expose_for(tenant=run.tenant, stage=ROLLOUT_STAGE)
+    request = stack.deps.registry.prepare(ROLLOUT.name, ROLLOUT_ARGS, exposed=exposed)
     stack.approvals.grant(
         run_id=run.run_id,
         request=request,
@@ -149,7 +145,7 @@ def test_reconciliation_settles_the_key_and_the_retry_deduplicates(
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)
     result = stack.deps.gateway.execute(
         request=request,
-        spec=REFUND,
+        spec=ROLLOUT,
         envelope=envelope_for(view, scopes=SCOPES),
         run_id=run.run_id,
         state_snapshot="s",
@@ -157,7 +153,7 @@ def test_reconciliation_settles_the_key_and_the_retry_deduplicates(
     )
     assert result.deduplicated is True
     assert result.receipt == "receipt-reconciled"
-    assert len(stack.client.calls) == 1
+    assert len(flaky_registry.rollouts) == 1
 
 
 # --- refused is not unresolved (T24) ---
@@ -168,26 +164,28 @@ def test_reconciliation_settles_the_key_and_the_retry_deduplicates(
 # key nobody needs to reconcile, and block the legitimate call that comes after it.
 
 
-def _refused_turn(stack: Stack, event: InboundEvent, run: Run) -> Any:
+def _refused_turn(stack: Stack, event: InboundEvent, run: Run, registry: FlakyRegistry) -> Any:
     parked = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, parked, run)
-    stack.client.refuse_before_effect = True
+    registry.refuse_before_effect = True
     return handle(stack, event, scopes=SCOPES, run=run)
 
 
-def test_a_refused_effect_releases_its_claim(stack: Stack, event: InboundEvent, run: Run) -> None:
-    _refused_turn(stack, event, run)
+def test_a_refused_effect_releases_its_claim(
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
+) -> None:
+    _refused_turn(stack, event, run, flaky_registry)
 
-    assert stack.client.calls == [], "a refusal is a surface that did not act"
+    assert flaky_registry.rollouts == [], "a refusal is a surface that did not act"
     assert stack.ledger.unresolved_keys() == (), (
         "a refusal left a claim someone would have to reconcile for nothing"
     )
 
 
 def test_a_refused_effect_is_audited_as_refused_not_unresolved(
-    stack: Stack, event: InboundEvent, run: Run
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
 ) -> None:
-    _refused_turn(stack, event, run)
+    _refused_turn(stack, event, run, flaky_registry)
 
     outcomes = {(r.outcome, r.policy_decision) for r in stack.audit.for_run(run.run_id)}
     assert ("refused", "surface.refused") in outcomes
@@ -195,9 +193,9 @@ def test_a_refused_effect_is_audited_as_refused_not_unresolved(
 
 
 def test_the_turn_answers_a_refusal_instead_of_crashing(
-    stack: Stack, event: InboundEvent, run: Run
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
 ) -> None:
-    result = _refused_turn(stack, event, run)
+    result = _refused_turn(stack, event, run, flaky_registry)
 
     assert result.status == "rejected"
     assert "tool.reject" in result.tracer.names()
@@ -205,26 +203,26 @@ def test_the_turn_answers_a_refusal_instead_of_crashing(
 
 
 def test_after_a_refusal_the_same_effect_can_still_happen_once(
-    stack: Stack, event: InboundEvent, run: Run
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
 ) -> None:
     """The key was released, so a later call - the state has moved on, the precondition
     now holds - acts. It acts once."""
-    _refused_turn(stack, event, run)
-    stack.client.refuse_before_effect = False
+    _refused_turn(stack, event, run, flaky_registry)
+    flaky_registry.refuse_before_effect = False
 
     handle(stack, event, scopes=SCOPES, run=run)
     handle(stack, event, scopes=SCOPES, run=run)
 
-    assert len(stack.client.calls) == 1
+    assert len(flaky_registry.rollouts) == 1
 
 
 def test_the_gateway_reraises_the_refusal_to_its_caller(
-    stack: Stack, event: InboundEvent, run: Run
+    stack: Stack, event: InboundEvent, run: Run, flaky_registry: FlakyRegistry
 ) -> None:
     """The runtime turns it into an answer; a caller without a turn still sees it."""
     parked = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, parked, run)
-    stack.client.refuse_before_effect = True
+    flaky_registry.refuse_before_effect = True
     request = parked.pending_request
     view = stack.resolver.resolve(session_id=run.session_id, user_id=run.user, tenant=run.tenant)
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)
@@ -232,7 +230,7 @@ def test_the_gateway_reraises_the_refusal_to_its_caller(
     with pytest.raises(SurfaceRefused):
         stack.deps.gateway.execute(
             request=request,
-            spec=REFUND,
+            spec=ROLLOUT,
             envelope=envelope_for(view, scopes=SCOPES),
             run_id=run.run_id,
             state_snapshot=parked.pending_wait.state_snapshot,
@@ -241,7 +239,12 @@ def test_the_gateway_reraises_the_refusal_to_its_caller(
 
 
 def test_an_unresolved_claim_survives_the_process_that_made_it(
-    stack: Stack, event: InboundEvent, run: Run, app_database: Database, checkpointer: Any
+    stack: Stack,
+    event: InboundEvent,
+    run: Run,
+    app_database: Database,
+    checkpointer: Any,
+    flaky_registry: FlakyRegistry,
 ) -> None:
     """The state the whole two-phase design exists for.
 
@@ -249,7 +252,7 @@ def test_an_unresolved_claim_survives_the_process_that_made_it(
     most needed: the process that dispatched the effect is the one that died.
     """
     _approved_run(stack, event, run)
-    stack.client.fail_after_effect = True
+    flaky_registry.fail_after_effect = True
     with pytest.raises(UnresolvedEffect):
         handle(stack, event, scopes=SCOPES, run=run)
 
@@ -262,11 +265,16 @@ def test_an_unresolved_claim_survives_the_process_that_made_it(
 
 
 def test_a_restarted_process_refuses_to_retry_the_unresolved_effect(
-    stack: Stack, event: InboundEvent, run: Run, app_database: Database, checkpointer: Any
+    stack: Stack,
+    event: InboundEvent,
+    run: Run,
+    app_database: Database,
+    checkpointer: Any,
+    flaky_registry: FlakyRegistry,
 ) -> None:
     """A fresh process is the most dangerous retrier: it remembers nothing."""
     _approved_run(stack, event, run)
-    stack.client.fail_after_effect = True
+    flaky_registry.fail_after_effect = True
     with pytest.raises(UnresolvedEffect):
         handle(stack, event, scopes=SCOPES, run=run)
 
@@ -275,7 +283,7 @@ def test_a_restarted_process_refuses_to_retry_the_unresolved_effect(
 
     assert retried.status == "blocked", "the run is parked on the reconcile wait, not retried"
     assert [w.kind for w in restarted.waits.pending_for(run.run_id)] == [RECONCILE]
-    assert restarted.client.calls == [], "the money left twice across a restart"
+    assert restarted.registry_client.rollouts == [], "the rollout landed twice across a restart"
 
 
 def test_two_processes_claiming_one_key_produce_one_winner(app_database: Database) -> None:
@@ -289,7 +297,7 @@ def test_two_processes_claiming_one_key_produce_one_winner(app_database: Databas
 
     def attempt() -> None:
         barrier.wait()
-        states.append(ledger.claim("refund:acme:ch-contended:1999").state)
+        states.append(ledger.claim("rollout:acme:exp-contended:10").state)
 
     threads = [threading.Thread(target=attempt) for _ in range(4)]
     for thread in threads:
