@@ -153,13 +153,14 @@ criteria are met.
   - Verify: new `tests/fitness/test_prediction_gate.py` — criterion 18, running in CI
     off the fixture. **No `skipif` anywhere.**
   - Depends: T5. Files: ~5.
-  - **Done except the recorded fixture.** No `TABPFN_TOKEN` is configured on this
-    machine, so `data/scores/` is empty and cannot be produced. Everything else is
-    built and tested: the gate, the fold assignment, the encoding, the cross-fitting
-    loop, the replay guards, and the startup command. `scripts/record_scores.py` makes
-    the fixture in one command once a token exists; `tests/live` then checks it against
-    the real model. **Action for a human: set `TABPFN_TOKEN`, run
-    `uv sync --extra prediction`, then `uv run python scripts/record_scores.py`.**
+  - **Done.** The gate, the fold assignment, the encoding, the cross-fitting loop, the
+    replay guards and the startup command are built and tested. The recorded fixture now
+    exists too: `TABPFN_TOKEN` is in `.env` (gitignored), and `data/scores/` holds
+    `telecom-bigml.json` and `bank-churn.json` (`model_version: tabpfn-3.5`, recorded
+    2026-09-29 with `scripts/record_scores.py`). **`data/` is gitignored, so the fixture
+    exists only on the machine that recorded it;** CI and a fresh clone still cannot run
+    off it until it is committed or fetched. `tests/live` reads `TABPFN_TOKEN` from the
+    process environment, not from `.env` — export it first (`set -a; . ./.env; set +a`).
   - **Closed the carried-forward gap:** `agentstack.prediction` was in none of the
     `.importlinter` contracts. It is now in all five. Sabotage-verified — an `httpx`
     import and an upward import into `execution` each break a contract that previously
@@ -200,13 +201,16 @@ criteria are met.
     than a decile, and cohort size is exactly what the minimum-size gate is about.
   - Membership stays re-checkable (`Cohort.includes`) because criterion 11 needs every
     control subject shown to have passed the same predicate at the same model version.
-  - **Still blocked on the fixture from T6:** the cohort above was exercised with
-    stand-in scores. A real frozen cohort needs `TABPFN_TOKEN` and
-    `scripts/record_scores.py`.
+  - **No longer blocked on the fixture from T6:** the cohort was first exercised with
+    stand-in scores; real recorded scores now exist in `data/scores/` (see T6), and the
+    cohort has been run against them.
 
 ### ✅ Checkpoint B — a cohort is real and reproducible
-- [ ] A cohort can be produced twice from one snapshot with identical membership
-- [ ] Thresholds live in `experiments/`, versioned
+- [x] A cohort can be produced twice from one snapshot with identical membership
+      (T7: `tests/fitness/test_targeting.py`, criterion 17; rank cut, not quantile, so
+      ties cannot change the size. Recorded scores now exist, T6.)
+- [x] Thresholds live in `experiments/`, versioned (`experiments/targeting.toml`, named
+      profiles, frozen into `experiment_version`)
 - [ ] Human review
 
 ---
@@ -321,7 +325,10 @@ criteria are met.
       `langgraph` schema; a SIGKILLed worker's turn resumes in another process without
       re-calling the model, and both sabotages (resume disabled, in-memory saver) fail it.
 - [ ] **A triggered run scores a real cohort, is killed mid-flight, and resumes** —
-      **partially met, and the shortfall is a planning gap, not a skipped task.**
+      **mostly met.** The wiring landed in T13 (`runtime/operator.py`), real recorded
+      scores exist (T6), and kill-and-resume is proven on Postgres (T10) and on Temporal
+      (T44). No single test drives trigger → real scores → kill → resume; that is what
+      keeps this open.
 - [ ] **Human review before side effects are wired**
 
 **What is actually true.** Every piece exists and is tested on its own:
@@ -340,13 +347,14 @@ criteria are met.
    ingress, the idempotency and the asymmetry; T7's was the freeze. Connecting them was
    never assigned. Same shape as the `MemoryStore` gap found at Checkpoint A: the
    checkpoint asserts something no task builds.
-2. **"A real cohort" is still stand-in scores.** `data/scores/` is empty pending a
-   `TABPFN_TOKEN` and `scripts/record_scores.py` (T6).
+2. ~~**"A real cohort" is still stand-in scores.**~~ **Closed 2026-09-30:** the scores
+   were recorded with a real `TABPFN_TOKEN` (`data/scores/`, T6) and the cohort was run
+   on them. The fixture is gitignored, so it is local to that machine.
 
 Neither blocks Phase 4 — T11 (`PRE_COMMIT`) and T12 (Ollama) depend on neither, and
 T13 is the natural place for the wiring since it is the first task that needs a cohort
 to draft *from*. **Decided: the wiring folds into T13**, which is the first task that needs a cohort to
-draft *from*. Checkpoint C's first line stays open until then, deliberately.
+draft *from*. Checkpoint C's first line stays open until then, deliberately. (Update 2026-09-30: the wiring is done; see Checkpoint C.)
 
 ---
 
@@ -430,9 +438,11 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately.
     `PRE_COMMIT` silently. It now watches every file under `tools/`.
 
 ### ✅ Checkpoint D — untrusted model output reaches a real side effect safely
-- [ ] A model-drafted candidate is validated, policy-checked and written
-- [ ] A malformed one is refused, traced, and answered
-- [ ] The write produces a `PRE_COMMIT` audit record naming the rule
+- [x] A model-drafted candidate is validated, policy-checked and written
+      (T13 criterion 19; T12 Ollama adapter; the draft commits through the gateway)
+- [x] A malformed one is refused, traced, and answered (T12 `tool.reject`, T13 criterion 19)
+- [x] The write produces a `PRE_COMMIT` audit record naming the rule (T11: `granted_by`
+      and `rule` on the record, CHECK-enforced)
 - [ ] Human review
 
 ---
@@ -991,7 +1001,7 @@ and the test that proves it.
       `checkpoint_guard`, `evals --gates` green
 - [ ] `/stack-audit` on the phase's diff (mandatory before `/ship`)
 - [ ] Human review
-- Still open, by name: the relaunch path (T25), and a per-invocation test database
+- Still open, by name: the relaunch path (T25; a design gap — no tool owns it, `src` has no relaunch code). *(Per-invocation test database: done in `c333575`.)* Originally listed: a per-invocation test database
   (T22/T23).
 
 ## Phase 8 — Durable runtime on Temporal
@@ -1435,7 +1445,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     `check_task.sh` and dropping `agentstack_app_test` mid-run: dozens of spurious
     failures (`AdminShutdown`, rows vanishing). Verified instead against a throwaway
     Postgres on 5434, as in T23: **675 passed**. `stack_guard` intact, `checkpoint_guard`
-    safe, changed-line coverage 94%. A per-invocation test database is still owed.
+    safe, changed-line coverage 94%. A per-invocation test database is still owed. *(Done in `c333575`: `storage.provision.run_scoped` gives each run its own databases and drops them when it ends; fixed-name databases from older code may linger on a dev server.)*
 
 - [x] **T44 — Death while parked, end to end** · layer 3 · *S*
   - Acceptance: the SPEC.md criterion 23 path runs on Temporal.
@@ -1640,7 +1650,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     an allowed field, a prompt, a field no contract has) each go into a real history,
     encoded as Temporal encodes them, and each is found.
 
-- [ ] **T49 — Traces across workflow and activities** · layer 9 · *S*
+- [x] **T49 — Traces across workflow and activities** · layer 9 · *S*
   - Acceptance: every activity's spans carry our `run_id` and `session_id`; Temporal
     history is never read as audit.
   - Verify: `test_trace_completeness`, `test_audit_separate_from_traces` green through
@@ -1792,7 +1802,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     7 Medium, 7 Low. Gates were green before it ran. The full audit is in the
     conversation record. The fixes, grouped by what they touch (human decision: fix C1,
     all Highs, M1 and M7 now; the other Mediums and the Lows are follow-ups):
-- [ ] **A1 — What a person is asked about is what commits** (audit C1, H2, H3, H4) · layers 8, 3, 9, 10
+- [x] **A1 — What a person is asked about is what commits** (audit C1, H2, H3, H4) · layers 8, 3, 9, 10
   - C1: a rollout proposal that differs from the frozen cohort is refused before
     anyone is asked; the headline and headcount come from the recorded action, not a
     constant. (Human decision kept from T43: the model's proposal is what commits.)
@@ -1800,15 +1810,15 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     recorded, and the run goes back to waiting and re-asking.
   - H3: every human answer (yes or no) and every refusal before the gateway is an audit
     record.
-  - H4: the prepared action is stored with the wait (migration 0015); the commit reads
+  - H4: the prepared action is stored with the wait (migration 0018, renumbered from 0015 at the merge with `main`); the commit reads
     it from the record, not from the LangGraph checkpoint.
-- [ ] **A2 — Unresolved effects park where a person sees and settles them** (audit H1, M1, H5) · layers 7, 3, 1
+- [x] **A2 — Unresolved effects park where a person sees and settles them** (audit H1, M1, H5) · layers 7, 3, 1
   - H1: no effect moves its own world snapshot (a draft did); catalog-wide fitness test.
   - M1: an `UnresolvedEffect` in the turn path parks a reconcile wait too.
   - H5: reconcile waits get a deadline, `operator stalled` reports them and exits 1,
     and an `agentstack-operator reconcile` command settles the claim, satisfies the wait,
-    audits and wakes the run (migration 0016 if needed).
-- [ ] **A3 — Docs claim only what the code enforces** (audit M7), after A1 and A2 merge ·
+    audits and wakes the run (migration 0019, first written as 0016).
+- [ ] **A3 — Docs claim only what the code enforces** (audit M7), after A1 and A2 merge · *(partly done, checked 2026-09-30: STACK.md rows 1, 3, 7 and 9 and the CONSTRAINTS E2 bullet already describe the A1/A2 behaviour; the spec's layer ledger and the "unsatisfied wait" bullet are not confirmed, so the box stays open)* ·
   STACK rows 1, 3, 7 and 9; the spec's layer ledger; the CONSTRAINTS bullets on E2 and
   unsatisfied waits.
 - Follow-ups, not blocking: M2 (tenant of a trigger checked in layer 8), M3 (spans for
@@ -1863,12 +1873,12 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
       `NothingApproved` had neither before.
     - `RunActivities` requires `audit`, just as it requires `traces`. Audit and traces
       stay separate sinks.
-  - **H4. The approved action lived only in the LangGraph checkpoint.** `migrations/0015`
-    adds `waits.action_tool` and `waits.action_arguments` (both or neither), plus
+  - **H4. The approved action lived only in the LangGraph checkpoint.** `migrations/0018`
+    (first written as 0015) adds `waits.action_tool` and `waits.action_arguments` (both or neither), plus
     `audit.records.wait_id` and `state_snapshot`. `act` parks the validated arguments
     with the wait. `commit` reads them from the wait, prepares them again through the
     registry (schema and exposure), and holds them to the recorded fingerprint. It
-    never reads the checkpoint. Approval waits parked before 0015 hold no action and
+    never reads the checkpoint. Approval waits parked before 0018 hold no action and
     are refused at the act, with an audit record, rather than backfilled.
   - **Found:**
     - The workflow's reconcile loop has the same shape as H2. A stray signal naming a
@@ -1937,7 +1947,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - **An answer is spent once** (`_spent`). A wake-up for a claim nobody settled went
     round the act in a tight loop: 164 attempts in a second, measured on the mutant.
   - **H5: a reconcile wait had no deadline, no command and no alert.**
-    - `migrations/0016`: `waits.idempotency_key`, plus two new CHECKs. A pending reconcile
+    - `migrations/0019` (first written as 0016): `waits.idempotency_key`, plus two new CHECKs. A pending reconcile
       wait has a deadline (0010's CHECK exempted every kind it didn't name, and
       `reconcile` came later) and names its claim. Old rows are backfilled due-now, as
       0010 did.
@@ -1955,7 +1965,8 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
       nothing otherwise. A contradiction with the ledger is refused.
   - **Placeholder `0015`:** the migrator refuses a gap, and 0015 belongs to a parallel
     task. A no-op `0015_reserved_for_a_parallel_task` keeps this branch applicable. Drop
-    it at merge.
+    it at merge. (Dropped: `main`'s `0015` is the C2 registry-move key, so A1 became
+    `0018` and A2 `0019`.)
   - Tests:
     - `tests/fitness/test_effects_keep_their_snapshot.py`, new (catalog-wide): no tool's
       own effect moves its approval snapshot, the rollout is still bound to the world,
@@ -1980,7 +1991,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     - the old "answered" condition;
     - no reconcile kind in `stalled`;
     - no default deadline;
-    - no 0016 CHECKs;
+    - no 0019 CHECKs;
     - no wake-up in the command.
 - [x] **Merge A1 + A2** · layers 3, 7, 8, 9, 10 · *M*
   - **What conflicted:** `evals/runner.py`, `migrations/README.md`,
@@ -2005,9 +2016,10 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
       both `NOT_ANSWERED` and `UNRESOLVED` are handled as distinct exits from `_act`'s
       inner loop.
     - `migrations/`: A2's placeholder `0015_reserved_for_a_parallel_task` does not exist
-      in the working tree or `migrations/README.md` — A1's real `0015_waits_hold_the_action`
-      is the only `0015`, and `0016_reconcile_waits_are_watched` follows it.
-      `migrations/README.md` lists both 0015 and 0016 with their real descriptions.
+      in the working tree or `migrations/README.md`. At this merge A1 and A2 were
+      `0015` and `0016`; they were later renumbered to `0018_waits_hold_the_action` and
+      `0019_reconcile_waits_are_watched` after `main`'s `0015`–`0017` landed.
+      `migrations/README.md` lists them under the current numbers.
   - **The reconcile-loop bug A1 flagged:** real as a class of bug, but already fixed by
     A2's own design before the merge, and the fix survives the merge unweakened. Traced
     through the merged `_act`/`_reconciled`: a stray `answered` signal on a reconcile
@@ -2068,9 +2080,37 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     `experiments:write` → `experiments:draft`, and two frozen-cohort messages gained
     `prior_rollout_event=0`). 20/20 gate cases pass.
   - `CONSTRAINTS.md` / `README.md` conflicts resolved (fitness count recorded as 45, the
-    real file count).
+    real file count at the time; it is 46 now, and the README says 46).
   - `test_a_turn_longer_than_its_heartbeat_timeout_is_not_retried_while_alive`: not
     reproduced in 3 clean runs and 3 runs under 12 CPU burners. Left unchanged; treated as
     an unproven one-off.
   - Spikes frozen with a README; `Surface.API` / `RecordingClient` retained (ADR-0010).
   - `tests/live/test_ollama.py` run against `qwen3:8b`: passes.
+
+## ADR-0011 — Slack Bolt receiver (`3ee98a4`, added 2026-09-30)
+
+Recorded here because the commit landed without a ledger entry. Read
+`docs/adr/0011-slack-bolt-receiver.md` for the reasoning.
+
+- [x] **Bolt approval receiver** · layer 1 · `interfaces/slack_app.py`, `slack_cli.py`
+  - Bolt hands the raw bytes to our own signature check and replay guard; it does not
+    replace them. Tests: `tests/fitness/test_slack_app.py`.
+- [x] **`awaiting_approval` step status** · layer 3 · `migrations/0020`, `runtime/steps.py`
+  - `step()` takes `pause_on`, so only the turn path (which parks a wait) records the
+    new status; a refusal or stale approval at the commit activity is recorded as
+    `failed`. The commit activity now runs the act as a recorded step under the shared
+    `execute_step_name`. Tests: `test_step_identity.py`, `tests/durability/test_commit.py`.
+- [x] **Recorded-score worker** · layer 4b · `prediction/churn.py` (`RecordedScorers`),
+  `worker_cli --scores`
+  - Replays recorded scores without the weights. Tests: `test_prediction_gate.py`.
+
+## State check, 2026-09-30
+
+`tasks/todo.md` was reconciled against the code. Corrected: migration numbers for A1/A2
+(0018/0019), fitness count (46), A1/A2/T49 checkboxes, recorded scores now present,
+per-invocation test databases done. Verified by running: `evals run --gates` 20/20.
+**Not re-run in this pass:** the full suite, so the pass counts quoted in older entries
+are historical. Still open: A3 (partial), the `/stack-audit` re-run, every "Human review"
+box, Checkpoint F, the audit's M2–M6 and L1–L7 follow-ups, the merge with `main`, the
+per-run lease decision (T21), the `MemoryStore` durability gap (Checkpoint A), PII in
+traces, and secrets in environment variables.
