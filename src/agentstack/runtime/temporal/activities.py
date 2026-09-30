@@ -44,6 +44,7 @@ from agentstack.runtime.loop import run_turn as take_turn
 from agentstack.runtime.operator import Evaluation, evaluate_trigger
 from agentstack.runtime.run import Run, RunStore
 from agentstack.runtime.snapshot import world_snapshot
+from agentstack.runtime.steps import execute_step_name
 from agentstack.runtime.temporal.contracts import (
     ASK_APPROVAL,
     COMMIT,
@@ -553,15 +554,27 @@ class RunActivities:
                 ),
                 request=request,
             )
+        # The act is a recorded step, as it is on the turn path: the effect leaves a row
+        # here as well as in the registry and the ledger. A rerun after a lost
+        # completion finds the step done, skips the gateway and reports a repeat.
+        repeat = False
         try:
-            result = gateway.execute(
-                request=request,
-                spec=spec,
-                envelope=turns.envelope(run),
-                run_id=run.run_id,
-                state_snapshot=world_snapshot(request.resource, world),
-                tracer=tracer,
-            )
+            with turns.deps.steps.step(
+                run.run_id, execute_step_name(spec.name, request.fingerprint())
+            ) as slot:
+                if slot[0] is None:
+                    result = gateway.execute(
+                        request=request,
+                        spec=spec,
+                        envelope=turns.envelope(run),
+                        run_id=run.run_id,
+                        state_snapshot=world_snapshot(request.resource, world),
+                        tracer=tracer,
+                    )
+                    slot[0] = result.receipt
+                    repeat = result.deduplicated
+                else:
+                    repeat = True
         except UnresolvedEffect as unresolved:
             parked = park_reconcile(
                 self._waits,
@@ -572,7 +585,7 @@ class RunActivities:
                 state_snapshot=world_snapshot(request.resource, world),
             )
             return CommitOutcome(status=UNRESOLVED, wait_id=parked.wait_id)
-        return CommitOutcome(status="deduplicated" if result.deduplicated else "committed")
+        return CommitOutcome(status="deduplicated" if repeat else "committed")
 
     def _approved(
         self, run: Run, intent: CommitIntent, wait: Wait, tracer: Tracer

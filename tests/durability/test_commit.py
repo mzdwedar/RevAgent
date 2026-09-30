@@ -77,6 +77,15 @@ def rollout_audit(stack: Stack, run_id: str) -> list[AuditRecord]:
     return acts
 
 
+def rollout_steps(stack: Stack, run_id: str) -> list[str]:
+    """The statuses the rollout's step went through, in order."""
+    return [
+        r.status
+        for r in stack.steps.records_for(run_id)
+        if r.name.startswith("execute:roll_out_variant_to_percentage:")
+    ]
+
+
 async def acted(handle: Any, count: int = 1) -> RunProgress:
     return await progress_until(handle, lambda p: len(p.commits) >= count)
 
@@ -97,10 +106,20 @@ def test_an_approved_rollout_commits_once_at_the_act(stack: Stack, app_database:
     assert record.outcome == "committed" and record.approval_id is not None
     assert record.policy_decision == "allow", "a person's approval, not a rule's"
 
+    # The act is a recorded step: the turn's pause, then the commit's own start and finish
+    # under the same name, so the ledger reads as one story rather than a failure.
+    assert rollout_steps(stack, run_id) == ["started", "awaiting_approval", "started", "completed"]
+
     # Criterion 36: the act again, as a retry after its completion was lost would run it.
     # Same ids, same content key: the ledger answers, and the registry isn't asked again.
     assert commit_again(stack, app_database, parked) == CommitOutcome(status="deduplicated")
     assert len(stack.registry_client.rollouts) == 1
+    assert rollout_steps(stack, run_id) == [
+        "started",
+        "awaiting_approval",
+        "started",
+        "completed",
+    ], "a step already completed is skipped, not written again"
 
 
 def commit_again(
@@ -289,6 +308,8 @@ def test_a_world_that_moved_after_the_approval_refuses_at_the_act(
     assert stack.registry_client.rollouts == []
     (record,) = rollout_audit(stack, run_id)  # one attempt, not a retry loop
     assert (record.policy_decision, record.outcome) == ("approval.stale", "refused")
+    # The turn paused for approval; the act's refusal is terminal, and nothing is waiting.
+    assert rollout_steps(stack, run_id) == ["started", "awaiting_approval", "started", "failed"]
 
 
 def test_a_wake_up_nobody_answered_moves_nothing_and_a_later_yes_still_commits(
@@ -345,6 +366,7 @@ def test_a_no_is_refused_at_the_act(stack: Stack, app_database: Database) -> Non
     assert done.commits == (CommitOutcome(status="refused", refusal="ApprovalRequired"),)
     assert stack.registry_client.rollouts == []
     assert len(rollout_audit(stack, run_id)) == 1
+    assert rollout_steps(stack, run_id) == ["started", "awaiting_approval", "started", "failed"]
     # A1, H3: the gateway's refusal is under the agent's name; the decision is not. The
     # person's "no" is its own record, naming them, the wait and what it was bound to.
     (no,) = [r for r in stack.audit.for_run(run_id) if r.policy_decision == "human.refused"]

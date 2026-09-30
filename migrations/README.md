@@ -36,3 +36,4 @@ tables are created and versioned by `PostgresSaver.setup()` rather than from her
 `0017` records the frozen cohort a proposal rests on: its predicate for the rollout, its size and value for the approver. Insert-only.
 `0018` makes an approval wait hold the action it asks about, and lets an audit record name the wait and snapshot an answer was about.
 `0019` gives a pending reconcile wait a deadline and the idempotency key of the claim it is about, so a person can find it and settle it.
+`0020` lets a step record `awaiting_approval`, so the pause before an irreversible act is not logged as a failure.

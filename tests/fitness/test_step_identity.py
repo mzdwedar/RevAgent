@@ -20,6 +20,7 @@ import pytest
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, build_stack, handle
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
+from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.runtime.run import Run
 from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.experiments import prepare_rollout
@@ -169,6 +170,45 @@ def test_a_step_that_started_and_never_finished_is_reported_as_unknown(
 
     assert [record.name for record in unfinished] == ["execute:vanished"]
     assert stack.steps.completed(run.run_id, "execute:vanished") is None
+
+
+def test_a_step_stopped_for_approval_is_not_recorded_as_failed(stack: Stack, run: Run) -> None:
+    """The pause before an irreversible act is designed, and the ledger says so.
+
+    Recording it as `failed` sent an operator looking for a fault that had not happened,
+    and left a real failure indistinguishable from it.
+    """
+    for name, error in (
+        ("execute:paused", ApprovalRequired("no approval for this action")),
+        ("execute:stale", ApprovalStale("the world changed since it was granted")),
+        ("execute:broken", RuntimeError("the surface fell over")),
+    ):
+        with (
+            pytest.raises(type(error)),
+            stack.steps.step(run.run_id, name, pause_on=(ApprovalRequired, ApprovalStale)),
+        ):
+            raise error
+
+    outcomes = {
+        r.name: r.status for r in stack.steps.records_for(run.run_id) if r.status != "started"
+    }
+    assert outcomes == {
+        "execute:paused": "awaiting_approval",
+        "execute:stale": "awaiting_approval",
+        "execute:broken": "failed",
+    }
+    # A known outcome, so it is not mistaken for a process that vanished mid-step.
+    assert stack.steps.started_but_unfinished(run.run_id) == ()
+
+
+def test_a_refusal_is_a_pause_only_where_the_caller_parked_a_wait(stack: Stack, run: Run) -> None:
+    """`pause_on` is the caller's claim that a wait is parked. Without it the same
+    exception is a terminal refusal and the ledger must not say the run is waiting."""
+    with pytest.raises(ApprovalRequired), stack.steps.step(run.run_id, "execute:refused"):
+        raise ApprovalRequired("a person said no")
+
+    (outcome,) = [r for r in stack.steps.records_for(run.run_id) if r.status != "started"]
+    assert outcome.status == "failed"
 
 
 def test_a_step_for_a_run_that_does_not_exist_is_refused(stack: Stack) -> None:

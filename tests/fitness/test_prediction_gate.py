@@ -22,6 +22,7 @@ from agentstack.prediction import licence
 from agentstack.prediction.churn import (
     ChurnScores,
     RecordedScorer,
+    RecordedScorers,
     ScoringError,
     fold_assignment,
 )
@@ -561,3 +562,52 @@ def test_the_readme_leads_with_the_non_commercial_constraint() -> None:
     )
     assert "ux.priorlabs.ai" in readme
     assert "cannot be shipped in a commercial product" in readme
+
+
+def test_recorded_scorers_answer_for_the_dataset_asked_about_and_no_other() -> None:
+    """A worker serves whichever cohort a trigger names. One recording per dataset, and
+    a dataset nobody recorded is an error, not the nearest one."""
+    scorers = RecordedScorers(by_dataset={"fixture": RecordedScorer(scores=scores())})
+    asked = {
+        "features": pd.DataFrame({"x": [1.0, 2.0, 3.0]}),
+        "labels": pd.Series([0, 1, 0]),
+        "data_as_of": "fixture:abc123",
+    }
+
+    assert scorers.score(dataset="fixture", **asked) == BASELINE
+    assert scorers.model_version == f"recorded:{BASELINE.model_version}"
+    with pytest.raises(ScoringError, match="no recorded scores for 'other'"):
+        scorers.score(dataset="other", **asked)
+
+
+def test_recorded_scorers_load_every_recording_and_refuse_an_empty_directory(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ScoringError, match="no recorded scores"):
+        RecordedScorers.load(root=tmp_path)
+
+    (tmp_path / "fixture.json").write_text(
+        json.dumps(
+            {
+                "dataset": BASELINE.dataset,
+                "data_as_of": BASELINE.data_as_of,
+                "model_version": BASELINE.model_version,
+                "folds": BASELINE.folds,
+                "seed": BASELINE.seed,
+                "probabilities": list(BASELINE.probabilities),
+                "positives": BASELINE.positives,
+            }
+        )
+    )
+    loaded = RecordedScorers.load(root=tmp_path)
+    assert set(loaded.by_dataset) == {"fixture"}
+
+
+def test_the_worker_chooses_recorded_scores_only_when_asked_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agentstack.interfaces import worker_cli
+
+    monkeypatch.setattr(RecordedScorers, "load", staticmethod(lambda: RecordedScorers({})))
+    assert isinstance(worker_cli._scorer("recorded"), RecordedScorers)
+    assert isinstance(worker_cli._scorer("tabpfn"), TabPFNScorer)

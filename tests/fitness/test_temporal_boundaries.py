@@ -204,7 +204,7 @@ def test_the_worker_the_cli_serves_runs_what_it_is_handed(
 
     async def serve_one() -> RunProgress:
         serving = asyncio.create_task(
-            worker_cli._serve(temporal_address, task_queue, app_database_url)
+            worker_cli._serve(temporal_address, task_queue, app_database_url, "dev")
         )
         try:
             client = await connect_temporal(temporal_address)

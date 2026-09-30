@@ -151,6 +151,35 @@ def render_blocks(ask: ApprovalAsk) -> list[dict[str, Any]]:
     ]
 
 
+def answered_text(*, approved: bool, approver: str) -> str:
+    """The line an answered question ends on, and its plain-text fallback."""
+    return f"{'Approved' if approved else 'Refused'} by {approver}"
+
+
+def render_answered_blocks(
+    original: list[dict[str, Any]], *, approved: bool, approver: str
+) -> list[dict[str, Any]]:
+    """The same message with its buttons gone and the answer in their place.
+
+    The buttons are what make a message look open. Once the answer is recorded a second
+    click could only be refused as a replay, so leaving them up invites it without
+    telling the person that it was already dealt with. The wording comes from the
+    recorded answer, never from the click's payload.
+    """
+    kept = [block for block in original if block.get("type") != "actions"]
+    icon = ":white_check_mark:" if approved else ":no_entry_sign:"
+    kept.append(
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"{icon} *{answered_text(approved=approved, approver=approver)}*",
+            },
+        }
+    )
+    return kept
+
+
 def _binding(ask: ApprovalAsk) -> str:
     return f"{ask.run_id}|{ask.wait_id}|{ask.experiment_version}|{ask.data_as_of}"
 

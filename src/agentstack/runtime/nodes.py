@@ -24,6 +24,7 @@ from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.prompt import ApprovalPrompt
 from agentstack.runtime.graph import TurnContext, TurnState
 from agentstack.runtime.snapshot import approval_snapshot
+from agentstack.runtime.steps import execute_step_name
 from agentstack.runtime.waits import approval_wait_id, park_reconcile
 from agentstack.tools.registry import ToolNotExposed
 from agentstack.tools.validation import InvalidToolArguments, validate_arguments
@@ -299,8 +300,10 @@ def act(state: TurnState, runtime: Runtime[TurnContext]) -> dict[str, Any]:
                 )
                 continue
             # The step name carries the identity of the *action*, not just the tool.
-            step_name = f"execute:{spec.name}:{request.fingerprint()}"
-            with deps.steps.step(run.run_id, step_name) as slot:
+            step_name = execute_step_name(spec.name, request.fingerprint())
+            with deps.steps.step(
+                run.run_id, step_name, pause_on=(ApprovalRequired, ApprovalStale)
+            ) as slot:
                 if slot[0] is None:
                     result = deps.gateway.execute(
                         request=request,

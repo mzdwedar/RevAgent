@@ -177,3 +177,46 @@ class RecordedScorer:
                 f"these labels have {positives}. Same row count, different population."
             )
         return self.scores
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedScorers:
+    """`RecordedScorer` for every dataset that has a recording, chosen by the one asked about.
+
+    A worker serves whichever cohort a trigger names, and a recording covers one dataset.
+    Each still refuses a snapshot other than its own, so a dataset with no recording, or
+    one whose data has moved, is an error rather than a guess.
+    """
+
+    by_dataset: dict[str, RecordedScorer]
+
+    @staticmethod
+    def load(*, root: Path = SCORES_ROOT) -> RecordedScorers:
+        found = {
+            path.stem: RecordedScorer.load(path.stem, root=root) for path in root.glob("*.json")
+        }
+        if not found:
+            raise ScoringError(f"no recorded scores under {root}; run scripts/record_scores.py")
+        return RecordedScorers(by_dataset=found)
+
+    @property
+    def model_version(self) -> str:
+        versions = sorted({scorer.model_version for scorer in self.by_dataset.values()})
+        return "+".join(versions)
+
+    def score(
+        self,
+        *,
+        features: pd.DataFrame,
+        labels: pd.Series,
+        dataset: str,
+        data_as_of: str,
+    ) -> ChurnScores:
+        scorer = self.by_dataset.get(dataset)
+        if scorer is None:
+            raise ScoringError(
+                f"no recorded scores for {dataset!r}; recorded: {sorted(self.by_dataset)}"
+            )
+        return scorer.score(
+            features=features, labels=labels, dataset=dataset, data_as_of=data_as_of
+        )

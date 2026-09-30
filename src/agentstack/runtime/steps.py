@@ -21,6 +21,15 @@ from agentstack.storage.database import Database, IntegrityViolation
 COMPLETE_ONCE = "run_steps_complete_once"
 
 
+def execute_step_name(tool: str, fingerprint: str) -> str:
+    """The step an act is recorded under: the action's identity, not just the tool's.
+
+    One name for both paths that commit - the turn, and the commit activity after an
+    approval - so the second reads as the continuation of the first in the ledger.
+    """
+    return f"execute:{tool}:{fingerprint}"
+
+
 class StepConflict(RuntimeError):
     """Two workers completed one step with different receipts: two effects, not one."""
 
@@ -86,7 +95,13 @@ class StepLedger:
         return StepRecord(*row)
 
     @contextmanager
-    def step(self, run_id: str, name: str) -> Iterator[list[str | None]]:
+    def step(
+        self,
+        run_id: str,
+        name: str,
+        *,
+        pause_on: tuple[type[Exception], ...] = (),
+    ) -> Iterator[list[str | None]]:
         """Run a side-effecting step once, recording completion.
 
         Yields a one-element list the body sets to the receipt. On replay the body is
@@ -98,6 +113,11 @@ class StepLedger:
         land. The loser is told the step is done rather than crashing on the
         constraint, provided it saw the same receipt; a different one is two effects,
         and that is refused loudly.
+
+        `pause_on` names the exceptions that are a designed pause, not a fault: the step
+        is recorded `awaiting_approval` instead of `failed`. The caller says so because
+        only the caller knows whether a wait is parked. On the turn path it is; at the
+        commit activity a refusal is terminal and nothing is waiting, so it is `failed`.
         """
         already = self.completed(run_id, name)
         if already is not None:
@@ -107,6 +127,11 @@ class StepLedger:
         self._write(run_id, name, "started", None)
         try:
             yield slot
+        except pause_on:
+            # The caller has parked a wait and the same step runs again once a person
+            # has answered.
+            self._write(run_id, name, "awaiting_approval", None)
+            raise
         except Exception:
             self._write(run_id, name, "failed", None)
             raise

@@ -15,11 +15,13 @@ import sys
 from collections.abc import Callable
 
 from agentstack.context.frozen_cohorts import FrozenCohortStore
+from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces import preflight_cli
 from agentstack.interfaces.slack import SlackNotifier
 from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, build_stack
 from agentstack.model.ollama_engine import OllamaEngine
 from agentstack.observability.spans import LoggingSink
+from agentstack.prediction.churn import ChurnScorer, RecordedScorers
 from agentstack.prediction.engine import TabPFNScorer
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
@@ -47,24 +49,57 @@ def main(
     parser.add_argument("--address", default=None, help="Temporal; defaults to $TEMPORAL_ADDRESS")
     parser.add_argument("--task-queue", default=TASK_QUEUE)
     parser.add_argument("--url", default=None, help="database URL; defaults to $DATABASE_URL")
+    parser.add_argument(
+        "--profile",
+        default="default",
+        help="targeting profile from experiments/targeting.toml; `dev` fits the local datasets",
+    )
+    parser.add_argument(
+        "--scores",
+        choices=("tabpfn", "recorded"),
+        default="tabpfn",
+        help="`recorded` replays data/scores/*.json (real TabPFN output) instead of scoring live",
+    )
     args = parser.parse_args(argv)
 
     if preflight([]) != 0:
         print("FAIL  preflight refused; not polling for work", file=sys.stderr)
         return 1
     try:
-        asyncio.run(_serve(args.address or temporal_address(), args.task_queue, args.url))
+        asyncio.run(
+            _serve(
+                args.address or temporal_address(),
+                args.task_queue,
+                args.url,
+                args.profile,
+                args.scores,
+            )
+        )
     except TemporalUnavailable as exc:
         print(f"FAIL  {exc}", file=sys.stderr)
         return 1
     return 0
 
 
-async def _serve(address: str, task_queue: str, url: str | None) -> None:
+def _scorer(kind: str) -> ChurnScorer:
+    """Live TabPFN, whose weights preflight just proved load, or the recorded output of it.
+
+    Recorded scores are real TabPFN numbers for a named snapshot, and refuse any other
+    (`RecordedScorer`): the way to run the workflow end to end without paying for
+    inference again.
+    """
+    return RecordedScorers.load() if kind == "recorded" else TabPFNScorer()
+
+
+async def _serve(
+    address: str, task_queue: str, url: str | None, profile: str, scores: str = "tabpfn"
+) -> None:
     client = await connect(address)
     url = url or database_url()
     print(f"temporal : {address}  queue {task_queue}")
     print(f"database : {redacted(url)}")
+    print(f"targeting: {profile}")
+    print(f"scores   : {scores}")
     checkpoints, saver = open_checkpointer(url)
     try:
         with (
@@ -85,8 +120,8 @@ async def _serve(address: str, task_queue: str, url: str | None) -> None:
                 cycles=CycleStore(db=db),
                 cohorts=FrozenCohortStore(db=db),
                 waits=WaitStore(db=db),
-                # The scorer preflight just proved can load its weights.
-                scorer=TabPFNScorer(),
+                scorer=_scorer(scores),
+                rule=TargetingRule.load(profile),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
                 # Spans from turns and commits, one JSON line each on `agentstack.traces`.
                 # The audit trail is Postgres, written by the gateway and by the
