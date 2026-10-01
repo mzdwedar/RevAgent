@@ -96,12 +96,16 @@ All engineered features are sent; `msno` and raw identifiers are not (modelling 
 the Kaggle competition rules permit third-party processing is **not verified by the author**;
 the owner's statement is recorded here at Checkpoint C.
 
-### 7. Revenue and currency (K1-K3, K6)
+### 7. Revenue and currency (decided, built: K1-K3, K6)
 
 Observed `actual_amount_paid` of the last pre-cutoff transaction, annualised x12. Holds for the
 30-day plan that 97% of last transactions use (942,378 of 968,436); the revenue note says so.
 Currency is NTD, carried in a `currency` field and shown in the approval prompt; no FX
 conversion, because a converted figure would be a modelled quantity.
+
+Registered as `REGISTRY["kkbox-churn"]` with `derived_by="scripts/build_kkbox_cohort.py"`: the cohort
+file is built, not downloaded, so it has no `data_as_of` until K11 records one. The manifest test
+exempts a derived cohort only until then; a downloaded cohort is never exempt.
 
 ## Consequences
 
