@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
+from agentstack.interfaces.wiring import build_stack
+from agentstack.storage.database import Database
 from tests.fitness.test_trigger_to_candidate import snapshot
+from tests.temporal_support import run_for
 
 
 @pytest.fixture
@@ -35,3 +39,9 @@ def fixture_dataset(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr("agentstack.context.datasets.load", only_the_fixture)
     yield
     REGISTRY.pop("fixture", None)
+
+
+@pytest.fixture
+def run_id(app_database: Database, checkpointer: Any) -> str:
+    """The recorded run an `acme` trigger for `exp-7` belongs to."""
+    return run_for(build_stack(app_database, checkpointer, tenant="acme"))

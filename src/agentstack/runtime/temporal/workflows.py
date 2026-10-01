@@ -374,7 +374,7 @@ class ExperimentWorkflow:
         try:
             result: CycleResult = await workflow.execute_activity(
                 EVALUATE_CYCLE,
-                trigger,
+                args=[trigger, self._run_id],
                 result_type=CycleResult,
                 start_to_close_timeout=CYCLE_TIMEOUT,
                 retry_policy=RETRY,

@@ -40,7 +40,12 @@ from agentstack.policy.approval import ApprovalRequired, ApprovalStale
 from agentstack.policy.approvers import ApproverNotAuthorized
 from agentstack.policy.decisions import PolicyDenied
 from agentstack.policy.envelope import IdentityEnvelope
-from agentstack.policy.triggers import Outcome, OutcomeNotAuthorized, TriggerKind
+from agentstack.policy.triggers import (
+    Outcome,
+    OutcomeNotAuthorized,
+    TenantClaimRefused,
+    TriggerKind,
+)
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.drafting import draft_instruction, rollout_instruction
 from agentstack.runtime.run import RunStore
@@ -266,6 +271,7 @@ REFUSAL_TYPES: dict[str, type[Exception]] = {
         ApprovalStale,
         ApproverNotAuthorized,
         OutcomeNotAuthorized,
+        TenantClaimRefused,
     )
 }
 

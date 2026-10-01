@@ -141,7 +141,8 @@ def test_a_rerun_of_a_finished_turn_asks_the_model_nothing(
         app_database, scorer=StubScorer(), rule=RULE, turns=turns_for(stack, engine)
     )
     activities.evaluate_cycle(
-        Trigger(kind="data_arrival", experiment_id="exp-7", data_as_of=WATERMARK, tenant="acme")
+        Trigger(kind="data_arrival", experiment_id="exp-7", data_as_of=WATERMARK, tenant="acme"),
+        run_start,
     )
     intent = TurnIntent(
         run_id=run_start,

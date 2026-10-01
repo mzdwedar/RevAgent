@@ -98,6 +98,22 @@ class TenantClaimRefused(PermissionError):
     """A trigger claimed a tenant other than the one its run acts for."""
 
 
+def authorize_trigger_tenant(trigger: TriggerEvent, *, run_tenant: str) -> TriggerEvent:
+    """Test a trigger's tenant claim against the tenant the run acts for.
+
+    `run_tenant` comes from the run's own record, never from the payload the claim
+    arrived in (the same rule `authorize_approver` keeps for an approver). Whether a
+    *source* may speak for a tenant at all is not decided here: nothing yet records which
+    sources belong to which tenant (SPEC, Layer 8), so this refuses a claim that crosses
+    runs and does not pretend to authenticate the sender.
+    """
+    if trigger.tenant != run_tenant:
+        raise TenantClaimRefused(
+            f"a trigger for tenant {trigger.tenant!r} cannot wake a run acting for {run_tenant!r}"
+        )
+    return trigger
+
+
 def subject_of(trigger: TriggerEvent, *, tenant: str) -> str:
     """The experiment a run woken by this trigger is bound to, once the claim is tested.
 
@@ -106,8 +122,4 @@ def subject_of(trigger: TriggerEvent, *, tenant: str) -> str:
     so the subject is released only against the tenant the run already acts for. The
     run's tenant comes from its session, never from the payload the claim arrived in.
     """
-    if trigger.tenant != tenant:
-        raise TenantClaimRefused(
-            f"a trigger for tenant {trigger.tenant!r} cannot wake a run acting for {tenant!r}"
-        )
-    return trigger.experiment_id
+    return authorize_trigger_tenant(trigger, run_tenant=tenant).experiment_id

@@ -33,6 +33,9 @@ REFUSALS = (
     # it is worse than pointless: the second attempt finds the cycle already claimed,
     # returns it unsettled, and the refusal disappears into a success.
     "OutcomeNotAuthorized",
+    # A trigger naming a tenant other than its run's (policy/triggers.py). The same
+    # state refuses it every time.
+    "TenantClaimRefused",
 )
 
 # Not refusals: failures that the same state reproduces every time. A store that expects a

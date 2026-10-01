@@ -23,7 +23,8 @@ from temporalio.worker import Replayer
 
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
-from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, Stack
+from agentstack.interfaces.triggers import parse_trigger
+from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, Stack, run_for_trigger
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import CollectingSink, SpanSink
@@ -159,6 +160,20 @@ def activities_for(
         turns=turns,
         asker=asker,
     )
+
+
+def run_for(stack: Stack, tenant: str = "acme", experiment_id: str = "exp-7") -> str:
+    """The recorded run a trigger for this experiment belongs to, as ingress would make it."""
+    event = parse_trigger(
+        {
+            "kind": "data_arrival",
+            "experiment_id": experiment_id,
+            "data_as_of": "2026-01-01",
+            "tenant": tenant,
+        },
+        source="test",
+    )
+    return run_for_trigger(stack, event).run_id
 
 
 def turns_for(stack: Stack, engine: Any) -> ExperimentTurns:

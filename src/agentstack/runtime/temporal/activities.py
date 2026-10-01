@@ -28,7 +28,13 @@ from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import SpanSink, Tracer
 from agentstack.policy.envelope import IdentityEnvelope
-from agentstack.policy.triggers import Outcome, TriggerEvent, TriggerKind
+from agentstack.policy.triggers import (
+    Outcome,
+    TenantClaimRefused,
+    TriggerEvent,
+    TriggerKind,
+    authorize_trigger_tenant,
+)
 from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
 from agentstack.runtime.drafting import (
@@ -185,13 +191,18 @@ class RunActivities:
         return self._runs.ensure(run).run_id
 
     @activity.defn(name=EVALUATE_CYCLE)
-    def evaluate_cycle(self, trigger: Trigger) -> CycleResult:
+    def evaluate_cycle(self, trigger: Trigger, run_id: str) -> CycleResult:
         """`cycles.evaluate_to_settled` with the operator's evaluator in its seam.
 
         A rerun after the cycle settled returns it without scoring again. A rerun after
         an attempt that died before settling evaluates it (Checkpoint J). Either way it
         is safe to run at least once, and it never reports "no outcome" as an answer.
+
+        The trigger's tenant is a claim. It is tested against the run's own record before
+        anything is claimed, scored or written (audit M2).
         """
+        recorded = self._runs.get(run_id)
+        assert recorded is not None  # ensure_run ran first in this workflow
         event = TriggerEvent(
             kind=TriggerKind(trigger.kind),
             experiment_id=trigger.experiment_id,
@@ -199,6 +210,23 @@ class RunActivities:
             tenant=trigger.tenant,
             source=trigger.source,
         )
+        try:
+            authorize_trigger_tenant(event, run_tenant=recorded.tenant)
+        except TenantClaimRefused as refusal:
+            self._audit.write(
+                run_id=recorded.run_id,
+                principal=recorded.user,
+                tenant=recorded.tenant,
+                action_fingerprint="",
+                surface="trigger",
+                resource=event.cycle_key(),
+                policy_decision="trigger.tenant_refused",
+                approval_id=None,
+                outcome="refused",
+            )
+            raise ApplicationError(
+                str(refusal), type=TenantClaimRefused.__name__, non_retryable=True
+            ) from refusal
         evaluated: list[Evaluation] = []
 
         def evaluator(e: TriggerEvent) -> tuple[Outcome, str | None]:

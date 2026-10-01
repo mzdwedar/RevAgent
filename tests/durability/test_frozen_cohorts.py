@@ -38,8 +38,10 @@ def frozen_rows(db: Database) -> int:
     return int(row[0])
 
 
-def test_a_proposal_records_the_cohort_it_froze(app_database: Database) -> None:
-    result = activities_for(app_database, scorer=StubScorer(), rule=RULE).evaluate_cycle(trigger())
+def test_a_proposal_records_the_cohort_it_froze(app_database: Database, run_id: str) -> None:
+    result = activities_for(app_database, scorer=StubScorer(), rule=RULE).evaluate_cycle(
+        trigger(), run_id
+    )
 
     assert result.experiment_version is not None
     frozen = FrozenCohortStore(db=app_database).get(
@@ -53,22 +55,22 @@ def test_a_proposal_records_the_cohort_it_froze(app_database: Database) -> None:
     assert frozen.description["experiment_version"] == result.experiment_version
 
 
-def test_a_refused_proposal_records_no_cohort(app_database: Database) -> None:
+def test_a_refused_proposal_records_no_cohort(app_database: Database, run_id: str) -> None:
     """Recorded after layer 8 authorises, so a proposal it refused leaves nothing."""
     activities = activities_for(app_database, scorer=StubScorer(), rule=RULE)
 
     with pytest.raises(OutcomeNotAuthorized):
-        activities.evaluate_cycle(trigger(kind="metric_movement"))
+        activities.evaluate_cycle(trigger(kind="metric_movement"), run_id)
 
     assert frozen_rows(app_database) == 0
 
 
-def test_an_abstention_records_no_cohort(app_database: Database) -> None:
+def test_an_abstention_records_no_cohort(app_database: Database, run_id: str) -> None:
     activities = activities_for(
         app_database, scorer=StubScorer(), rule=replace(RULE, minimum_cohort=10_000)
     )
 
-    assert activities.evaluate_cycle(trigger()).outcome == "abstain"
+    assert activities.evaluate_cycle(trigger(), run_id).outcome == "abstain"
     assert frozen_rows(app_database) == 0
 
 
@@ -116,9 +118,9 @@ def test_a_death_between_recording_and_settling_converges(app_database: Database
     assert store.unsettled() == ()
 
 
-def test_a_frozen_cohort_cannot_be_edited(app_database: Database) -> None:
+def test_a_frozen_cohort_cannot_be_edited(app_database: Database, run_id: str) -> None:
     """An approver saw it. Editing it afterwards would make the approval about something else."""
-    activities_for(app_database, scorer=StubScorer(), rule=RULE).evaluate_cycle(trigger())
+    activities_for(app_database, scorer=StubScorer(), rule=RULE).evaluate_cycle(trigger(), run_id)
 
     with pytest.raises(IntegrityViolation) as refused:
         app_database.execute("UPDATE frozen_cohorts SET size = size + 1")

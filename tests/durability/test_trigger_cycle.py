@@ -140,14 +140,16 @@ def test_a_refused_cycle_does_not_end_the_run(
     assert next_one.outcome == "propose"
 
 
-def test_the_activity_rerun_after_it_wrote_is_one_cycle(app_database: Database) -> None:
+def test_the_activity_rerun_after_it_wrote_is_one_cycle(
+    app_database: Database, run_id: str
+) -> None:
     """At-least-once (P2): a completion lost after the claim landed reruns the activity.
     Called twice directly, as the retry would, it converges without scoring again."""
     scorer = StubScorer()
     activities = activities_for(app_database, scorer=scorer, rule=RULE)
 
-    first = activities.evaluate_cycle(trigger())
-    second = activities.evaluate_cycle(trigger())
+    first = activities.evaluate_cycle(trigger(), run_id)
+    second = activities.evaluate_cycle(trigger(), run_id)
 
     assert first == second
     assert isinstance(first, CycleResult) and first.outcome == "propose"
@@ -156,7 +158,7 @@ def test_the_activity_rerun_after_it_wrote_is_one_cycle(app_database: Database) 
 
 
 def test_a_cycle_whose_attempt_died_mid_scoring_is_finished_by_the_retry(
-    app_database: Database,
+    app_database: Database, run_id: str
 ) -> None:
     """Checkpoint J, finding (a). The first attempt claimed the cycle and died before it
     could settle: the worker was killed while scoring. Temporal reruns the activity.
@@ -179,7 +181,9 @@ def test_a_cycle_whose_attempt_died_mid_scoring_is_finished_by_the_retry(
     store.claim(event)  # the attempt that died: claimed, never settled
     scorer = StubScorer()
 
-    result = activities_for(app_database, scorer=scorer, rule=RULE).evaluate_cycle(trigger())
+    result = activities_for(app_database, scorer=scorer, rule=RULE).evaluate_cycle(
+        trigger(), run_id
+    )
 
     assert result.outcome == "propose"
     assert result.experiment_version is not None
@@ -188,7 +192,7 @@ def test_a_cycle_whose_attempt_died_mid_scoring_is_finished_by_the_retry(
 
 
 def test_a_refused_cycle_is_refused_again_not_resumed_into_an_outcome(
-    app_database: Database,
+    app_database: Database, run_id: str
 ) -> None:
     """The other way a cycle stays unsettled: layer 8 refused its outcome. Evaluating it
     again reaches the same refusal. It never becomes an outcome by being retried."""
@@ -196,7 +200,7 @@ def test_a_refused_cycle_is_refused_again_not_resumed_into_an_outcome(
 
     for _ in range(2):
         with pytest.raises(OutcomeNotAuthorized):
-            activities.evaluate_cycle(trigger(kind="metric_movement"))
+            activities.evaluate_cycle(trigger(kind="metric_movement"), run_id)
 
     (unsettled,) = CycleStore(db=app_database).unsettled()
     assert unsettled.kind.value == "metric_movement"

@@ -33,6 +33,10 @@ Stack-specific (from `STACK.md`):
 - No payload parsed before it is verified, and no unverified signature recorded
 - No approver authorised against a tenant the interaction named: the tenant comes
   from the run the approval is bound to, or two correct checks compose into a hole
+- No trigger acted on for a tenant its run does not act for: the claim is tested in
+  layer 8 against the run's own record before a cycle is claimed or scored, and the
+  refusal is audited and never retried. Which sources may speak for which tenant is
+  not recorded anywhere yet, and this does not pretend to authenticate the sender
 - No approval standing without a row somebody added, and a record of who added it
 - No notification failure swallowed — a run parked on a question nobody received
   waits forever, and looks exactly like waiting patiently
