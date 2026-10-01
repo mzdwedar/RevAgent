@@ -99,6 +99,7 @@ Stack-specific (from `STACK.md`):
   the run for reconciliation instead of trying the surface again (ADR-0008 E2)
 - No approval checked against a snapshot carried to the act — the commit reads the world
   itself, or a stale approval compares equal to itself and commits (ADR-0008 E3)
+- No cancelled run read as an activity's refusal — a cancel the workflow catches and answers for is a run that cannot be stopped; a cancelled run commits nothing and its heartbeat stops with its turn
 - No span emitted in an activity left for the workflow to hold — the workflow never
   holds spans, so the activity exports them, tagged with the run, never Temporal's ids
 
@@ -124,6 +125,7 @@ Stack-specific (from `STACK.md`):
 | Cohort reproducibility | Same snapshot + same model version → same cohort, same `experiment_version` | `uv run pytest tests/fitness/test_targeting.py` | every edit |
 | Turn checkpointing | Sync durability; a died turn resumes **from Postgres** without re-calling the model | `uv run pytest tests/fitness/test_turn_graph.py` | every edit |
 | Process death | A killed process's run resumes in a fresh one without re-calling the model | `uv run pytest tests/durability` | task end, CI |
+| Cancellation | A run cancelled mid-turn ends cancelled, commits nothing, and its heartbeat stops | `uv run pytest tests/durability/test_turn_cancellation.py` | task end, CI |
 | Approval tiers | Three tiers, three behaviours; a policy grant never satisfies `ALWAYS` | `uv run pytest tests/fitness/test_approval_tiers.py` | every edit |
 | Model contract | The adapter reports what the model said; `num_ctx` and `think` are set explicitly | `uv run pytest tests/fitness/test_ollama_contract.py` | every edit |
 | Live model checks | The real model still emits a well-formed tool call, deterministically | `uv run pytest tests/live/test_ollama.py` (needs Ollama + `qwen3:8b`) | **locally, before trusting a drafted candidate** |

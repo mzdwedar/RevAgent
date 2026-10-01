@@ -14,7 +14,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError, CancelledError
 
 from agentstack.runtime.temporal.contracts import (
     ASK_APPROVAL,
@@ -62,6 +62,13 @@ ACT_TIMEOUT = timedelta(seconds=30)
 # Every CONTINUE_EVERY cycles the run starts a fresh history, carrying what it needs.
 CONTINUE_EVERY = 100
 
+
+
+def _a_cancel_is_not_a_refusal(exc: ActivityError) -> None:
+    """A cancelled run's activity comes back as an ActivityError too. Reading it as the
+    activity's refusal would answer for the run and carry on, so the cancel is lost."""
+    if isinstance(exc.cause, CancelledError) and workflow.patched("a-cancel-ends-the-run"):
+        raise exc
 
 @workflow.defn
 class ExperimentWorkflow:
@@ -257,6 +264,7 @@ class ExperimentWorkflow:
             )
             return outcome
         except ActivityError as exc:
+            _a_cancel_is_not_a_refusal(exc)
             # A refusal is the act's answer: stale, unapproved, or refused by the surface.
             # It was audited where it was decided, and asking again can't change it.
             cause = exc.cause
@@ -309,7 +317,8 @@ class ExperimentWorkflow:
                 start_to_close_timeout=RECORD_TIMEOUT,
                 retry_policy=RETRY,
             )
-        except ActivityError:
+        except ActivityError as exc:
+            _a_cancel_is_not_a_refusal(exc)
             # Only a refusal gets here (a worker that cannot ask at all). The wait stays
             # pending and visible, and the next interval tries again.
             result = AskResult(answered=False)
@@ -352,6 +361,7 @@ class ExperimentWorkflow:
             )
             return outcome
         except ActivityError as exc:
+            _a_cancel_is_not_a_refusal(exc)
             # A refusal (non-retryable) is this turn's answer; the run goes on.
             cause = exc.cause
             refusal = cause.type if isinstance(cause, ApplicationError) else None
@@ -410,6 +420,7 @@ class ExperimentWorkflow:
             )
             return result
         except ActivityError as exc:
+            _a_cancel_is_not_a_refusal(exc)
             # Only a non-retryable failure gets here. It's this cycle's answer, and the
             # run goes on to the next trigger: one refused cycle doesn't end an experiment.
             cause = exc.cause
