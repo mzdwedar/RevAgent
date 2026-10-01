@@ -557,7 +557,7 @@ def test_the_readme_leads_with_the_non_commercial_constraint() -> None:
     readme = (ROOT / "README.md").read_text()
 
     assert "non-commercial" in readme
-    assert readme.index("non-commercial") < readme.index("## See it run"), (
+    assert readme.index("non-commercial") < readme.index("## Quickstart"), (
         "the licence constraint has drifted below the setup steps"
     )
     assert "ux.priorlabs.ai" in readme
