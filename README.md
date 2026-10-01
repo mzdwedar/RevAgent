@@ -253,7 +253,7 @@ gitleaks and osv-scanner.
 | `evals/` | 13 release gates that judge the path, not just the answer |
 | `scripts/` | the three check stages, the bar guard, and the checkpoint and replay guards |
 | `checkpoints/` | checkpoint schema, so a deploy cannot strand live runs |
-| `spikes/` | Cedar vs Rego and Temporal experiments, each with a RESULTS file |
+| `docs/evidence/` | Measured results of the Cedar vs Rego and Temporal probes (code removed; see its READMEs) |
 | `data/` | cohort datasets (gitignored) and the committed `manifest.json` |
 | `.claude/` | hooks, the `agent-stack-auditor` subagent, and `/spec` `/plan` `/stack-audit` |
 

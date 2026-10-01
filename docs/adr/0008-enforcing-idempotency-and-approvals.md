@@ -18,13 +18,13 @@ idempotency ledger stay. Two things were left open:
 ## What was verified, not assumed
 
 Versions: `temporalio` 1.33.0 (dev server 1.32.0), `cedarpy` 4.12.1 and OPA 1.20.2. All
-three sit in the uv `spike` group or are CLI tools; none is a runtime dependency. The
+three were spike-only or are CLI tools; none is a runtime dependency. The
 `regorus` package is not on PyPI, so Rego runs on the `opa` binary.
 
 The E-probes drive the **real** gateway, ledger, approval store and approver directory
 (`build_stack`) against a disposable Postgres database (`agentstack_spike_enforcement_test`).
 The C-probes compare engines against the **real** `decide` and `require_approval`. Logs are
-in `spikes/temporal/RESULTS-enforcement.txt` and `spikes/policy/RESULTS.txt`.
+in `docs/evidence/temporal/RESULTS-enforcement.txt` and `docs/evidence/policy/RESULTS.txt`.
 
 ## Under Temporal
 

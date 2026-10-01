@@ -8,9 +8,9 @@
 ## What was verified, not assumed
 
 As with ADR-0006, every claim below was checked against the installed package, not
-memory: `temporalio` 1.33.0 (spike-only uv group `spike`), Temporal CLI 1.9.1 / Server
-1.32.0 dev server, `langgraph` 1.2.12. Probes live in `spikes/temporal/`; the run log is
-`spikes/temporal/RESULTS.txt`. Each probe asserts an outcome and exits non-zero if it fails.
+memory: `temporalio` 1.33.0 (spike-only; since removed), Temporal CLI 1.9.1 / Server
+1.32.0 dev server, `langgraph` 1.2.12. Probe code was removed after the decision (recoverable at `c48553c`, `spikes/temporal/`); the run log is
+`docs/evidence/temporal/RESULTS.txt`. Each probe asserts an outcome and exits non-zero if it fails.
 
 | Probe | Question | Result | What we have today |
 |---|---|---|---|
