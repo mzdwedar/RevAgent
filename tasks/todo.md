@@ -97,13 +97,17 @@ behaviour; it is the same behaviour that stops being a lie when the process dies
 ### ✅ Checkpoint A — the port weakened nothing
 - [x] All **23** fitness tests green **against Postgres**, not fakes (22 at plan time;
       T1 added `test_the_bar_guards_itself.py`). No store is constructed empty in the
-      suite except `MemoryStore` — see the gap below.
+      suite (`MemoryStore` was the exception; closed below).
 - [x] All 11 gates green, each against a migrated `agentstack_evals` database
 - [x] `stack_guard.py --base main` clean; coverage 99%, changed-line 100%
 - [x] `0001`–`0003` roll back to empty and forward again
 - [ ] **Human review before Phase 2**
 
-**Gap found at the checkpoint — not covered by any task in this plan.**
+**Gap found at the checkpoint — not covered by any task in this plan. CLOSED 2026-10-01:**
+`MemoryStore` and `MaintenanceQueue` now live in Postgres (`0021_memory_is_durable`, up/down);
+`write()` is still the only door, and the table's CHECKs refuse what it refuses.
+`test_memory_is_explicit` proves a fresh store recalls scope, provenance, TTL and trust. The
+text below is the original finding.
 
 `agentstack.context.MemoryStore` and `MaintenanceQueue` are still in memory. `STACK.md`
 layer 5 claims the authoritative store is a "retrieval index + `MemoryStore`", which is
@@ -1818,12 +1822,37 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - H5: reconcile waits get a deadline, `operator stalled` reports them and exits 1,
     and an `agentstack-operator reconcile` command settles the claim, satisfies the wait,
     audits and wakes the run (migration 0019, first written as 0016).
-- [ ] **A3 — Docs claim only what the code enforces** (audit M7), after A1 and A2 merge · *(partly done, checked 2026-09-30: STACK.md rows 1, 3, 7 and 9 and the CONSTRAINTS E2 bullet already describe the A1/A2 behaviour; the spec's layer ledger and the "unsatisfied wait" bullet are not confirmed, so the box stays open)* ·
-  STACK rows 1, 3, 7 and 9; the spec's layer ledger; the CONSTRAINTS bullets on E2 and
-  unsatisfied waits.
-- Follow-ups, not blocking: M2 (tenant of a trigger checked in layer 8), M3 (spans for
-  evaluate/ask/answer), M4 (re-ask checks the world), M5 (heartbeat cancellation,
-  unverified), M6 (a stale approval at the act re-proposes or ends visibly), L1–L7.
+- [x] **A3 — Docs claim only what the code enforces** (audit M7), after A1 and A2 merge · layers 3, 5, 7, 8, 9 · *S*
+  - **Done 2026-10-01.** STACK.md rows 1, 3, 7 and 9 and the CONSTRAINTS E2 and
+    unsatisfied-wait bullets were already accurate (the latter held by
+    `test_wait_gates_the_run` and the `not_answered` cases in `tests/durability/test_commit.py`);
+    the spec's layer ledger was not. Checked claim by claim against the code, and
+    corrected in `SPEC.md`:
+    - **Layer 8: "approval mints an envelope that has the rollout scope" was false.** The
+      envelope is minted per turn from the run's *stage* (`STAGE_SCOPES`, 15 minutes,
+      revocable); approval is a separate check at the gateway, bound to the payload
+      fingerprint. Rollout authority is those two things, neither standing in for the other.
+    - **The ledger named a test that did not exist** (`test_approval_widens_authority`), and
+      nothing referenced `STAGE_SCOPES` at all, so "an evaluation run holds no rollout scope"
+      was true and unproven. `tests/fitness/test_stage_authority.py` (7 tests) now holds it;
+      sabotage-verified (granting the draft stage the rollout scope fails two of them).
+    - **Layer 5: "prior decisions are durable memory" was false.** `MemoryStore` is
+      in-process and nothing writes it. Now stated as not built; decisions live in registry
+      events and the audit trail, which are records, not memory. (The gap itself is still open.)
+    - **Layer 7: "two surfaces, registry and rollout API" was false.** One surface; a rollout
+      is a guarded move to `live` in the registry (ADR-0010).
+    - **Layer 3:** four wait kinds, not two. **Layer 9:** spans are per turn stage and gateway
+      step, not per cycle; evaluate/ask/answer are spanned by `CYCLE_SPANS` (M3, fixed).
+    - `context/evidence.py` is `context/assemble.py`; the envelope no longer claims to be
+      bound to one variant and percentage (the approval's fingerprint is).
+  - `README.md` fitness count 46 → 48, which `test_the_readme_counts_match_what_is_actually_here`
+    required once the two new test files existed.
+- Follow-ups: M2–M6 done (2026-10-01): M2 trigger tenant tested in layer 8 against the
+  run (`authorize_trigger_tenant`; the source-to-tenant authority gap is still unrecorded),
+  M3 `CYCLE_SPANS` for evaluate/ask/answer, M4 a re-ask re-checks the world and withdraws a
+  question that moved, M5 a cancelled run ended cancelled (the workflow was reading the
+  cancel as a refusal; turn and heartbeat were already correct), M6 a stale approval ends
+  visibly (approver told, named in `operator status`). Open: L1–L7.
   Merging with `main` (C2, H1, H3 there; `test_concurrency`) is its own task after these.
 - [ ] Human review
 
