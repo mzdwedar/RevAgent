@@ -34,6 +34,11 @@ class FrozenCohort:
     annual_value_at_risk_cents: int
     description: dict[str, Any]
 
+    @property
+    def currency(self) -> str:
+        """Rows frozen before currency existed carry no key; every one of them was USD."""
+        return str(self.description.get("currency", "USD"))
+
 
 @dataclass(frozen=True, slots=True)
 class FrozenCohortStore:

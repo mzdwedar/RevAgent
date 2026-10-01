@@ -108,6 +108,7 @@ class Cohort:
     annual_value_at_risk_cents: int
     risk_quantiles: tuple[float, ...]
     revenue_note: str
+    currency: str = "USD"
 
     @property
     def size(self) -> int:
@@ -129,7 +130,7 @@ class Cohort:
 
     def description(self) -> dict[str, object]:
         """What is recorded on the experiment and shown to an approver."""
-        return {
+        described: dict[str, object] = {
             "experiment_version": self.experiment_version,
             "dataset": self.dataset,
             "data_as_of": self.data_as_of,
@@ -145,6 +146,17 @@ class Cohort:
             },
             "revenue_basis": self.revenue_note,
         }
+        # Only a non-USD cohort says so: this record is stored as written, and a USD
+        # cohort's must stay byte-identical to what was frozen before currency existed.
+        if self.currency != "USD":
+            described["currency"] = self.currency
+        return described
+
+
+def money(cents: int, currency: str = "USD") -> str:
+    """`$1,000` for USD (unchanged), `NTD 1,000` for anything else."""
+    amount = f"{cents / 100:,.0f}"
+    return f"${amount}" if currency == "USD" else f"{currency} {amount}"
 
 
 def annual_revenue_cents(snapshot: CohortSnapshot) -> pd.Series:
@@ -183,6 +195,7 @@ def select(
         raise TargetingRefused(f"{len(scores.probabilities)} scores for {snapshot.rows} customers")
 
     revenue = annual_revenue_cents(snapshot)
+    currency = REGISTRY[snapshot.dataset].currency
 
     # Rank, then cut at a count. A quantile threshold with ties can return more than a
     # decile, and the number of customers in the cohort is not a detail - it is what
@@ -202,8 +215,8 @@ def select(
     at_risk = int(revenue.take(members).sum())
     if at_risk < rule.minimum_annual_value_at_risk_cents:
         raise NotEnoughAtRisk(
-            f"${at_risk / 100:,.0f} of annualised revenue at risk across {len(members)} "
-            f"customers; the rule needs ${rule.minimum_annual_value_at_risk_cents / 100:,.0f}"
+            f"{money(at_risk, currency)} of annualised revenue at risk across {len(members)} "
+            f"customers; the rule needs {money(rule.minimum_annual_value_at_risk_cents, currency)}"
         )
 
     member_risk = sorted(scores.probabilities[i] for i in members)
@@ -223,6 +236,7 @@ def select(
         annual_value_at_risk_cents=at_risk,
         risk_quantiles=quantiles,
         revenue_note=REGISTRY[snapshot.dataset].revenue_note,
+        currency=currency,
     )
 
 

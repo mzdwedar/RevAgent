@@ -64,6 +64,9 @@ class DatasetSpec:
     revenue_columns: tuple[str, ...] = ()
     revenue_periods_per_year: int = 0
     revenue_note: str = ""
+    # The currency the revenue columns are in. A figure shown to an approver without
+    # its currency is a number the reader supplies a unit for.
+    currency: str = "USD"
 
 
 REGISTRY: dict[str, DatasetSpec] = {

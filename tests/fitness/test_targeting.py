@@ -19,6 +19,7 @@ import pytest
 
 from agentstack.context import targeting
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
+from agentstack.context.frozen_cohorts import FrozenCohort
 from agentstack.context.targeting import (
     CohortTooSmall,
     NotEnoughAtRisk,
@@ -186,6 +187,66 @@ def test_a_cohort_worth_too_little_is_refused() -> None:
             scores(),
             rule=replace(DEV, minimum_annual_value_at_risk_cents=5_000_000),
         )
+
+
+def test_a_refusal_names_the_cohorts_own_currency() -> None:
+    """A KKBox cohort is billed in NTD. A refusal that says `$50,000` about NTD is a
+    wrong number said confidently."""
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+
+    with pytest.raises(NotEnoughAtRisk, match=r"NTD 50,000") as refused:
+        targeting.select(
+            snapshot(),
+            scores(),
+            rule=replace(DEV, minimum_annual_value_at_risk_cents=5_000_000),
+        )
+    assert "$" not in str(refused.value)
+
+
+def test_usd_is_the_default_and_leaves_the_cohort_byte_identical() -> None:
+    """`experiment_version` names a population in recorded histories and in live runs.
+    The literal below was computed before `currency` existed; if it moves, every USD
+    cohort already frozen has been renamed."""
+    cohort = targeting.select(snapshot(), scores(), rule=DEV)
+
+    assert REGISTRY["fixture"].currency == "USD"
+    assert cohort.experiment_version == "exp:9c93736ad3fe0a25"
+    assert "currency" not in cohort.description()
+    assert cohort.currency == "USD"
+
+
+def test_a_non_usd_cohort_records_its_currency() -> None:
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+
+    cohort = targeting.select(snapshot(), scores(), rule=DEV)
+
+    assert cohort.currency == "NTD"
+    assert cohort.description()["currency"] == "NTD"
+    # The dataset is already in the version; the currency must not change a USD name.
+    assert cohort.experiment_version == "exp:9c93736ad3fe0a25"
+
+
+def test_a_frozen_cohort_reads_its_currency_from_what_was_recorded() -> None:
+    """Rows frozen before `currency` existed have no such key; they were all USD."""
+    usd = targeting.select(snapshot(), scores(), rule=DEV)
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+    ntd = targeting.select(snapshot(), scores(), rule=DEV)
+
+    def frozen(cohort: targeting.Cohort) -> FrozenCohort:
+        return FrozenCohort(
+            tenant="t",
+            experiment_id="e",
+            experiment_version=cohort.experiment_version,
+            data_as_of=cohort.data_as_of,
+            targeting_model_version=cohort.model_version,
+            risk_threshold=cohort.risk_threshold,
+            size=cohort.size,
+            annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
+            description=cohort.description(),
+        )
+
+    assert frozen(usd).currency == "USD"
+    assert frozen(ntd).currency == "NTD"
 
 
 def test_value_at_risk_uses_observed_revenue_annualised() -> None:
