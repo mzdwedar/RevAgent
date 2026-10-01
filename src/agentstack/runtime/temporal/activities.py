@@ -63,6 +63,7 @@ from agentstack.runtime.temporal.contracts import (
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
     UNRESOLVED,
+    WITHDRAW_APPROVAL,
     AskIntent,
     AskResult,
     CommitIntent,
@@ -75,6 +76,7 @@ from agentstack.runtime.temporal.contracts import (
     TriggerWaitIntent,
     TurnIntent,
     TurnOutcome,
+    WithdrawIntent,
 )
 from agentstack.runtime.waits import (
     APPROVAL_REASK_AFTER,
@@ -142,6 +144,11 @@ class Asker(Protocol):
     """
 
     def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, action: ActionRequest) -> str: ...
+
+    def withdraw(self, *, run: Run, wait: Wait, reason: str) -> str:
+        """Tell the person the act they answered did not happen, and why. Returns the
+        message id."""
+        ...
 
 
 class RunActivities:
@@ -514,6 +521,40 @@ class RunActivities:
                 next_deadline=datetime.now(UTC) + APPROVAL_REASK_AFTER,
             )
         return AskResult(answered=False)
+
+    @activity.defn(name=WITHDRAW_APPROVAL)
+    def withdraw_approval(self, intent: WithdrawIntent) -> None:
+        """Say to the approver that what they answered did not happen (audit M6).
+
+        An approval the act refused as stale used to end the run in silence: the person
+        who said yes had no way to know nothing committed. The words come from the wait's
+        record, and the telling is audited, so "was anyone told" has an answer. A failed
+        post is retried like an ask (`NotificationFailed` is not a refusal): a notice
+        nobody got is not a notice.
+        """
+        if self._asker is None:
+            raise ApplicationError(
+                "this worker was built without an asker, so no one can be told",
+                type=NO_ASKER,
+                non_retryable=True,
+            )
+        run = self._runs.get(intent.run_id)
+        wait = self._waits.get(intent.wait_id)
+        assert run is not None and wait is not None  # the act this follows read both
+        self._asker.withdraw(run=run, wait=wait, reason=intent.reason)
+        self._audit.write(
+            run_id=run.run_id,
+            principal=run.user,
+            tenant=run.tenant,
+            action_fingerprint=wait.action_fingerprint or "",
+            surface="approval",
+            resource=wait.wait_id,
+            policy_decision=f"approval.withdrawn:{intent.reason}",
+            approval_id=None,
+            outcome="notified",
+            wait_id=wait.wait_id,
+            state_snapshot=wait.state_snapshot,
+        )
 
     @activity.defn(name=COMMIT)
     def commit(self, intent: CommitIntent) -> CommitOutcome:

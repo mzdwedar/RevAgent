@@ -37,6 +37,9 @@ Stack-specific (from `STACK.md`):
   layer 8 against the run's own record before a cycle is claimed or scored, and the
   refusal is audited and never retried. Which sources may speak for which tenant is
   not recorded anywhere yet, and this does not pretend to authenticate the sender
+- No approval left standing in silence after the act it was for is refused as stale: the
+  approver is told that nothing was committed, the telling is audited, and the run's
+  status names the refusal
 - No approval standing without a row somebody added, and a record of who added it
 - No notification failure swallowed — a run parked on a question nobody received
   waits forever, and looks exactly like waiting patiently

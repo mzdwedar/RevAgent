@@ -19,6 +19,7 @@ import pytest
 
 from agentstack.interfaces.slack import (
     ApprovalAsk,
+    ApprovalNotice,
     ApprovalNotSpecific,
     NotificationFailed,
     RecordingNotifier,
@@ -289,3 +290,50 @@ def test_the_recorder_keeps_what_was_asked_and_where() -> None:
     assert [channel for channel, _ in notifier.posted] == ["#experiments", "#other"]
     assert notifier.posted[1][1].estimated_customers == 84
     assert first != second, "each ask needs its own message id to bind a reply to"
+
+
+# --- audit M6: a notice is not a question, and it is as loud when it fails ---
+
+
+NOTICE = ApprovalNotice(
+    run_id="run-7", wait_id="wait-1", tenant="acme", reason="stale", text="nothing was committed"
+)
+
+
+def test_a_notice_is_posted_as_plain_text_and_returns_its_message_id() -> None:
+    class Accepting:
+        def chat_postMessage(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs["channel"] == "#x"
+            assert kwargs["text"] == "nothing was committed"
+            assert "blocks" not in kwargs, "a notice has no buttons: nothing to answer"
+            return {"ts": "1700000000.000200"}
+
+    notifier = SlackNotifier(build_client=lambda: Accepting())
+
+    assert notifier.post_notice(NOTICE, channel="#x") == "1700000000.000200"
+
+
+def test_a_notice_nobody_received_is_a_failure() -> None:
+    class Silent:
+        def chat_postMessage(self, **_: Any) -> dict[str, Any]:
+            return {"ok": True}
+
+    class Refusing:
+        def chat_postMessage(self, **_: Any) -> dict[str, Any]:
+            raise RuntimeError("channel_not_found")
+
+    with pytest.raises(NotificationFailed, match="without returning a message id"):
+        SlackNotifier(build_client=lambda: Silent()).post_notice(NOTICE, channel="#x")
+    with pytest.raises(NotificationFailed, match="#gone"):
+        SlackNotifier(build_client=lambda: Refusing()).post_notice(NOTICE, channel="#gone")
+    with pytest.raises(NotificationFailed, match="#experiments"):
+        RecordingNotifier(fail=True).post_notice(NOTICE, channel="#experiments")
+
+
+def test_the_recorder_keeps_the_notices_apart_from_the_asks() -> None:
+    notifier = RecordingNotifier()
+
+    notifier.post_notice(NOTICE, channel="#experiments")
+
+    assert notifier.posted == []
+    assert [(channel, n.reason) for channel, n in notifier.notices] == [("#experiments", "stale")]

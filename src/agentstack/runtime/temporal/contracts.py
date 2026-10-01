@@ -26,6 +26,7 @@ SATISFY_TRIGGER_WAIT = "satisfy_trigger_wait"
 RUN_TURN = "run_turn"
 ASK_APPROVAL = "ask_approval"
 COMMIT = "commit"
+WITHDRAW_APPROVAL = "withdraw_approval"
 
 # The stage a turn runs at, which decides the tools it is shown (T22). Named here
 # because workflow code may not import `agentstack.tools`, where the stages are defined;
@@ -194,6 +195,18 @@ class AskIntent:
     experiment_id: str
     experiment_version: str
     asked: int
+
+
+@dataclass(frozen=True, slots=True)
+class WithdrawIntent:
+    """Tell the approver this wait's question will not lead to the act they answered.
+
+    Ids and a reason, nothing else: the words come from the record, in the activity.
+    """
+
+    run_id: str
+    wait_id: str
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)

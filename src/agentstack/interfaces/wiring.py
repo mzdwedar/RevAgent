@@ -25,7 +25,7 @@ from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import PostgresRegistryClient, RecordingClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.slack import ApprovalAsk, Notifier, RecordingNotifier
+from agentstack.interfaces.slack import ApprovalAsk, ApprovalNotice, Notifier, RecordingNotifier
 from agentstack.interfaces.slack_callback import ReplayGuard, accept
 from agentstack.interfaces.triggers import parse_trigger
 from agentstack.model.engine import EchoEngine
@@ -383,6 +383,16 @@ class ExperimentTurns:
         self.stack.transcripts.append(session_id=run.session_id, kind="agent", body=answered)
 
 
+# What the approver is told when the run stops short of the act they answered. Each says
+# that nothing was committed: silence after a "yes" reads as "done".
+WITHDRAWN_TEXT: dict[str, str] = {
+    "stale": (
+        "Approved: {summary}\nThe draft changed after you approved it, so nothing was "
+        "committed. It will not roll out unless it is proposed and approved again."
+    ),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class ChannelAsker:
     """The asker for an experiment run's worker (`runtime.temporal.Asker`).
@@ -413,6 +423,20 @@ class ChannelAsker:
                 estimated_customers=estimated_customers(cohort, percentage),
                 annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
                 tenant=run.tenant,
+            ),
+            channel=self.channel,
+        )
+
+    def withdraw(self, *, run: Run, wait: Wait, reason: str) -> str:
+        if wait.approval_summary is None:
+            raise ValueError(f"{wait.wait_id} does not say what it asks about; nothing to say")
+        return self.notifier.post_notice(
+            ApprovalNotice(
+                run_id=run.run_id,
+                wait_id=wait.wait_id,
+                tenant=run.tenant,
+                reason=reason,
+                text=WITHDRAWN_TEXT[reason].format(summary=wait.approval_summary),
             ),
             channel=self.channel,
         )

@@ -32,6 +32,7 @@ from agentstack.runtime.temporal.contracts import (
     PARK_TRIGGER_WAIT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
+    WITHDRAW_APPROVAL,
 )
 from agentstack.runtime.temporal.retry import UNDECLARED
 
@@ -47,6 +48,8 @@ DECLARED: Mapping[str, str] = {
     ASK_APPROVAL: "notify",
     # The irreversible act, through gateway.execute and nothing else.
     COMMIT: "gateway",
+    # Tells an approver the act they answered did not happen. Grants and commits nothing.
+    WITHDRAW_APPROVAL: "notify",
 }
 
 

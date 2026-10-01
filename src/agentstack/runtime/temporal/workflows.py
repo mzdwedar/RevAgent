@@ -9,6 +9,7 @@ imported.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 from datetime import timedelta
 
@@ -28,6 +29,7 @@ from agentstack.runtime.temporal.contracts import (
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
     UNRESOLVED,
+    WITHDRAW_APPROVAL,
     AskIntent,
     AskResult,
     Carried,
@@ -43,6 +45,7 @@ from agentstack.runtime.temporal.contracts import (
     TriggerWaitIntent,
     TurnIntent,
     TurnOutcome,
+    WithdrawIntent,
 )
 from agentstack.runtime.temporal.retry import RETRY
 
@@ -217,9 +220,25 @@ class ExperimentWorkflow:
             self._commits.append(outcome)
             if outcome.status == NOT_ANSWERED:
                 return False
+            if outcome.refusal == "ApprovalStale" and workflow.patched("tell-the-approver-stale"):
+                await self._withdraw(wait_id, "stale")
             if outcome.status != UNRESOLVED or outcome.wait_id is None:
                 return True
             await self._reconciled(outcome.wait_id)
+
+    async def _withdraw(self, wait_id: str, reason: str) -> None:
+        """The act they approved did not happen. Say so, rather than leave a yes standing
+        in a channel beside a rollout that never was."""
+        # Only a refusal gets past the retries (a worker that cannot tell anyone). The act's
+        # own refusal is already audited and in the progress; there is no wait left to keep
+        # visible, so the run goes on rather than die over a message.
+        with contextlib.suppress(ActivityError):
+            await workflow.execute_activity(
+                WITHDRAW_APPROVAL,
+                WithdrawIntent(run_id=self._run_id, wait_id=wait_id, reason=reason),
+                start_to_close_timeout=RECORD_TIMEOUT,
+                retry_policy=RETRY,
+            )
 
     async def _commit(self, intent: CommitIntent) -> CommitOutcome:
         try:

@@ -193,10 +193,28 @@ def _message_id(answer: Any) -> str:
     return str(getter("ts") or "") if callable(getter) else ""
 
 
+@dataclass(frozen=True, slots=True)
+class ApprovalNotice:
+    """Something the approver should know about a question they answered or were asked.
+
+    Not a question: it carries no buttons and binds nothing. `reason` is why the run is
+    telling them (`stale`: they approved a world that moved before the act; `superseded`:
+    the question was withdrawn before it was answered).
+    """
+
+    run_id: str
+    wait_id: str
+    tenant: str
+    reason: str
+    text: str
+
+
 class Notifier(Protocol):
     """Where an approval question goes. Returns the message's own id."""
 
     def post_approval(self, ask: ApprovalAsk, *, channel: str) -> str: ...
+
+    def post_notice(self, notice: ApprovalNotice, *, channel: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,12 +262,33 @@ class SlackNotifier:
             )
         return timestamp
 
+    def post_notice(self, notice: ApprovalNotice, *, channel: str = "") -> str:
+        try:
+            answer = self._client().chat_postMessage(
+                channel=channel or self.default_channel, text=notice.text
+            )
+        except NotificationFailed:
+            raise
+        except Exception as exc:
+            raise NotificationFailed(
+                f"the notice for run {notice.run_id} did not reach "
+                f"{channel or self.default_channel}: {exc}"
+            ) from exc
+        timestamp = _message_id(answer)
+        if not timestamp:
+            raise NotificationFailed(
+                f"Slack accepted the notice for run {notice.run_id} without returning a "
+                "message id; there is no way to tell whether anyone can see it"
+            )
+        return timestamp
+
 
 @dataclass(slots=True)
 class RecordingNotifier:
     """Keeps the asks instead of posting them, for tests and for dev without a workspace."""
 
     posted: list[tuple[str, ApprovalAsk]] = field(default_factory=list)
+    notices: list[tuple[str, ApprovalNotice]] = field(default_factory=list)
     fail: bool = False
 
     def post_approval(self, ask: ApprovalAsk, *, channel: str = "#experiments") -> str:
@@ -257,3 +296,9 @@ class RecordingNotifier:
             raise NotificationFailed(f"could not reach {channel}")
         self.posted.append((channel, ask))
         return f"ts-{len(self.posted)}"
+
+    def post_notice(self, notice: ApprovalNotice, *, channel: str = "#experiments") -> str:
+        if self.fail:
+            raise NotificationFailed(f"could not reach {channel}")
+        self.notices.append((channel, notice))
+        return f"ts-notice-{len(self.notices)}"

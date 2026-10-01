@@ -11,6 +11,7 @@ a record there: one record is one attempt.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -20,6 +21,8 @@ from temporalio.testing import ActivityEnvironment
 
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.execution.surfaces import SurfaceTimeout
+from agentstack.interfaces import operator_cli
+from agentstack.interfaces.slack import RecordingNotifier
 from agentstack.interfaces.wiring import Stack, answer, build_stack
 from agentstack.observability.audit import AuditRecord
 from agentstack.observability.spans import CollectingSink
@@ -88,6 +91,16 @@ def rollout_steps(stack: Stack, run_id: str) -> list[str]:
 
 async def acted(handle: Any, count: int = 1) -> RunProgress:
     return await progress_until(handle, lambda p: len(p.commits) >= count)
+
+
+async def notified(stack: Stack, *, timeout: float = 30.0) -> None:
+    """Until the approver has been told something. The notice is its own activity, after
+    the act, so the commit being visible does not mean the notice has gone out yet."""
+    notifier = stack.notifier
+    assert isinstance(notifier, RecordingNotifier)
+    async with asyncio.timeout(timeout):
+        while not notifier.notices:
+            await asyncio.sleep(0.05)
 
 
 def test_an_approved_rollout_commits_once_at_the_act(stack: Stack, app_database: Database) -> None:
@@ -283,7 +296,7 @@ def test_a_world_that_cannot_be_read_is_not_acted_on(stack: Stack, app_database:
 
 
 def test_a_world_that_moved_after_the_approval_refuses_at_the_act(
-    stack: Stack, app_database: Database
+    stack: Stack, app_database: Database, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Criterion 33. The person approved the draft they were shown; before the run could
     act, its hypothesis was revised. The approval is for a world that no longer exists."""
@@ -300,11 +313,28 @@ def test_a_world_that_moved_after_the_approval_refuses_at_the_act(
         await notify_answer(
             env.client, run_id=parked.run_id, wait_id=parked.awaiting_approval or ""
         )
-        return await acted(handle)
+        done = await acted(handle)
+        # The run is not finished with a silent refusal: the approver is told, and an
+        # operator reading the run's status sees what the act came to (audit M6).
+        await notified(stack)
+        capsys.readouterr()
+        await operator_cli.status_report(env.client, app_database, parked.run_id)
+        status.append(capsys.readouterr().out)
+        return done
 
+    status: list[str] = []
     run_id, _, done = propose_and_wait(stack, app_database, then=approve_then_revise)
 
     assert done.commits == (CommitOutcome(status="refused", refusal="ApprovalStale"),)
+    notifier = stack.notifier
+    assert isinstance(notifier, RecordingNotifier)
+    ((_, notice),) = notifier.notices
+    assert (notice.run_id, notice.reason) == (run_id, "stale")
+    assert "nothing was committed" in notice.text
+    assert "refused ApprovalStale" in status[0]
+    assert ("approval.withdrawn:stale", "notified") in [
+        (r.policy_decision, r.outcome) for r in stack.audit.for_run(run_id)
+    ]
     assert stack.registry_client.rollouts == []
     (record,) = rollout_audit(stack, run_id)  # one attempt, not a retry loop
     assert (record.policy_decision, record.outcome) == ("approval.stale", "refused")
