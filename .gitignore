@@ -11,7 +11,6 @@ __pycache__/
 coverage.lcov
 htmlcov/
 .tmp/
-data/
+data/*
 !data/manifest.json
-!data/scores/
 !.env.example

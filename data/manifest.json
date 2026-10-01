@@ -1,0 +1,52 @@
+{
+  "bank-churn": {
+    "churn_rate": 0.2038,
+    "columns": [
+      "Age",
+      "Balance",
+      "Card Type",
+      "CreditScore",
+      "EstimatedSalary",
+      "Exited",
+      "Gender",
+      "Geography",
+      "HasCrCard",
+      "IsActiveMember",
+      "NumOfProducts",
+      "Point Earned",
+      "Satisfaction Score",
+      "Tenure"
+    ],
+    "data_as_of": "bank-churn:aad16b9fd9454ca9",
+    "dataset": "bank-churn",
+    "rows": 10000
+  },
+  "telecom-bigml": {
+    "churn_rate": 0.144914,
+    "columns": [
+      "Account length",
+      "Area code",
+      "Churn",
+      "Customer service calls",
+      "International plan",
+      "Number vmail messages",
+      "State",
+      "Total day calls",
+      "Total day charge",
+      "Total day minutes",
+      "Total eve calls",
+      "Total eve charge",
+      "Total eve minutes",
+      "Total intl calls",
+      "Total intl charge",
+      "Total intl minutes",
+      "Total night calls",
+      "Total night charge",
+      "Total night minutes",
+      "Voice mail plan"
+    ],
+    "data_as_of": "telecom-bigml:f107d488f7bf4651",
+    "dataset": "telecom-bigml",
+    "rows": 3333
+  }
+}
