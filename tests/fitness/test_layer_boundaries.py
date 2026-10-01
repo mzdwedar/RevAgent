@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import ast
+import configparser
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -23,6 +26,7 @@ CLIENT_MODULES = {
     "boto3",
     "psycopg",
     "psycopg_pool",
+    "tabpfn_client",
 }
 
 # Which layer may hold which real client, and nothing beyond it.
@@ -112,3 +116,52 @@ def test_the_readme_counts_match_what_is_actually_here() -> None:
     spelled = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
     said = f"{spelled[contracts]} `.importlinter` contracts"
     assert said in readme, f"README does not say there are {said}"
+
+
+def _contract_3() -> tuple[set[str], set[str]]:
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(SRC.parents[1] / ".importlinter")
+    section = parser["importlinter:contract:3"]
+    return (
+        {m for m in section["source_modules"].split() if m},
+        {m for m in section["forbidden_modules"].split() if m},
+    )
+
+
+def test_the_hosted_scorer_client_is_a_surface_client_only_execution_may_hold() -> None:
+    """`tabpfn_client` sends rows to a third party, so it is egress: layer 7 only (ADR-0012)."""
+    sources, forbidden = _contract_3()
+    assert "tabpfn_client" in forbidden
+    assert "agentstack.execution" not in sources
+    assert "tabpfn_client" in ALLOWED_CLIENTS["execution"]
+    assert "tabpfn_client" not in ALLOWED_CLIENTS["storage"]
+
+
+def _lint_with_probe(tmp_path: pathlib.Path, layer: str) -> subprocess.CompletedProcess[str]:
+    """Run the real contracts over a copy of the tree with one probe module added."""
+    root = SRC.parents[1]
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    shutil.copy(root / ".importlinter", tmp_path / ".importlinter")
+    shutil.copytree(
+        SRC, tmp_path / "src" / "agentstack", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    (tmp_path / "src" / "agentstack" / layer / "probe_egress.py").write_text(
+        "import tabpfn_client\n\nCLIENT = tabpfn_client\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(tmp_path / "src")}
+    lint_imports = pathlib.Path(sys.executable).parent / "lint-imports"
+    return subprocess.run(
+        [str(lint_imports)], cwd=tmp_path, env=env, capture_output=True, text=True, check=False
+    )
+
+
+def test_a_probe_importing_tabpfn_client_fails_outside_execution(tmp_path: pathlib.Path) -> None:
+    for layer in ("prediction", "context"):
+        result = _lint_with_probe(tmp_path / layer, layer)
+        assert result.returncode != 0, f"{layer} imported tabpfn_client and the contracts held"
+        assert "tabpfn_client" in result.stdout
+
+
+def test_a_probe_importing_tabpfn_client_is_allowed_in_execution(tmp_path: pathlib.Path) -> None:
+    result = _lint_with_probe(tmp_path, "execution")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

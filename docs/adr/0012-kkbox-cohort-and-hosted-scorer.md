@@ -85,6 +85,26 @@ place `tabpfn_client` may be imported (contract 3 tightened). Fold assignment an
 ours so out-of-fold is checkable. Scoring is a **read**: no idempotency-ledger entry, but traced
 and audited egress. The served model version is recorded or the scorer refuses.
 
+#### 4a. Verified client surface (K7, `tabpfn-client` 0.6.1, read from the installed package)
+
+- **Host:** `https://api.priorlabs.ai:443` (`server_config.yaml`). K8 pins it as a checked constant.
+- **Token:** `TABPFN_TOKEN` in the environment or `set_access_token()`; `init()` never prompts. It
+  raises if the server is unreachable or no valid token exists, which is K9's preflight signal.
+- **Calls:** `TabPFNClassifier.fit(X, y)` then `predict_proba(X)`. The model is chosen by
+  `model_path` (`"auto"` defers to the server), so the served version must be read back, not assumed (K8).
+- **Limits** come from the server as `ModelLimit` (`train_set_max_rows`, `train_set_max_cells`,
+  `test_set_max_rows`, `max_classes`, `max_cols`); they are measured, not hard-coded, in K12.
+- **Server-side retention:** the client uploads train and test sets (`/upload/train_set/`) and has
+  `get_data_summary`, `download_all_data` and `delete_all_datasets` endpoints, so uploaded cohort
+  rows persist on the vendor's side until deleted. Checkpoint C must state this, and K8 should
+  decide whether a scoring run deletes what it uploaded.
+- **Second egress path: telemetry.** `tabpfn-common-utils` sends usage events to PostHog. It is on
+  by default outside CI and is switched off with `TABPFN_DISABLE_TELEMETRY=1`. K9 sets that before
+  the client is imported, and a fitness test pins it.
+- **Dependency cost:** `tabpfn-client` pins `pandas<3`; the lock moved `pandas` 3.0.6 to 2.3.3 and
+  patch-downgraded `pydantic`, `scikit-learn`, `tqdm` and `xxhash`. The full suite is green on it.
+  `osv-scanner` on `uv.lock`: no issues.
+
 ### 5. Model-version provenance and replay (K8, K14)
 
 The service chooses the checkpoint, so recorded scores (local, never committed) define a cohort;

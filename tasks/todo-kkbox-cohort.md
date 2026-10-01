@@ -136,7 +136,7 @@ their position in the *order* is here.)
 
 ## Phase B: the hosted scorer (new side effect: egress)
 
-- [ ] **K7: the dependency and the tightened contract** · layer 7 boundary (config) · *S*
+- [x] **K7: the dependency and the tightened contract** · layer 7 boundary (config) · *S* — **Done 2026-10-01.** `tabpfn-client` 0.6.1 in the `prediction` extra; contract 3 forbids `tabpfn_client` outside execution (line added by the owner: the `.importlinter` hook blocks agent edits); 4 tests in `test_layer_boundaries.py` incl. probe-import runs of the real contracts. Costs found: `pandas` 3 to 2.3.3, and a PostHog telemetry path (see ADR-0012 4a; K9 must disable it).
   - Acceptance: `tabpfn-client` in the `prediction` extra (`pyproject.toml`, `uv.lock`);
     mypy override scoped to `tabpfn_client.*` (config entry, no inline suppression);
     `.importlinter` contract 3 gains `tabpfn_client` (a tightening). The client's

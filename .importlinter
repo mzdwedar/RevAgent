@@ -55,6 +55,7 @@ forbidden_modules =
     sqlite3
     smtplib
     kaggle
+    tabpfn_client
 
 [importlinter:contract:4]
 name = Nothing imports the inbound channel layer (Part 1)
