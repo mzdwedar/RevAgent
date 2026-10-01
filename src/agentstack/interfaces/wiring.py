@@ -122,8 +122,8 @@ def build_stack(
     resolver = SessionResolver(
         sessions=sessions, transcripts=transcripts, working_state=working_state
     )
-    memory = MemoryStore()
-    maintenance = MaintenanceQueue()
+    memory = MemoryStore(db=db)
+    maintenance = MaintenanceQueue(db=db)
     approvals = ApprovalStore(db=db)
     ledger = IdempotencyLedger(db=db)
     audit = AuditSink(db=db)

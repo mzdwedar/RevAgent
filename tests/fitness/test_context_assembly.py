@@ -14,6 +14,7 @@ from agentstack.context.retrieval import Candidate
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import OBSERVATIONS_IN_CONTEXT, Stack, handle
 from agentstack.runtime.run import Run
+from agentstack.storage.database import Database
 
 from .conftest import READ_SCOPES, SCOPES, seed_experiment
 
@@ -145,10 +146,10 @@ def test_earlier_reads_enter_context_bounded_and_most_recent(stack: Stack, run: 
     assert all(i.trust is Trust.UNTRUSTED for i in shown)
 
 
-def test_memory_freshness_is_enforced_at_recall_time() -> None:
+def test_memory_freshness_is_enforced_at_recall_time(app_database: Database) -> None:
     from agentstack.context.memory import MemoryStore, write
 
-    store = MemoryStore()
+    store = MemoryStore(db=app_database)
     write(
         store,
         key="pref",

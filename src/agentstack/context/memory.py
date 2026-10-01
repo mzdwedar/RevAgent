@@ -14,10 +14,12 @@ Memory is also a trust boundary: a poisoned memory outlives the input that plant
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from agentstack.context.items import ContextItem, Scope, Trust
+from agentstack.storage.database import Database
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,31 +47,81 @@ class MemoryRecord:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class MemoryStore:
-    """Holds records. Does not decide what deserves to be one - `write()` does."""
+    """Holds records, durably. Does not decide what deserves to be one - `write()` does.
 
-    _records: list[MemoryRecord] = field(default_factory=list)
+    There is no in-memory variant: a fake would be the implementation the suite
+    exercised, and the thing worth proving is that a record outlives the process.
+    """
+
+    db: Database
 
     def recall(self, scope: Scope, *, now: datetime | None = None) -> list[MemoryRecord]:
-        return [r for r in self._records if scope.covers(r.scope) and r.is_fresh(now)]
+        # The tenant filter is in the query; the rest of the scope rule stays in `Scope`.
+        return [
+            r
+            for r in self._rows("WHERE tenant = %s", (scope.tenant,))
+            if scope.covers(r.scope) and r.is_fresh(now)
+        ]
 
     def all_records(self) -> tuple[MemoryRecord, ...]:
-        return tuple(self._records)
+        return tuple(self._rows("", ()))
+
+    def _rows(self, where: str, params: tuple[Any, ...]) -> list[MemoryRecord]:
+        rows = self.db.fetch_all(
+            "SELECT key, value, tenant, user_id, session_id, project, provenance,"
+            f" written_at, ttl, trust FROM memory_records {where} ORDER BY id",
+            params,
+        )
+        return [
+            MemoryRecord(
+                key=r[0],
+                value=r[1],
+                scope=Scope(tenant=r[2], user=r[3], session=r[4], project=r[5]),
+                provenance=r[6],
+                written_at=r[7],
+                ttl=r[8],
+                trust=Trust(r[9]),
+            )
+            for r in rows
+        ]
 
     def _append(self, record: MemoryRecord) -> None:
         """Private on purpose. Call `agentstack.context.memory.write()` instead."""
-        self._records.append(record)
+        self.db.execute(
+            "INSERT INTO memory_records (key, value, tenant, user_id, session_id, project,"
+            " provenance, written_at, ttl, trust) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                record.key,
+                record.value,
+                record.scope.tenant,
+                record.scope.user,
+                record.scope.session,
+                record.scope.project,
+                record.provenance,
+                record.written_at,
+                record.ttl,
+                record.trust.value,
+            ),
+        )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class MaintenanceQueue:
     """Extraction, consolidation, expiry, reindexing. Drained off the turn."""
 
-    jobs: list[tuple[str, str]] = field(default_factory=list)
+    db: Database
+
+    @property
+    def jobs(self) -> list[tuple[str, str]]:
+        rows = self.db.fetch_all("SELECT job, subject FROM maintenance_jobs ORDER BY id")
+        return [(job, subject) for job, subject in rows]
 
     def enqueue(self, job: str, subject: str) -> None:
-        self.jobs.append((job, subject))
+        self.db.execute(
+            "INSERT INTO maintenance_jobs (job, subject) VALUES (%s, %s)", (job, subject)
+        )
 
 
 def write(
