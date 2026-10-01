@@ -1,4 +1,4 @@
-"""Accountability records, kept apart from debug traces (Part 8).
+"""Accountability records, kept apart from debug traces (Observability, evaluation, feedback).
 
 A trace shows that a tool executed. An audit record shows which identity authorized
 it, under what policy, with what scope, and what changed. Burying the second inside

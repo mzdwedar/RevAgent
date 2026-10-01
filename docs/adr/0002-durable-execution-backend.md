@@ -5,7 +5,7 @@
 
 ## Context
 
-Part 4: a loop can answer a turn; a durable workflow can survive time. This agent waits
+Durable execution: a loop can answer a turn; a durable workflow can survive time. This agent waits
 for human approval and for external systems, so runs must survive restart and resume
 from a recorded position without repeating committed side effects.
 

@@ -1,4 +1,5 @@
-"""Durable state with a lifecycle - not a vector index, not the transcript (Part 5).
+"""Durable state with a lifecycle - not a vector index, not the transcript (Context, retrieval,
+memory).
 
 Two rules this module exists to enforce:
 
@@ -90,8 +91,8 @@ def write(
     """
     if not explicit:
         raise ValueError(
-            "memory writes must be explicit (Part 5): pass explicit=True at a point "
-            "where someone decided this deserves to persist"
+            "memory writes must be explicit (Context, retrieval, memory): pass explicit=True "
+            "at a point where someone decided this deserves to persist"
         )
     if not provenance:
         raise ValueError("memory writes require provenance")

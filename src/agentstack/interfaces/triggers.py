@@ -1,4 +1,4 @@
-"""The event ingress: where a trigger enters the system (Part 1).
+"""The event ingress: where a trigger enters the system (Interfaces & channels).
 
 A trigger is an inbound event, and this layer does with it exactly what the channel
 layer does with a Slack message: checks that it is well formed and hands it on. It

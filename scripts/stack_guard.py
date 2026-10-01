@@ -35,8 +35,9 @@ SKIPS = re.compile(r"@pytest\.mark\.(skip|xfail)|pytest\.skip\(|@unittest\.skip"
 # Scanning either for those patterns only ever finds the definition. CONSTRAINTS.md is
 # still fully checked by `state_findings` - floor bullets, enforced rows, exceptions -
 # which is where a real weakening of it would show up.
-# Everywhere a ToolSpec is declared. A tier downgrade in any of them is a Part 7
-# finding, and hardcoding one filename meant the next catalog was unguarded.
+# Everywhere a ToolSpec is declared. A tier downgrade in any of them is an
+# Identity, trust, policy, approvals finding, and hardcoding one filename meant the next
+# catalog was unguarded.
 TOOL_SOURCES = tuple(sorted((ROOT / "src" / "agentstack" / "tools").glob("*.py")))
 
 NAMES_THE_PATTERNS = (
@@ -240,7 +241,9 @@ def state_findings(base: str | None) -> list[Finding]:
         lost = _contract_names(before) - _contract_names(_current(".importlinter"))
         if lost:
             found.append(
-                Finding(".importlinter", f"layer contract removed: {sorted(lost)}", "Part 1")
+                Finding(
+                    ".importlinter", f"layer contract removed: {sorted(lost)}", "the layer model"
+                )
             )
 
     # Every file that declares tools, not just the first one there was. T13 added
@@ -256,7 +259,11 @@ def state_findings(base: str | None) -> list[Finding]:
         for tool, tier in new.items():
             if tool in old and rank.get(tier, 0) < rank.get(old[tool], 0):
                 found.append(
-                    Finding(path, f"{tool}: approval downgraded {old[tool]} -> {tier}", "Part 7")
+                    Finding(
+                        path,
+                        f"{tool}: approval downgraded {old[tool]} -> {tier}",
+                        "Identity, trust, policy, approvals",
+                    )
                 )
 
     before = _file_at(base, "CONSTRAINTS.md")

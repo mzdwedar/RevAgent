@@ -3,7 +3,7 @@
 Context is not what the model knows. It is the bounded working set assembled for one
 turn, derived from the transcript and never mistaken for it. Retrieval supplies
 candidates, not authority. Memory is durable state with a lifecycle, and it is written
-explicitly or not at all (Part 5).
+explicitly or not at all (Context, retrieval, memory).
 """
 
 from agentstack.context.assemble import ContextBundle, assemble

@@ -1,4 +1,5 @@
-"""Part 6: every capability declares who acts, where, how reversibly, and at what price."""
+"""Tools, MCP, capability surfaces: every capability declares who acts, where, how reversibly, and
+at what price."""
 
 from __future__ import annotations
 
@@ -57,6 +58,22 @@ def test_a_tool_without_an_approval_tier_cannot_be_constructed() -> None:
             reversible=False,
             approval=Approval.NONE,
             idempotency=Idempotency.KEY,
+        )
+
+
+def test_a_tool_without_a_resource_scope_cannot_be_constructed() -> None:
+    with pytest.raises(ValueError, match="a resource scope is required"):
+        ToolSpec(
+            name="read_anything",
+            description="read from somewhere",
+            input_schema={"type": "object"},
+            acts_as=ActsAs.SERVICE,
+            scope="",
+            surface=Surface.MAIL,
+            side_effecting=False,
+            reversible=True,
+            approval=Approval.NONE,
+            idempotency=Idempotency.NONE,
         )
 
 

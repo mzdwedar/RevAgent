@@ -1,4 +1,5 @@
-"""Part 4: the ledger has to know about intent, not only about success.
+"""Runtime, workflows, durable execution: the ledger has to know about intent, not only about
+success.
 
 `record()` ran after `commit()` returned, so the ledger only ever knew about effects
 that had already come back. `RecordingClient` never fails, which is why every

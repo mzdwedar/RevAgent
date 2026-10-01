@@ -29,7 +29,7 @@ Verified directly: a node that increments a counter, calls `interrupt()`, then
 increments another, shows `{"before": 2, "after": 1}` across a pause and a resume. On
 resume the node re-enters from the top and `interrupt()` returns the resume value.
 
-This is the Part 4 failure mode with a new face. Any side effect placed before an
+This is the durable-execution failure mode with a new face. Any side effect placed before an
 `interrupt()` in the same node happens twice. The two-phase idempotency ledger would
 catch a repeated commit - but relying on the safety net to excuse the structure is how
 the net ends up load-bearing.

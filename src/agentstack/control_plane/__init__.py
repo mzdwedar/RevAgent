@@ -2,7 +2,8 @@
 
 Takes an inbound event, resolves it to a session, loads the authoritative record and
 the working state, and hands the runtime a *bounded view* for this turn. Three things
-it keeps apart (Part 3): the transcript (what happened), the working state (the live
+it keeps apart (Control plane & session ownership): the transcript (what happened), the working
+state (the live
 scratchpad) and memory (durable state that lives outside the session, in layer 5).
 """
 

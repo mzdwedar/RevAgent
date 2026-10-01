@@ -1,4 +1,5 @@
-"""Part 6: a schema validates shape - so it has to actually be used to validate shape.
+"""Tools, MCP, capability surfaces: a schema validates shape - so it has to actually be used to
+validate shape.
 
 `input_schema` was declared on every tool, checked at construction for a "type" key,
 and then never consulted again. Every prepare() function was doing ad-hoc coercion on

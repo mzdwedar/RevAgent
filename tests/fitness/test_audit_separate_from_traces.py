@@ -1,4 +1,5 @@
-"""Part 8: traces explain execution; audit records preserve accountability."""
+"""Observability, evaluation, feedback: traces explain execution; audit records preserve
+accountability."""
 
 from __future__ import annotations
 
@@ -152,7 +153,8 @@ def test_deleting_the_run_does_not_delete_what_it_was_accountable_for(
 
     "We deleted the session" is not an answer to "who authorised this rollout". An
     audit trail that a retention job can erase as a side effect of tidying up is a
-    debug log with a longer TTL, which is the Part 8 boundary collapsing.
+    debug log with a longer TTL, which is the Observability, evaluation, feedback boundary
+    collapsing.
     """
     first = handle(stack, event, scopes=SCOPES, run=run)
     approve_and_resume(stack, first, run)

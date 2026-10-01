@@ -1,4 +1,4 @@
-"""Parts 7 and 8: an approval binds to the state of the thing being changed.
+"""Identity, trust, policy, approvals: an approval binds to the state of the thing being changed.
 
 `state_snapshot` was `bundle.fingerprint()`, computed once before the proposal loop.
 Two consequences the audit named:

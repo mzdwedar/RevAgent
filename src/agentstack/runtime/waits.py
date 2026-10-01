@@ -1,4 +1,4 @@
-"""Waiting is state, not sleep (Part 4).
+"""Waiting is state, not sleep (Runtime, workflows, durable execution).
 
 Human approval, a webhook, a timer, a CI run, a long model job - each pauses a run
 that must survive a process restart. A wait is therefore persisted, and a resume event

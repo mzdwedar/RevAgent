@@ -1,4 +1,4 @@
-"""The request a tool prepares. Preparation is not commitment (Part 7)."""
+"""The request a tool prepares. Preparation is not commitment (Tools, MCP, capability surfaces)."""
 
 from __future__ import annotations
 

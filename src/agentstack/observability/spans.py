@@ -1,4 +1,4 @@
-"""Traces that cross the whole stack, not just the model call (Part 8).
+"""Traces that cross the whole stack, not just the model call (Observability, evaluation, feedback).
 
 A trace that stops at the model call cannot answer why a run did what it did: the
 decisions that mattered happened in context assembly, tool exposure, policy and
@@ -32,7 +32,8 @@ REQUIRED_SPANS: frozenset[str] = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class VersionStamp:
-    """What a run was made of, so a trace can be reconstructed later (Part 8)."""
+    """What a run was made of, so a trace can be reconstructed later (Observability, evaluation,
+    feedback)."""
 
     prompt: str
     model: str
@@ -85,7 +86,7 @@ class SpanSink(Protocol):
     activity has no such caller: the workflow must never hold spans, because what it
     holds is written into history. So the activity exports them here, and the
     composition root decides where "here" is. Never the audit sink: traces explain,
-    audit records account (Part 8).
+    audit records account (Observability, evaluation, feedback).
     """
 
     def export(self, spans: Sequence[Span]) -> None: ...

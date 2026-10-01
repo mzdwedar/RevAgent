@@ -1,6 +1,6 @@
 # STACK.md — layer ledger
 
-Derived from *The Agent Stack*, Parts 1–8. This file exists so that when something
+Derived from *The Agent Stack*. This file exists so that when something
 breaks, the question **"which layer failed?"** has an answer instead of "the agent
 hallucinated".
 
@@ -24,7 +24,7 @@ a convenience.
 | 9 | Observability, evaluation, feedback | `agentstack.observability` | trace sink (`SpanSink`; the worker writes one JSON line per span) **and a separate** audit sink: Postgres schema `audit` | Traces cross the whole stack, not just the model call. Audit records are not debug logs: they live in their own schema so access and retention can differ, and they carry **no** foreign key onto `runs` — deleting the session deletes the operational record and leaves the accountability record standing. Evaluation judges the path, not only the answer. A failure is not closed until it is a regression case. An activity exports its own spans, tagged with the run and session and never with Temporal's ids, because its caller is the workflow and a workflow never holds spans. Temporal history is not a record of anything: nothing in the package reads it. | enforced |
 | 10 | Infrastructure substrate | `agentstack.storage` | Postgres (`docker-compose.yml` in dev); the Temporal server, with its own database | Mostly inherited: delivery, consistency, isolation and failure semantics are recorded as assumptions in `SPEC.md` (Foundation Assumptions) and must be stated before the runtime depends on them. What *is* written is the seam onto it — one pooled connection factory, one migration runner, and the rule that only this package holds the driver (`lint-imports` contract 5, [ADR-0005](docs/adr/0005-state-substrate-and-migrations.md)). The schema is versioned: an applied migration is immutable and a version gap is refused. Temporal is substrate for position only ([ADR-0009](docs/adr/0009-temporal-production-hosting.md)): its history is kept for a retention window and rewritten by a reset, so nothing that must be remembered — a claim, an approval, an audit record — lives there. The worker refuses to poll without preflight and a reachable server, and `tests/infra` fails, never skips, when the server is down. | enforced |
 
-## The six boundary confusions (Part 1)
+## The six boundary confusions
 
 Collapsing any of these pairs is the root cause of most agent failures. Every review
 and every `/stack-audit` asks these six questions.

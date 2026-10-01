@@ -29,8 +29,8 @@ It is the wrong answer for the agent's own state:
   through the one module whose value is having no bypass.
 - Contract 2 forbids `agentstack.context`, `agentstack.tools` and `agentstack.model`
   from importing `agentstack.execution` at all. Under the literal reading,
-  `context.memory` could never be persisted — Part 5's memory store would have to stay
-  in RAM to satisfy a Part 7 rule.
+  `context.memory` could never be persisted — the context layer's memory store would have to stay
+  in RAM to satisfy an execution-surfaces rule.
 - "Surface" would mean two different things, which is precisely the boundary collapse
   the whole ledger exists to prevent.
 

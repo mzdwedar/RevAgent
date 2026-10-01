@@ -1,4 +1,4 @@
-"""Cohort snapshots: the population an experiment is defined against (Part 5).
+"""Cohort snapshots: the population an experiment is defined against (Context, retrieval, memory).
 
 An experiment's result is only interpretable against the data it was defined on. So a
 snapshot carries a **watermark** - `data_as_of` - and that watermark is derived from

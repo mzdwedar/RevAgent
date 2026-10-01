@@ -1,4 +1,4 @@
-"""Part 1: layers only depend downward, and only one of them touches the world.
+"""The layer model: layers only depend downward, and only one of them touches the world.
 
 `lint-imports` is the verdict named in CONSTRAINTS.md; this test runs it so a single
 `pytest tests/fitness` is enough to know whether the architecture still holds.
@@ -27,7 +27,7 @@ CLIENT_MODULES = {
 
 # Which layer may hold which real client, and nothing beyond it.
 #
-# `execution` is the gateway (Part 7): the systems the agent acts upon. `storage` is
+# `execution` is the gateway (Execution surfaces): the systems the agent acts upon. `storage` is
 # the substrate (layer 10, ADR-0005): the agent's own state. They are exempt from
 # different things, which is the whole reason they are two entries and not one list -
 # storage holding an HTTP client would be exactly as wrong as runtime holding a driver.
@@ -73,7 +73,7 @@ def test_only_the_named_layers_import_a_real_client() -> None:
             ):
                 offenders.append(f"{path.relative_to(SRC)} imports {module}")
     assert not offenders, (
-        "capability exposure is not execution authority (Part 7), and the state "
+        "capability exposure is not execution authority (Execution surfaces), and the state "
         "substrate is not an execution surface (ADR-0005).\n" + "\n".join(offenders)
     )
 

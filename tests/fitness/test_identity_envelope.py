@@ -1,4 +1,5 @@
-"""Part 7: every side effect carries a complete, narrow, expiring identity envelope."""
+"""Identity, trust, policy, approvals: every side effect carries a complete, narrow, expiring
+identity envelope."""
 
 from __future__ import annotations
 

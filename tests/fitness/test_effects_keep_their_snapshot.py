@@ -1,4 +1,5 @@
-"""Parts 4 and 7: no tool's own effect moves the snapshot its approval is checked against.
+"""Runtime, workflows, durable execution and Identity, trust, policy, approvals: no tool's own
+effect moves the snapshot its approval is checked against.
 
 An approval binds to a state snapshot, and a stale one is refused. A rerun of an act
 whose answer was lost (the process died between the surface applying the effect and

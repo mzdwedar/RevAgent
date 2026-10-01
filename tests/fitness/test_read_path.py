@@ -1,4 +1,5 @@
-"""Parts 6 and 7: a read and a commit are not the same action, so they are not one verb.
+"""Tools, MCP, capability surfaces and Execution surfaces: a read and a commit are not the same
+action, so they are not one verb.
 
 The surface used to expose only `commit() -> str`. Two things followed. A read had no
 way to return what it read - `ExecutionResult.receipt` is an opaque string - so the

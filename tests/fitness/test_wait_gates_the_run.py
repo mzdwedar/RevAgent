@@ -1,4 +1,5 @@
-"""Part 3: satisfying the wait is a precondition of continuing, not a parallel ritual.
+"""Runtime, workflows, durable execution: satisfying the wait is a precondition of continuing, not a
+parallel ritual.
 
 `run_turn` parked a wait and then never read `deps.waits` on the way in, and `handle`
 just called `run_turn` again. In every driver - the CLI, the eval runner, the test

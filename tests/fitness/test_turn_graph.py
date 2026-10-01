@@ -1,4 +1,5 @@
-"""Part 4: the turn is a checkpointed graph, and the checkpoint has to be real.
+"""Runtime, workflows, durable execution: the turn is a checkpointed graph, and the checkpoint has
+to be real.
 
 Two of these exist because the LangGraph defaults are wrong for this system, which was
 found by reading the package rather than by trusting it (ADR-0006): checkpoints are
@@ -224,7 +225,8 @@ def test_every_node_checks_the_run_it_was_handed() -> None:
 def test_an_unsatisfied_wait_never_reaches_the_model(
     stack: Stack, event: InboundEvent, run: Run
 ) -> None:
-    """The Part 3 gate, now a graph edge rather than an early return."""
+    """The Runtime, workflows, durable execution gate, now a graph edge rather than an early
+    return."""
     first = handle(stack, event, scopes=SCOPES, run=run)
     assert first.status == "awaiting_approval"
 

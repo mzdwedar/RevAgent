@@ -1,4 +1,5 @@
-"""Part 4: one stable id ties input, state, tool calls, waits, approvals and traces."""
+"""Runtime, workflows, durable execution: one stable id ties input, state, tool calls, waits,
+approvals and traces."""
 
 from __future__ import annotations
 

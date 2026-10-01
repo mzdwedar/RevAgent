@@ -77,7 +77,7 @@ def test_an_identifier_field_is_not_a_payload() -> None:
 
 
 def test_the_ingress_does_not_resolve_identity_or_policy() -> None:
-    """Part 1: the tenant on a trigger is a claim. Layer 8 tests it."""
+    """Interfaces & channels: the tenant on a trigger is a claim. Layer 8 tests it."""
     import inspect
 
     from agentstack.interfaces import triggers

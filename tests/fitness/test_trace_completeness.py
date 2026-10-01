@@ -1,4 +1,5 @@
-"""Part 8: a trace that stops at the model call cannot explain the run."""
+"""Observability, evaluation, feedback: a trace that stops at the model call cannot explain the
+run."""
 
 from __future__ import annotations
 

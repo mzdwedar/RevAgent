@@ -1,4 +1,4 @@
-"""Named execution surfaces, and the containment around them (Part 7).
+"""Named execution surfaces, and the containment around them (Execution surfaces).
 
 Do not reason about execution in the abstract. The same `call_api` label over a public
 weather endpoint and over a production database are different risk classes, and only
@@ -57,7 +57,7 @@ class SurfaceClient(Protocol):
     def commit(self, resource: str, payload: dict[str, Any]) -> str: ...
 
     def state(self, resource: str) -> tuple[str, ...] | None:
-        """What this resource *is* right now, for binding an approval to it (Part 7).
+        """What this resource *is* right now, for binding an approval to it (Execution surfaces).
 
         Never shown to the model: it's hashed into a state snapshot and nothing else.
         It describes the thing an approver decided about, not where it is in its

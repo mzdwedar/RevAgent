@@ -1,4 +1,4 @@
-"""The Ollama adapter's half of the interaction contract (Part 2).
+"""The Ollama adapter's half of the interaction contract (Model engine & inference).
 
 What the adapter owes the layers above it: report faithfully what the model said, and
 nothing more. The tool name may not be one that was offered and the arguments may be
@@ -91,7 +91,8 @@ def test_the_context_window_is_set_explicitly() -> None:
 
 
 def test_the_context_window_is_reported_as_the_asset_window() -> None:
-    """Part 2: the asset is described separately from whoever serves it, and the two
+    """Model engine & inference: the asset is described separately from whoever serves it, and the
+    two
     must not disagree about how much it can be told."""
     model, _ = engine()
 

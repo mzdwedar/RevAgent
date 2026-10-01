@@ -1,4 +1,5 @@
-"""Validating model-proposed arguments against the declared schema (Part 6).
+"""Validating model-proposed arguments against the declared schema (Tools, MCP, capability
+surfaces).
 
 A schema validates shape. That is a small claim, but it only holds if something
 actually checks it: an `input_schema` that is never consulted validates nothing, and

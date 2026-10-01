@@ -1,4 +1,5 @@
-"""Part 5: memory is written on purpose, scoped, and maintained off the hot path."""
+"""Context, retrieval, memory: memory is written on purpose, scoped, and maintained off the hot
+path."""
 
 from __future__ import annotations
 
@@ -86,7 +87,8 @@ def test_only_the_memory_module_writes_to_the_store() -> None:
                 if "memory" in str(target).lower() or "store" in str(target).lower():
                     offenders.append(f"{path.relative_to(SRC)}:{node.lineno}")
     assert not offenders, (
-        "memory.write() is the only door into durable memory (Part 5): " + ", ".join(offenders)
+        "memory.write() is the only door into durable memory (Context, retrieval, memory): "
+        + ", ".join(offenders)
     )
 
 

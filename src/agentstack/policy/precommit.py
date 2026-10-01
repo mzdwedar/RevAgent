@@ -1,4 +1,4 @@
-"""What permits a `PRE_COMMIT` action when no human is woken (Part 7).
+"""What permits a `PRE_COMMIT` action when no human is woken (Identity, trust, policy, approvals).
 
 `PRE_COMMIT` means a rule decides. That is only worth having if the rule can say no -
 a policy that always permits is a tier with a nicer name, which is what this tier was

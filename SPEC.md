@@ -55,7 +55,7 @@ Either trigger wakes the run. It pulls the new cohort data, scores it with TabPF
 
 The run survives process restarts, deploys, and long stretches of nothing happening.
 
-**Why this and why now.** The rails built so far assert Part 4's invariants against waits that last microseconds in a test. A run that waits days for a trigger and resumes correctly after a deploy is the real version of that layer — durable execution chosen "based on retry, wait and resume needs, not demo convenience". Trigger-based waiting strengthens the case rather than weakening it: a timer at least tells you when it will fire, whereas a trigger that may never fire is the harder problem, and the one Part 4 names explicitly as needing a wake-up mechanism that handles indefinite waits.
+**Why this and why now.** The rails built so far assert the Runtime, workflows, durable execution invariants against waits that last microseconds in a test. A run that waits days for a trigger and resumes correctly after a deploy is the real version of that layer — durable execution chosen "based on retry, wait and resume needs, not demo convenience". Trigger-based waiting strengthens the case rather than weakening it: a timer at least tells you when it will fire, whereas a trigger that may never fire is the harder problem, and the one the Runtime, workflows, durable execution layer names explicitly as needing a wake-up mechanism that handles indefinite waits.
 
 **The language model's job is small, deliberately.** TabPFN predicts. The policy is code. The language model drafts the proposal a human reads and explains an abstention in terms a human can check.
 
@@ -392,7 +392,7 @@ src/agentstack/
 experiments/            NEW  policy definitions, thresholds, guardrails
 ```
 
-`prediction/` is deliberately its own thing. TabPFN is an inference engine that is not the language model, and collapsing it into `model/` would make "the model engine" mean two things — the exact ambiguity Part 1 is against.
+`prediction/` is deliberately its own thing. TabPFN is an inference engine that is not the language model, and collapsing it into `model/` would make "the model engine" mean two things — the exact ambiguity the layer model is against.
 
 ---
 
@@ -459,7 +459,7 @@ This feature adds a test level the project does not yet have: **elapsed time and
 |---|---|---|
 | Fitness | the invariants in `STACK.md` | as today |
 | **Durability** | restart, deploy, resume, replay, stalled waits | injectable clock and injectable event source; kill and rebuild the process from the checkpoint store between cycles |
-| Gates | the Part-8 release criteria | `evals/cases/` |
+| Gates | the Observability, evaluation, feedback release criteria | `evals/cases/` |
 | **Policy** | the decision rule itself, and the trigger asymmetry | replay historical experiments with known outcomes; the policy is pure, so this is cheap |
 
 Two things the durability level must actually do, or it proves nothing. Resume has to rebuild from Postgres **in a fresh process** — a checkpoint read back by the process that wrote it demonstrates almost nothing. And the absent-trigger case has to be exercised deliberately: a run whose trigger never arrives is the failure mode this architecture invents.
@@ -502,7 +502,7 @@ The policy level is new and worth its own line: because `decide()` is a pure fun
 | Latency budget | p95 per evaluation ≤ 60s | ≤ 60s; an event-driven run has no latency pressure, which is a luxury worth spending on evidence |
 | Cost budget | — | per evaluation, recorded before first deploy |
 
-Two things this table is designed to stop. **Compatible is not equivalent**: the same weights behind Ollama and behind a cloud serving stack are the same asset and a different system, and tool-call reliability is the property most likely to differ. **The context window is a working set**: `num_ctx` is a number we choose, and the evidence bundle must fit the production setting, not the laptop's. Ollama's own default is smaller than most people assume, and a context window discovered by watching answers get worse is exactly the Part 2 confusion this table exists to prevent — a serving-system setting mistaken for a property of the model. `think=False` belongs here for the same reason: qwen3 is a reasoning model, and its thinking is a property of how it is served, not an answer a human should be shown.
+Two things this table is designed to stop. **Compatible is not equivalent**: the same weights behind Ollama and behind a cloud serving stack are the same asset and a different system, and tool-call reliability is the property most likely to differ. **The context window is a working set**: `num_ctx` is a number we choose, and the evidence bundle must fit the production setting, not the laptop's. Ollama's own default is smaller than most people assume, and a context window discovered by watching answers get worse is exactly the Model engine & inference confusion this table exists to prevent — a serving-system setting mistaken for a property of the model. `think=False` belongs here for the same reason: qwen3 is a reasoning model, and its thinking is a property of how it is served, not an answer a human should be shown.
 
 ---
 

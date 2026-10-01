@@ -10,7 +10,8 @@ be installing a deep-learning stack to do it. `uv sync --extra prediction` insta
 
 On the boundary question: this module downloads model weights over the network, and
 `CONSTRAINTS.md` says only `agentstack.execution` reaches the world. Fetching a model
-asset is not an execution surface. Part 2 separates the model *asset* from the serving
+asset is not an execution surface. Model engine & inference separates the model *asset* from the
+serving
 system from the interaction contract; pulling the asset is closer to pulling a
 container image than to issuing a rollout - it happens once at startup, it is not the
 agent acting on anyone, and it is gated by `licence.preflight` rather than by policy

@@ -1,6 +1,7 @@
 """Step boundaries: recorded progress, so a retry knows what already happened.
 
-Retrying the whole agent after a partial side effect is the classic Part 4 failure:
+Retrying the whole agent after a partial side effect is the classic Runtime, workflows, durable
+execution failure:
 the branch was already pushed, step six failed, the retry pushes again. A step records
 its completion, and a completed step is not re-run on replay.
 

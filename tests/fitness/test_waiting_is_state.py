@@ -1,4 +1,5 @@
-"""Part 4: waiting is persisted state, and a resume event has to prove it belongs.
+"""Runtime, workflows, durable execution: waiting is persisted state, and a resume event has to
+prove it belongs.
 
 Since T3 the waits are rows. That is what makes the word "persisted" checkable: a
 wait now outlives the object that parked it, and a second resume racing the first is

@@ -1,4 +1,5 @@
-"""Part 6 -> 7: preparing an action is not committing one."""
+"""Tools, MCP, capability surfaces -> Execution surfaces: preparing an action is not committing
+one."""
 
 from __future__ import annotations
 

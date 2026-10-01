@@ -1,4 +1,4 @@
-"""Looking is not deciding (Part 8 authority, applied to triggers).
+"""Looking is not deciding (Identity, trust, policy, approvals authority, applied to triggers).
 
 The two trigger kinds wake the same run and do not carry the same authority, and that
 asymmetry is the load-bearing decision in the spec.

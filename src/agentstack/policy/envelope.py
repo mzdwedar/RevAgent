@@ -1,4 +1,4 @@
-"""The identity envelope every side-effecting action carries (Part 7).
+"""The identity envelope every side-effecting action carries (Identity, trust, policy, approvals).
 
 "Run it as the service account" is how a planning error or an injected instruction
 becomes a service-level incident. An envelope forces the questions to be answered per

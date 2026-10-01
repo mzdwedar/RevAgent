@@ -1,4 +1,5 @@
-"""Parts 6 and 7: untrusted content never increases the authority available to a run.
+"""Tools, MCP, capability surfaces and Identity, trust, policy, approvals: untrusted content never
+increases the authority available to a run.
 
 The three tests below walk an injected instruction through the three places it could
 have escalated - the tool menu, the approval gate, and the tenant boundary - and show

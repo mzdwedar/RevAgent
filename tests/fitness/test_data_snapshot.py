@@ -1,4 +1,4 @@
-"""Part 5: a cohort is identified by what it contains, not by when it was read.
+"""Context, retrieval, memory: a cohort is identified by what it contains, not by when it was read.
 
 An experiment's effect estimate is only interpretable against the population it was
 defined on. `data_as_of` is that population's identity, so it has to be derivable from

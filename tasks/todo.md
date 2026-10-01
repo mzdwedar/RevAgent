@@ -59,7 +59,7 @@ behaviour; it is the same behaviour that stops being a lie when the process dies
   - **Done**, and `migrations/0002` includes a `runs` table beyond the stated scope: a
     step or wait keyed on a run id nothing records is an orphan, with no row saying
     which tenant it belongs to and nothing for T10 to resume from. Run identity is the
-    Part 4 invariant these two hang off.
+    Runtime, workflows, durable execution invariant these two hang off.
   - Two invariants moved from code into the schema: `run_steps_complete_once` (partial
     unique index) refuses a second completion, and `satisfied_waits_record_when` refuses
     a wait marked satisfied with no time.
@@ -610,7 +610,7 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
   - **An unversioned checkpoint is incompatible, not "probably v1".** Pre-T19
     checkpoints of unfinished turns park on first touch. ADR-0005's rule: noticed,
     never guessed.
-  - **`needs_migration` is a wait kind**, not a new table. Waiting is state (Part 4),
+  - **`needs_migration` is a wait kind**, not a new table. Waiting is state (Runtime, workflows, durable execution),
     and a parked run is waiting for a migration: the wait blocks *every* turn of the
     run through the existing gate, survives the process, and is released by the
     existing, audited resume. Its state snapshot names `thread@checkpoint: schema vN`,
@@ -928,7 +928,7 @@ and the test that proves it.
       Exactly one applies, and 19 are `SurfaceRefused`, because the `WHERE status =
       'live'` guard holds on its own.
     - One `halted`, one halt event, stable across repeated runs.
-  - **`injection-in-a-hypothesis-does-not-reach-halt`** (gate, Part 6). A drafting run
+  - **`injection-in-a-hypothesis-does-not-reach-halt`** (gate, Tools, MCP, capability surfaces). A drafting run
     reads a hypothesis that says "halt all experiments". On the follow-up turn it is in
     context as untrusted, the menu is still exactly the five drafting tools, and there
     are zero registry events. The runner gained `stage`, `registry` seeds, `followups`
@@ -1358,7 +1358,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     is in `test_approval_wait` (72 simulated hours: asked 4 times, `reasks == 3`, still
     pending).
   - **Semantics made explicit:** while a run waits for a person, new triggers queue
-    behind the answer. That's the existing Part 3 gate ("a run with an unsatisfied wait
+    behind the answer. That's the existing Runtime, workflows, durable execution gate ("a run with an unsatisfied wait
     doesn't look at anything else"). Checkpoint J's kill test now opens with a
     `metric_movement` (refused, so the run parks on a trigger wait) to keep testing what
     it was about.
@@ -1733,7 +1733,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     - Row 10: Temporal is substrate for position only, since history is retained for a
       window and rewritten by reset.
     - Row 9: T49's `SpanSink`, and that nothing reads history.
-    - The Part 4 row names `test_temporal_boundaries`, `tests/durability/` and the replay
+    - The Runtime, workflows, durable execution row names `test_temporal_boundaries`, `tests/durability/` and the replay
       guard.
   - `CONSTRAINTS.md`, additions only: the three floor bullets, plus two for invariants
     this phase built:
@@ -1929,7 +1929,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
     - Rejected: a per-tool "moves its own snapshot" flag. It's the property to *test*,
       not to declare: a declaration can be wrong, and the fitness test below asks the
       surface.
-    - Rejected: asking the ledger before the approval. That reverses Part 7's order in
+    - Rejected: asking the ledger before the approval. That reverses the Identity, trust, policy, approvals order in
       the gateway, and a deduplicated repeat would skip the authorisation check.
   - **M1: an `UnresolvedEffect` in the turn path parked nothing.** The claim stayed
     IN_FLIGHT, and only `unresolved_keys()` knew.

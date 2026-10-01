@@ -1,7 +1,7 @@
 [project]
 name = "revenuecat-agent"
 version = "0.1.0"
-description = "A layered, production agent built to The Agent Stack (Parts 1-8) invariants"
+description = "A layered, production agent built to The Agent Stack invariants"
 requires-python = ">=3.12"
 dependencies = [
     "psycopg[binary]>=3.2",

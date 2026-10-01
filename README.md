@@ -1,7 +1,7 @@
 # revenuecat-agent
 
 A production, multi-user, side-effecting AI agent, built to the invariants in
-[The Agent Stack](https://theagentstack.substack.com/) (Parts 1–8), with those
+[The Agent Stack](https://theagentstack.substack.com/), with those
 invariants enforced by tests and hooks rather than by good intentions.
 
 ## The idea
@@ -74,7 +74,7 @@ are deduplicated instead of rolling out three times.
 | `bash scripts/check_task.sh` | the above + full suite + changed-line coverage + bar integrity | < 90s | turn end (Stop hook) |
 | `bash scripts/check_full.sh` | the above + release gates + secrets + dependencies | minutes | CI |
 | `uv run python scripts/stack_guard.py --base main` | did the bar itself get weakened? | seconds | task end, CI |
-| `uv run python -m evals run --gates` | the Part-8 release gates | seconds | CI |
+| `uv run python -m evals run --gates` | the Observability, evaluation, feedback release gates | seconds | CI |
 
 The hooks in `.claude/settings.json` run the first two automatically and block on
 failure, so the loop fails closed whether or not anyone remembers to run them.

@@ -1,4 +1,5 @@
-"""Part 7: "approval should be specific enough that a person can inspect the action".
+"""Identity, trust, policy, approvals: "approval should be specific enough that a person can inspect
+the action".
 
 The test is not whether the string contains the right substrings. It is whether a
 tired person at 4pm can tell what they are agreeing to. These assertions encode the

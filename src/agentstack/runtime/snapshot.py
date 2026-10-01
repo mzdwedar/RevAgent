@@ -1,4 +1,4 @@
-"""The state an approval is bound to (Parts 7 and 8).
+"""The state an approval is bound to (Identity, trust, policy, approvals).
 
 An approval is only meaningful against a described world. The first version of this
 used the prompt's fingerprint for the whole turn, which got two things wrong: every

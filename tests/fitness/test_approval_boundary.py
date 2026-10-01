@@ -1,4 +1,5 @@
-"""Part 7: approval sits at the side-effect boundary and binds to a specific action."""
+"""Identity, trust, policy, approvals: approval sits at the side-effect boundary and binds to a
+specific action."""
 
 from __future__ import annotations
 

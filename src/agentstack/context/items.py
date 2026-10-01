@@ -1,6 +1,6 @@
 """What every piece of context has to carry before it is allowed near a prompt.
 
-Part 5: an item without a scope leaks across users or tenants; an item without
+Context, retrieval, memory: an item without a scope leaks across users or tenants; an item without
 provenance and freshness cannot be audited at the failure point; an item without a
 trust label invites a confused deputy two layers up.
 """
@@ -59,6 +59,8 @@ class ContextItem:
 
     def __post_init__(self) -> None:
         if not self.provenance:
-            raise ValueError(f"{self.kind}: provenance is required (Part 5)")
+            raise ValueError(f"{self.kind}: provenance is required (Context, retrieval, memory)")
         if not self.reason:
-            raise ValueError(f"{self.kind}: an inclusion reason is required (Part 5)")
+            raise ValueError(
+                f"{self.kind}: an inclusion reason is required (Context, retrieval, memory)"
+            )

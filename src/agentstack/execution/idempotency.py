@@ -1,4 +1,4 @@
-"""Two-phase idempotency: claim the key, then finalize it (Part 4).
+"""Two-phase idempotency: claim the key, then finalize it (Execution surfaces).
 
 Retry, replay, resume and idempotency are four different things. This module is only
 the fourth, and it gets one thing right that a naive version does not: **it records

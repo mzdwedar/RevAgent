@@ -1,4 +1,4 @@
-"""Approval, bound tightly enough that it means something (Part 7).
+"""Approval, bound tightly enough that it means something (Identity, trust, policy, approvals).
 
 An approval records four things, and all four are load-bearing:
 

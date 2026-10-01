@@ -26,7 +26,7 @@ The E-probes drive the **real** gateway, ledger, approval store and approver dir
 The C-probes compare engines against the **real** `decide` and `require_approval`. Logs are
 in `spikes/temporal/RESULTS-enforcement.txt` and `spikes/policy/RESULTS.txt`.
 
-## Part 1: under Temporal
+## Under Temporal
 
 | Probe | Result |
 |---|---|
@@ -62,7 +62,7 @@ in `spikes/temporal/RESULTS-enforcement.txt` and `spikes/policy/RESULTS.txt`.
 
    ```ini
    [importlinter:contract:N]
-   name = Workflow code has no path to an effect (Part 4 + 7)
+   name = Workflow code has no path to an effect (Runtime, workflows, durable execution and Execution surfaces)
    type = forbidden
    source_modules = agentstack.runtime.workflows
    forbidden_modules =
@@ -80,7 +80,7 @@ An approval has no expiry. A commit activity that retries with backoff could act
 after the "yes". Rule 3 catches a changed world, but not "the approver would no longer
 say yes to this". Consider an approval TTL, checked in `require_approval`.
 
-## Part 2: policy as code
+## Policy as code
 
 | Probe | Result |
 |---|---|

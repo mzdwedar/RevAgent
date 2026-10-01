@@ -1,6 +1,6 @@
 """Layer 8 - identity, trust, policy, approvals.
 
-Four separate controls that are routinely collapsed into one (Part 7):
+Four separate controls that are routinely collapsed into one (Identity, trust, policy, approvals):
 
 * **Policy** decides whether an action is permitted at all.
 * **Approval** decides whether this specific action should happen now.

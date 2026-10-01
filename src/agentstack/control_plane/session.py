@@ -1,4 +1,4 @@
-"""Sessions as isolation boundaries, not as chat history (Part 3).
+"""Sessions as isolation boundaries, not as chat history (Control plane & session ownership).
 
 One user can own many sessions; one session spans many turns. Keying a session on the
 user id looks fine right up until two unrelated tasks share a transcript and a
@@ -24,8 +24,8 @@ class Session:
     def __post_init__(self) -> None:
         if self.session_id == self.user_id:
             raise ValueError(
-                "session_id must not be the user id (Part 3): unrelated tasks would "
-                "share transcript and working state"
+                "session_id must not be the user id (Control plane & session ownership): "
+                "unrelated tasks would share transcript and working state"
             )
 
 

@@ -1,4 +1,5 @@
-"""Part 3: session identity is not user identity, and three stores stay three stores.
+"""Control plane & session ownership: session identity is not user identity, and three stores stay
+three stores.
 
 Since T2 these run against Postgres. That matters more than it sounds: the properties
 here are about what survives, and an in-memory store cannot fail the test that asks.

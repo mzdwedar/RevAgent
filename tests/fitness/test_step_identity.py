@@ -1,4 +1,5 @@
-"""Part 4: a step boundary is only a boundary if it identifies the step.
+"""Runtime, workflows, durable execution: a step boundary is only a boundary if it identifies the
+step.
 
 The key was `execute:{tool_name}`. EchoEngine returns at most one proposal per turn,
 which is why nothing caught it. Real models return several tool calls in one turn and
@@ -221,7 +222,8 @@ def test_a_step_for_a_run_that_does_not_exist_is_refused(stack: Stack) -> None:
 def test_the_run_itself_is_readable_by_a_process_that_did_not_start_it(
     run: Run, app_database: Database, checkpointer: Any
 ) -> None:
-    """Part 4's anchor. A step or a wait keyed on a run nothing recorded is an orphan."""
+    """Runtime, workflows, durable execution's anchor. A step or a wait keyed on a run nothing
+    recorded is an orphan."""
     restarted = build_stack(app_database, checkpointer, tenant=TENANT)
 
     found = restarted.runs.get(run.run_id)

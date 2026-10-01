@@ -11,7 +11,7 @@ was ever read by `check()`.
 
 A `/stack-audit` finding put it precisely: a declared-but-unenforced control is worse
 than an absent one, because a reviewer sees a configured allowlist and stops looking.
-Part 7 calls the same thing sandboxing-as-theater.
+The execution-surfaces layer calls the same thing sandboxing-as-theater.
 
 ## Decision
 

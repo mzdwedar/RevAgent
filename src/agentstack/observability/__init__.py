@@ -2,7 +2,7 @@
 
 Observability produces evidence. Evaluation judges it. They are different jobs and
 they live in different places: `Tracer` is for debugging, `AuditSink` is for
-accountability, and they are deliberately not the same sink (Part 8).
+accountability, and they are deliberately not the same sink (Observability, evaluation, feedback).
 """
 
 from agentstack.observability.audit import AuditRecord, AuditSink

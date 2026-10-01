@@ -1,4 +1,5 @@
-"""Asking a human, in Slack (Part 1, and Part 7's choke point made visible).
+"""Asking a human, in Slack (Interfaces & channels, and the Execution surfaces choke point made
+visible).
 
 This is a channel, not an execution surface. It carries a question out and, in T15, a
 claim back; it changes no business state, and routing the approval request through the

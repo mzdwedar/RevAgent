@@ -4,7 +4,7 @@
 set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
-context="This project is built to The Agent Stack (Parts 1-8).
+context="This project is built to The Agent Stack.
 
 Before writing code:
   1. Read CONSTRAINTS.md. Do not weaken it to make a change pass.

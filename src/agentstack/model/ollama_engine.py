@@ -1,11 +1,12 @@
-"""A model engine over a locally served Ollama model (Part 2).
+"""A model engine over a locally served Ollama model (Model engine & inference).
 
 Named `ollama_engine` and not `ollama`, because a module that imports a top-level
 package of its own name is a trap for the first person who adds a relative import.
 
 **Why this package may talk to a serving system.** `CONSTRAINTS.md` says only
 `agentstack.execution` reaches the world, and `lint-imports` contract 3 forbids this
-package an HTTP client of its own. Neither is bent here. Part 2 separates the model
+package an HTTP client of its own. Neither is bent here. Model engine & inference separates the
+model
 *asset* from the *serving system* from the *interaction contract*: this module owns the
 contract and uses the serving system's own client to reach it. The agent does not act
 *on* Ollama any more than it acts on Postgres - it thinks with one and remembers in the
@@ -36,7 +37,8 @@ DEFAULT_HOST = "http://localhost:11434"
 
 # Explicit, and recorded in SPEC.md's Foundation Assumptions. Ollama's own default is
 # smaller than most people assume, and a context window discovered by watching answers
-# get worse is the Part 2 confusion in miniature - a serving-system setting mistaken
+# get worse is the Model engine & inference confusion in miniature - a serving-system setting
+# mistaken
 # for a property of the model.
 DEFAULT_NUM_CTX = 8192
 DEFAULT_MAX_OUTPUT_TOKENS = 1024

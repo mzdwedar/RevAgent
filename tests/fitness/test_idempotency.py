@@ -1,4 +1,4 @@
-"""Part 4: the same side effect, requested twice, happens once."""
+"""Execution surfaces: the same side effect, requested twice, happens once."""
 
 from __future__ import annotations
 

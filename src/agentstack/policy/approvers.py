@@ -1,4 +1,4 @@
-"""Who may approve, and for whom (Part 8, criterion 25).
+"""Who may approve, and for whom (Identity, trust, policy, approvals, criterion 25).
 
 The Slack adapter reads a user id off an interaction and passes it on. It has no
 opinion about whether that person may approve anything, and it should not: authorising

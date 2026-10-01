@@ -1,4 +1,4 @@
-"""Retrieval supplies candidates (Part 5).
+"""Retrieval supplies candidates (Context, retrieval, memory).
 
 A similarity score means "this looks related". It does not mean "this should govern
 the answer", and it says nothing about whether the reader is allowed to see it.

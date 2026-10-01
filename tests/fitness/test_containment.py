@@ -1,4 +1,4 @@
-"""Part 7: containment is bounded on every dimension it claims to bound.
+"""Execution surfaces: containment is bounded on every dimension it claims to bound.
 
 `Sandbox` documents itself as naming every dimension "so an empty one is an obvious
 omission". That only holds if a declared dimension is actually read. A configured

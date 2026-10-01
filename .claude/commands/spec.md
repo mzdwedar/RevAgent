@@ -13,7 +13,7 @@ of this repo is that layer ownership is decided before code, not discovered afte
    adds to each, and the fitness test that will prove it. Untouched layers are marked
    so explicitly; a blank row means nobody thought about it.
 
-2. **Foundation Assumptions** (Part 2) — the delivery semantics, consistency model,
+2. **Foundation Assumptions** — the delivery semantics, consistency model,
    isolation and failure behavior this feature inherits; the model asset, serving
    system and interaction contract as three separate choices; and the context, latency
    and cost budgets. State them. Do not discover them in production.

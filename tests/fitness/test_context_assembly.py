@@ -1,4 +1,5 @@
-"""Part 5: context is a derived, inspectable, scoped working set - not the transcript."""
+"""Context, retrieval, memory: context is a derived, inspectable, scoped working set - not the
+transcript."""
 
 from __future__ import annotations
 

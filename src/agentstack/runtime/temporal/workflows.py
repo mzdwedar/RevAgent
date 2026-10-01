@@ -329,7 +329,8 @@ class ExperimentWorkflow:
             return TurnOutcome(status="refused", refusal=refusal or type(cause).__name__)
 
     async def _wait_for_trigger(self) -> None:
-        """Waiting is state (Part 4). The `waits` row says what the run is waiting for
+        """Waiting is state (Runtime, workflows, durable execution). The `waits` row says what the
+        run is waiting for
         and by when; this only decides when to look again.
 
         Past the deadline nothing expires. The run is overdue, `operator stalled` says

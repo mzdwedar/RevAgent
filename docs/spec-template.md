@@ -15,7 +15,7 @@ whole point is that layer ownership is decided before code, not discovered after
 ## Code Style
 ## Testing Strategy
 
-## Layer Ownership Ledger  *(Part 1)*
+## Layer Ownership Ledger  *(the layer model)*
 
 Which layers does this change touch, and what does it add to each?
 
@@ -32,7 +32,7 @@ Which layers does this change touch, and what does it add to each?
 | 9 Observability / evaluation | | | |
 | 10 Infrastructure | | | |
 
-## Foundation Assumptions  *(Part 2)*
+## Foundation Assumptions  *(foundation)*
 
 Lower-layer constraints this feature inherits. State them; do not discover them.
 
@@ -48,7 +48,7 @@ Lower-layer constraints this feature inherits. State them; do not discover them.
 > Compatible is not equivalent. An OpenAI-compatible endpoint is not evidence of
 > equivalent scheduler, cache or latency behavior. Benchmark with real request shapes.
 
-## Boundary Decisions  *(Part 1's six confusions, answered explicitly)*
+## Boundary Decisions  *(the six boundary confusions, answered explicitly)*
 
 | Question | Decision |
 |---|---|

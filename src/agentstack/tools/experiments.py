@@ -1,4 +1,4 @@
-"""The Experiment Operator's own capabilities (Part 6).
+"""The Experiment Operator's own capabilities (Tools, MCP, capability surfaces).
 
 Two tools, and the difference between them is the whole design:
 

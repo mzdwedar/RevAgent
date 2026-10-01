@@ -1,6 +1,6 @@
 """The single choke point between "the model asked" and "the world changed".
 
-Order matters here, and it is the order Part 7 argues for:
+Order matters here, and it is the order Execution surfaces argues for:
 
 0. **Binding** - is this request the spec's own: its tool, surface, verb, fixed values?
 1. **Policy** - is this permitted at all?

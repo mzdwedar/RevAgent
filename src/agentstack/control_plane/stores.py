@@ -1,4 +1,4 @@
-"""Three stores, named, and now durable (Part 3).
+"""Three stores, named, and now durable (Control plane & session ownership).
 
 The session record says who owns a piece of work. The transcript is the authoritative
 record of what occurred. The working state is the mutable scratchpad for the live

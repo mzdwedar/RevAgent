@@ -3,7 +3,7 @@
 Note what `decide` does *not* take: model output, tool output, or retrieved text.
 Untrusted content must never increase the authority available to a run, and the
 cheapest way to guarantee that is to give the authority decision no way to see it
-(Part 7, the confused deputy).
+(Identity, trust, policy, approvals, the confused deputy).
 """
 
 from __future__ import annotations

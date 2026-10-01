@@ -1,4 +1,4 @@
-"""The turn, as a graph (Part 4).
+"""The turn, as a graph (Runtime, workflows, durable execution).
 
 `run_turn` was a straight line with early returns. It is now the same straight line
 with the branches named, checkpointed after every node, so a turn that dies halfway
@@ -241,7 +241,8 @@ def build_turn_graph(checkpointer: Any) -> Any:
     graph.add_conditional_edges(
         "check_waits",
         # A run with an unsatisfied wait does not get to look at anything else. This
-        # is the Part 3 gate, now an edge rather than an early return.
+        # is the Runtime, workflows, durable execution gate, now an edge rather than an early
+        # return.
         lambda state: END if state.get("status") == "blocked" else "assemble",
         {END: END, "assemble": "assemble"},
     )

@@ -5,7 +5,7 @@ A tool definition is a capability surface, not a permission. It says what may be
 and what it would take to approve. Whether it happens is decided one layer up.
 
 Nothing in this package performs I/O. A tool prepares an `ActionRequest`; only
-`agentstack.execution.gateway` commits one (Part 6 -> Part 7).
+`agentstack.execution.gateway` commits one (Tools, MCP, capability surfaces -> Execution surfaces).
 """
 
 from agentstack.tools.action import ActionRequest

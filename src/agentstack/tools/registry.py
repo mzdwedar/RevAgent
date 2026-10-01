@@ -2,7 +2,7 @@
 
 Exposing every tool on every run is the cheapest way to hand a prompt injection a
 menu. `expose_for` narrows the menu to the tools this tenant, at this stage of this
-workflow, is meant to be able to request (Part 6).
+workflow, is meant to be able to request (Tools, MCP, capability surfaces).
 """
 
 from __future__ import annotations

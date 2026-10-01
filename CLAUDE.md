@@ -1,7 +1,7 @@
 # revenuecat-agent
 
 A production, multi-user, side-effecting AI agent, built to the invariants in
-*The Agent Stack* (Parts 1–8).
+*The Agent Stack*.
 
 ## Before writing any code
 
@@ -37,7 +37,7 @@ bash scripts/check_fast.sh               # every edit   (<5s)
 bash scripts/check_task.sh               # turn end     (<90s)
 bash scripts/check_full.sh               # CI           (minutes)
 uv run pytest tests/fitness -v           # the architecture bar
-uv run python -m evals run --gates       # Part-8 release gates
+uv run python -m evals run --gates       # Observability, evaluation, feedback release gates
 uv run agentstack-migrate status         # schema: applied vs pending
 uv run agentstack-operator stalled --older-than 7d   # trigger waits past their deadline
 uv run pytest tests/live                 # real cohorts + real model (needs data/, token)

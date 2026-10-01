@@ -1,4 +1,4 @@
-"""The interaction contract (Part 2).
+"""The interaction contract (Model engine & inference).
 
 Two things this module is careful about:
 
@@ -16,7 +16,7 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class ModelAsset:
-    """The weights, separate from whoever serves them (Part 2)."""
+    """The weights, separate from whoever serves them (Model engine & inference)."""
 
     name: str
     context_window: int

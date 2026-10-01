@@ -7,7 +7,7 @@ fail=0
 # Includes both deploy guards, checkpoint_guard and replay_guard: cheap enough for turn end.
 bash scripts/check_task.sh || fail=1
 
-echo "----- release gates (Part 8)"
+echo "----- release gates (Observability, evaluation, feedback)"
 uv run python -m evals run --gates || fail=1
 
 echo "----- dependencies"

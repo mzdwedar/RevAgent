@@ -1,4 +1,4 @@
-"""Assembling the bounded working set for one turn (Part 5).
+"""Assembling the bounded working set for one turn (Context, retrieval, memory).
 
 `assemble` is a pure function of named inputs. That is the whole design: the prompt
 context becomes a derived, inspectable, reproducible value that can be snapshot into

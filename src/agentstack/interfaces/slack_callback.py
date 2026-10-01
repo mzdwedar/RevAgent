@@ -1,4 +1,4 @@
-"""Slack's answer coming back, and proving it is Slack's (Part 1).
+"""Slack's answer coming back, and proving it is Slack's (Interfaces & channels).
 
 Three checks, and each catches something the others do not:
 

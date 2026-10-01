@@ -1,4 +1,4 @@
-"""What the approver actually reads (Part 7).
+"""What the approver actually reads (Identity, trust, policy, approvals).
 
 "Approval should be specific enough that a person can inspect the action." A vague
 "proceed with task?" trains people to click through; so does a technically complete
