@@ -1,0 +1,12 @@
+# Reviewed false positives from gitleaks' generic-api-key rule. Each is a
+# fingerprint (commit:file:rule:line), so only these exact findings are
+# suppressed; a new secret anywhere else still fails the gate.
+
+# Fake HMAC signing secret used as a test fixture.
+e977dc1a4df0c4cc0e6ea0b583c6a6717acac0a5:tests/fitness/test_approver_authorisation.py:generic-api-key:34
+# The same fake fixture literal.
+ea5f8ca74a761f331bf3bc4246727049a1935e1d:tests/fitness/test_slack_inbound.py:generic-api-key:39
+# Fake bearer token used as a test fixture.
+4c1b445c3e81dc2675dded37f93e50037953c77d:tests/fitness/test_prediction_gate.py:generic-api-key:30
+# `_Entry(key=key, claimed_at=...)`: an in-memory claim key, not a credential.
+7531424d8ccc3af22ef50ecd2c40e424a391bc60:src/agentstack/execution/idempotency.py:generic-api-key:60
