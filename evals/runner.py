@@ -231,6 +231,7 @@ def _run_rollout_case(case: Case, db: Database, checkpointer: Any, started: floa
             scorer=_NoScoring(),
             trigger_deadline=timedelta(days=1),
             traces=CollectingSink(),
+            versions=stack.deps.versions,
             audit=stack.audit,
             turns=turns,
         )
