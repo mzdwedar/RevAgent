@@ -63,12 +63,12 @@ ACT_TIMEOUT = timedelta(seconds=30)
 CONTINUE_EVERY = 100
 
 
-
 def _a_cancel_is_not_a_refusal(exc: ActivityError) -> None:
     """A cancelled run's activity comes back as an ActivityError too. Reading it as the
     activity's refusal would answer for the run and carry on, so the cancel is lost."""
     if isinstance(exc.cause, CancelledError) and workflow.patched("a-cancel-ends-the-run"):
         raise exc
+
 
 @workflow.defn
 class ExperimentWorkflow:
