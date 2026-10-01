@@ -105,7 +105,7 @@ their position in the *order* is here.)
     real sample: 29,928 rows, churn 8.9%, max |corr| with the label 0.40 (days since last event);
     `bd` missing 60%, tenure unknown 11.5%.
 
-- [ ] **K6: register `kkbox-churn`, targetable** · layer 5 · *M*
+- [x] **K6: register `kkbox-churn`, targetable** · layer 5 · *M*
   - Acceptance: `REGISTRY["kkbox-churn"]` (`files=("kkbox-cohort.csv",)`, target
     `is_churn`, drops with reasons, `revenue_columns` = last pre-cutoff `actual_amount_paid`,
     `revenue_periods_per_year=12`, `revenue_note`, `currency="NTD"`); `DatasetSpec.derived_by`
@@ -116,6 +116,14 @@ their position in the *order* is here.)
     targetable, value at risk in NTD; bank-churn refused); `test_the_bar_guards_itself.py`
     stays green.
   - Depends: K1, K5. Files: `datasets.py`, `fetch_datasets.py`, tests (~4).
+
+  - **Done 2026-10-01.** `REGISTRY["kkbox-churn"]` (NTD, `last_actual_amount_paid` x12, `msno` dropped
+    with `kkbox.EXCLUDED`'s reason); `DatasetSpec.derived_by` makes an absent file name
+    `scripts/build_kkbox_cohort.py`; `fetch_datasets.py` skips derived cohorts until built. 6 tests
+    added to `test_kkbox_mapping.py`. **Amendment, flagged:** `test_the_manifest_records_a_watermark_…`
+    now exempts a *derived* cohort that is not yet in the manifest (no `data_as_of` exists before K11);
+    downloaded cohorts and every recorded entry are still checked. **Until K11, `tests/live`
+    parametrised over `REGISTRY` fails for `kkbox-churn`** with "Build it" (no cohort file yet).
 
 ### Checkpoint A: before anything leaves the machine
 - [ ] `bash scripts/check_task.sh`, `uv run pytest tests/fitness`, `uv run lint-imports`,

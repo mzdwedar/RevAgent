@@ -148,7 +148,11 @@ def test_the_manifest_records_a_watermark_for_every_registered_dataset() -> None
             "data/manifest.json is missing; run: uv run python scripts/fetch_datasets.py --record"
         )
 
-    assert set(manifest) == set(datasets.REGISTRY)
+    # A cohort derived by a build script has no watermark until it is built (K11 records it).
+    # That is the only exemption: a downloaded cohort must always be recorded, and anything
+    # recorded must be registered and is checked below.
+    unbuilt = {key for key, spec in datasets.REGISTRY.items() if spec.derived_by} - set(manifest)
+    assert set(manifest) == set(datasets.REGISTRY) - unbuilt
     for key, recorded in manifest.items():
         assert recorded["data_as_of"].startswith(f"{key}:")
         assert recorded["rows"] > 0

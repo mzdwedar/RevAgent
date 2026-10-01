@@ -18,7 +18,8 @@ from types import ModuleType
 import pandas as pd
 import pytest
 
-from agentstack.context import kkbox
+from agentstack.context import datasets, kkbox, targeting
+from agentstack.prediction.churn import ChurnScores
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CUTOFF = 20170228
@@ -449,3 +450,88 @@ def test_two_rows_for_one_user_in_members_or_labels_are_refused() -> None:
         kkbox.to_features(out, pd.DataFrame([member("a"), member("a")]), one)
     with pytest.raises(ValueError, match="one row per msno"):
         kkbox.to_features(out, pd.DataFrame([member("a")]), pd.concat([one, one]))
+
+
+# The registered cohort (agentstack.context.datasets.REGISTRY["kkbox-churn"])
+
+
+def cohort_file(users: int = 20) -> pd.DataFrame:
+    """What `scripts/build_kkbox_cohort.py` writes: `to_features` output, `msno` as a column."""
+    rows = [tx(f"u{i:02d}", 20170115, 20170315, paid=100 + i) for i in range(users)]
+    labels = {f"u{i:02d}": int(i % 4 == 0) for i in range(users)}
+    return build(pd.DataFrame(rows), labels=labels).reset_index()
+
+
+def test_kkbox_is_registered_in_its_own_currency_with_observed_revenue() -> None:
+    spec = datasets.REGISTRY["kkbox-churn"]
+
+    assert spec.target == kkbox.TARGET
+    assert spec.currency == "NTD"
+    assert spec.revenue_columns == ("last_actual_amount_paid",)
+    assert spec.revenue_periods_per_year == 12
+    assert "30" in spec.revenue_note and "annualised" in spec.revenue_note
+
+
+def test_the_cohort_file_loads_with_msno_dropped_for_its_stated_reason() -> None:
+    spec = datasets.REGISTRY["kkbox-churn"]
+    snapshot = datasets.snapshot(spec, cohort_file())
+
+    assert "msno" not in snapshot.columns
+    assert spec.drops["msno"] == kkbox.EXCLUDED["msno"]
+    assert snapshot.churn_rate == pytest.approx(0.25)
+    assert set(snapshot.columns) >= {"last_actual_amount_paid", "tenure_days", "is_churn"}
+
+
+def test_the_same_cohort_file_has_the_same_data_as_of_and_a_changed_cell_moves_it() -> None:
+    spec = datasets.REGISTRY["kkbox-churn"]
+    moved = cohort_file()
+    moved.loc[0, "last_actual_amount_paid"] += 1
+
+    assert (
+        datasets.snapshot(spec, cohort_file()).data_as_of
+        == datasets.snapshot(spec, cohort_file()).data_as_of
+    )
+    assert (
+        datasets.snapshot(spec, moved).data_as_of
+        != datasets.snapshot(spec, cohort_file()).data_as_of
+    )
+
+
+def test_kkbox_is_targetable_and_its_value_at_risk_is_in_ntd() -> None:
+    snapshot = datasets.snapshot(datasets.REGISTRY["kkbox-churn"], cohort_file())
+    scored = ChurnScores(
+        dataset="kkbox-churn",
+        data_as_of=snapshot.data_as_of,
+        model_version="tabpfn-3.5",
+        folds=5,
+        seed=7,
+        probabilities=tuple(i / snapshot.rows for i in range(snapshot.rows)),
+        positives=5,
+    )
+    rule = targeting.TargetingRule(
+        profile="test",
+        risk_quantile=0.9,
+        minimum_cohort=2,
+        minimum_annual_value_at_risk_cents=1_000,
+    )
+    cohort = targeting.select(snapshot, scored, rule=rule)
+
+    # the riskiest decile of 20 is the last two users, paying 118 and 119 a month
+    assert cohort.annual_value_at_risk_cents == (118 + 119) * 100 * 12
+    assert cohort.currency == "NTD"
+    assert "NTD" in cohort.description()["currency"]
+
+
+def test_bank_churn_is_still_loadable_and_still_not_targetable() -> None:
+    assert datasets.REGISTRY["bank-churn"].revenue_columns == ()
+
+
+def test_an_absent_derived_cohort_names_its_build_script_not_the_downloader(
+    tmp_path: pathlib.Path,
+) -> None:
+    spec = datasets.REGISTRY["kkbox-churn"]
+
+    assert spec.derived_by == "scripts/build_kkbox_cohort.py"
+    with pytest.raises(datasets.DatasetError, match="build_kkbox_cohort"):
+        datasets.load("kkbox-churn", root=tmp_path)
+    assert datasets.REGISTRY["telecom-bigml"].derived_by == ""

@@ -38,6 +38,9 @@ KKBOX_FILES = (
 
 def fetch(spec: datasets.DatasetSpec, into: Path) -> None:
     print(f"----- {spec.key}  ({spec.kaggle})")
+    if spec.derived_by:
+        print(f"  derived, not downloaded: {spec.derived_by} (after --kkbox)")
+        return
     if all((into / name).exists() for name in spec.files):
         print("  already present")
         return
@@ -98,7 +101,10 @@ def main() -> int:
         fetch(spec, args.data)
 
     manifest = {}
-    for key in datasets.REGISTRY:
+    for key, spec in datasets.REGISTRY.items():
+        if spec.derived_by and not all((args.data / name).exists() for name in spec.files):
+            print(f"  {key}: not built yet, left out of the manifest")
+            continue
         snapshot = datasets.load(key, root=args.data)
         manifest[key] = snapshot.summary()
         print(f"  {key}: {snapshot.rows} rows, churn {snapshot.churn_rate:.3f}")

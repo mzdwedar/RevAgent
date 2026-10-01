@@ -27,6 +27,8 @@ from typing import Any
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
 
+from agentstack.context import kkbox
+
 DATA_ROOT = Path(__file__).resolve().parents[3] / "data"
 MANIFEST = Path(__file__).resolve().parents[3] / "data" / "manifest.json"
 
@@ -67,6 +69,10 @@ class DatasetSpec:
     # The currency the revenue columns are in. A figure shown to an approver without
     # its currency is a number the reader supplies a unit for.
     currency: str = "USD"
+    # A cohort that is built from raw tables rather than downloaded whole names the script
+    # that builds it, so an absent file points at the build and not at a downloader that
+    # has nothing by this name. Empty for a cohort Kaggle ships as is.
+    derived_by: str = ""
 
 
 REGISTRY: dict[str, DatasetSpec] = {
@@ -122,6 +128,26 @@ REGISTRY: dict[str, DatasetSpec] = {
         # interest margin, which is a modelling assumption, and the floor is specified
         # against observed ARPU. So this cohort loads and cannot be targeted.
         revenue_note="no observed revenue column; see the comment above",
+    ),
+    "kkbox-churn": DatasetSpec(
+        key="kkbox-churn",
+        kaggle="kkbox-churn-prediction-challenge",
+        files=("kkbox-cohort.csv",),
+        target=kkbox.TARGET,
+        churned="1",
+        # Only the identifier is in the file: the raw registration and expiry dates are
+        # candidates `to_features` omits until a declared comparison keeps them (K13).
+        drops={"msno": kkbox.EXCLUDED["msno"]},
+        revenue_columns=("last_actual_amount_paid",),
+        revenue_periods_per_year=12,
+        revenue_note=(
+            "The last amount the subscriber paid before the 2017-02-28 cutoff, annualised "
+            "x12. Most KKBox plans are 30 days, so this reads one payment as one month; a "
+            "longer plan is under-counted and a 7-day plan is over-counted by the same "
+            "rule. Observed, never predicted: it is what they paid, not what they will."
+        ),
+        currency="NTD",
+        derived_by="scripts/build_kkbox_cohort.py",
     ),
 }
 
@@ -207,10 +233,12 @@ def load(key: str, *, root: Path = DATA_ROOT) -> CohortSnapshot:
     paths = [root / name for name in spec.files]
     absent = [p.name for p in paths if not p.exists()]
     if absent:
-        raise DatasetError(
-            f"{key}: {absent} not found under {root}. Fetch them: uv run python "
-            f"scripts/fetch_datasets.py"
+        how = (
+            f"Build it: uv run python {spec.derived_by}"
+            if spec.derived_by
+            else "Fetch them: uv run python scripts/fetch_datasets.py"
         )
+        raise DatasetError(f"{key}: {absent} not found under {root}. {how}")
 
     frame = pd.concat([pd.read_csv(path) for path in paths], ignore_index=True)
     return snapshot(spec, frame)
