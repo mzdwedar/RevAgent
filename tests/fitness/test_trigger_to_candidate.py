@@ -159,6 +159,18 @@ def test_the_reason_is_readable_by_a_person() -> None:
     assert "at risk" in evaluation.reason
 
 
+def test_the_reason_states_the_cohorts_currency() -> None:
+    """The reason is recorded in workflow history, so the USD string is pinned exactly:
+    a change to it would make a recorded history disagree with this code."""
+    usd = evaluate_trigger(trigger(), scorer=StubScorer(), rule=RULE)
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+    ntd = evaluate_trigger(trigger(), scorer=StubScorer(), rule=RULE)
+
+    assert usd.reason.endswith("$24,000 at risk")
+    assert ntd.reason.endswith("NTD 24,000 at risk")
+    assert "$" not in ntd.reason
+
+
 def test_the_same_trigger_produces_the_same_experiment_version() -> None:
     first = evaluate_trigger(trigger(), scorer=StubScorer(), rule=RULE)
     second = evaluate_trigger(trigger(), scorer=StubScorer(), rule=RULE)
