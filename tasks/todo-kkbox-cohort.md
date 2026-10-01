@@ -147,7 +147,7 @@ their position in the *order* is here.)
     is allowed); `stack_guard.py --base main` reports a tightening, not a weakening.
   - Depends: none. Files: `pyproject.toml`, `uv.lock`, `.importlinter`, test, ADR (~5).
 
-- [ ] **K8: `HostedTabPFNScorer` against a fake client** · layers 7 + 4b (Protocol) · *M*
+- [x] **K8: `HostedTabPFNScorer` against a fake client** · layers 7 + 4b (Protocol) · *M* — **Done 2026-10-01.** `execution/hosted_scorer.py`; `engine._encode` to `encode`; 17 tests in `test_prediction_gate.py` (fake client: out-of-fold, same folds as local, version recorded/refused/moved, wrong host refused before any fit, failure not retried, default seams without a call). Open: `billing_model_version` as the served checkpoint is unverified until K12; upload deletion left to Checkpoint C (ADR-0012 §5).
   - Acceptance: `execution/hosted_scorer.py` implements `ChurnScorer`; reuses
     `fold_assignment` and a **public** `encode` (promoted from `engine._encode`, behaviour
     unchanged); the client is a seam (as `build_classifier`); the PriorLabs host is a

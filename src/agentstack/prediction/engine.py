@@ -131,7 +131,7 @@ class TabPFNScorer:
         if len(features) != len(labels):
             raise ScoringError(f"{len(features)} rows of features, {len(labels)} labels")
 
-        encoded = _encode(features)
+        encoded = encode(features)
         assignment = fold_assignment([int(v) for v in labels], folds=self.folds, seed=self.seed)
         probabilities = [0.0] * len(encoded)
 
@@ -157,8 +157,11 @@ class TabPFNScorer:
         )
 
 
-def _encode(features: pd.DataFrame) -> pd.DataFrame:
+def encode(features: pd.DataFrame) -> pd.DataFrame:
     """Ordinal-encode non-numeric columns, by sorted category.
+
+    Public because the hosted scorer (layer 7) reuses it: encoding stays ours, so a score
+    from either scorer is a function of the same inputs.
 
     Sorted, not by order of appearance: encoding that depends on row order would make
     the same snapshot produce different inputs after a re-sort, and `data_as_of` would

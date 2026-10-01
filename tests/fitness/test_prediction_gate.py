@@ -11,22 +11,30 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from agentstack.execution.hosted_scorer import (
+    PRIORLABS_HOST,
+    HostedClassifier,
+    HostedTabPFNScorer,
+    PriorLabsClassifier,
+)
 from agentstack.interfaces import preflight_cli
 from agentstack.prediction import licence
 from agentstack.prediction.churn import (
+    ChurnScorer,
     ChurnScores,
     RecordedScorer,
     RecordedScorers,
     ScoringError,
     fold_assignment,
 )
-from agentstack.prediction.engine import MODEL_VERSION, TabPFNScorer, _encode
+from agentstack.prediction.engine import MODEL_VERSION, TabPFNScorer, encode
 from agentstack.prediction.licence import LicenceRefused
 
 GOOD_TOKEN = "test-prediction-token"
@@ -155,8 +163,8 @@ def test_category_encoding_does_not_depend_on_row_order() -> None:
     different model inputs, and `data_as_of` would stop implying the same scores."""
     frame = pd.DataFrame({"plan": ["b", "a", "c", "a"], "n": [1.0, 2.0, 3.0, 4.0]})
 
-    forward = _encode(frame)
-    backward = _encode(frame.iloc[::-1]).iloc[::-1]
+    forward = encode(frame)
+    backward = encode(frame.iloc[::-1]).iloc[::-1]
 
     assert list(forward["plan"]) == list(backward["plan"])
 
@@ -611,3 +619,277 @@ def test_the_worker_chooses_recorded_scores_only_when_asked_to(
     monkeypatch.setattr(RecordedScorers, "load", staticmethod(lambda: RecordedScorers({})))
     assert isinstance(worker_cli._scorer("recorded"), RecordedScorers)
     assert isinstance(worker_cli._scorer("tabpfn"), TabPFNScorer)
+
+
+# --- the hosted scorer (layer 7): the same out-of-fold property, over a network seam ---
+
+
+class FakeHostedClient:
+    """Mirrors the verified `tabpfn-client` surface (ADR-0012 4a): fit, predict_proba, and
+    a served version read back after predict. Like `RecordingClassifier`, it is not a
+    stand-in for the vendor; it proves our fold loop and our refusals."""
+
+    fitted: list[set[int]] = []
+    requested: list[str] = []
+    served: str | None = "v3.5+9.1"
+    fail_on_fit: Exception | None = None
+    fit_calls = 0
+
+    def __init__(self, checkpoint: str) -> None:
+        FakeHostedClient.requested.append(checkpoint)
+        self.seen: set[int] = set()
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.fitted = []
+        cls.requested = []
+        cls.served = "v3.5+9.1"
+        cls.fail_on_fit = None
+        cls.fit_calls = 0
+
+    def fit(self, features: pd.DataFrame, labels: pd.Series) -> None:
+        FakeHostedClient.fit_calls += 1
+        if FakeHostedClient.fail_on_fit is not None:
+            raise FakeHostedClient.fail_on_fit
+        assert len(features) == len(labels)
+        self.seen = {int(i) for i in features.index}
+        FakeHostedClient.fitted.append(self.seen)
+
+    def predict_proba(self, features: pd.DataFrame) -> list[tuple[float, float]]:
+        asked = {int(i) for i in features.index}
+        assert not (self.seen & asked), "predicted rows the model was fit on"
+        return [((1000 - i) / 1000, (i + 1) / 1000) for i in range(len(features))]
+
+    def served_model_version(self) -> str | None:
+        return FakeHostedClient.served
+
+
+def hosted(
+    *,
+    build_classifier: Callable[[str], HostedClassifier] = FakeHostedClient,
+    endpoint: Callable[[], str] = lambda: "https://api.priorlabs.ai:443",
+) -> HostedTabPFNScorer:
+    FakeHostedClient.reset()
+    return HostedTabPFNScorer(folds=4, build_classifier=build_classifier, endpoint=endpoint)
+
+
+def score_hosted(scorer: HostedTabPFNScorer, cohort: tuple[pd.DataFrame, pd.Series]) -> ChurnScores:
+    features, labels = cohort
+    return scorer.score(features=features, labels=labels, dataset="d", data_as_of="d:1")
+
+
+def test_the_hosted_scorer_is_a_churn_scorer() -> None:
+    scorer: ChurnScorer = hosted()
+
+    assert scorer.model_version.startswith("priorlabs:")
+
+
+def test_no_row_is_scored_by_a_hosted_model_that_saw_its_label(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    """Fold assignment and encoding stay ours, so the property is checkable even though
+    the model is not: each row's score comes from a fit on the other folds only."""
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+
+    scored = score_hosted(hosted(), cohort)
+
+    assert len(scored.probabilities) == len(cohort[0])
+    assert len(FakeHostedClient.fitted) == 4, "one hosted fit per fold"
+    assert all(len(seen) == len(cohort[0]) * 3 // 4 for seen in FakeHostedClient.fitted)
+    assert all(p > 0.0 for p in scored.probabilities)
+
+
+def test_the_hosted_scorer_uses_the_same_folds_as_the_local_one(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    """Same snapshot and seed, same cohort. Folds are ours in both scorers."""
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    RecordingClassifier.fitted = []
+    features, labels = cohort
+
+    TabPFNScorer(folds=4, build_classifier=RecordingClassifier).score(
+        features=features, labels=labels, dataset="d", data_as_of="d:1"
+    )
+    local = list(RecordingClassifier.fitted)
+    score_hosted(hosted(), cohort)
+
+    assert FakeHostedClient.fitted == local
+
+
+def test_the_served_version_is_recorded_not_assumed(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+
+    scored = score_hosted(hosted(), cohort)
+
+    assert scored.model_version == "priorlabs:v3.5+9.1"
+    assert set(FakeHostedClient.requested) == {"v3.5"}
+
+
+@pytest.mark.parametrize("served", [None, "", "  "])
+def test_a_version_the_service_does_not_report_is_refused(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series], served: str | None
+) -> None:
+    """An experiment whose provenance names a model it cannot name is worse than none."""
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    scorer = hosted()
+    FakeHostedClient.served = served
+
+    with pytest.raises(ScoringError, match="did not report which model version"):
+        score_hosted(scorer, cohort)
+
+
+def test_a_version_that_moves_between_folds_is_refused(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    """One cohort, two models, no honest single label for it."""
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+
+    class Moving(FakeHostedClient):
+        def served_model_version(self) -> str | None:
+            return f"v3.5+{len(FakeHostedClient.fitted)}"
+
+    with pytest.raises(ScoringError, match="changed model version"):
+        score_hosted(hosted(build_classifier=Moving), cohort)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://evil.example:443",
+        "http://api.priorlabs.ai:443",
+        "https://api.priorlabs.ai.evil.example:443",
+        "https://api.priorlabs.ai:8443",
+        "http://localhost:8080",
+    ],
+)
+def test_a_host_other_than_priorlabs_is_refused_before_any_row_leaves(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series], endpoint: str
+) -> None:
+    """`TABPFN_CLIENT_API_URL` can redirect the client; the cohort must not follow it."""
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    scorer = hosted(endpoint=lambda: endpoint)
+
+    with pytest.raises(ScoringError, match="api.priorlabs.ai"):
+        score_hosted(scorer, cohort)
+
+    assert FakeHostedClient.fit_calls == 0
+
+
+def test_a_transport_failure_is_a_scoring_error_not_a_retry_or_a_guess(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    scorer = hosted()
+    FakeHostedClient.fail_on_fit = ConnectionError("quota exceeded")
+
+    with pytest.raises(ScoringError, match="quota exceeded"):
+        score_hosted(scorer, cohort)
+
+    assert FakeHostedClient.fit_calls == 1, "no silent retry, no next fold"
+
+
+def test_the_hosted_scorer_refuses_without_a_token_before_it_calls_out(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    scorer = hosted()
+
+    with pytest.raises(LicenceRefused):
+        score_hosted(scorer, cohort)
+
+    assert FakeHostedClient.fit_calls == 0
+
+
+def test_the_hosted_scorer_refuses_mismatched_features_and_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+
+    with pytest.raises(ScoringError, match="3 rows of features, 2 labels"):
+        hosted().score(
+            features=pd.DataFrame({"x": [1.0, 2.0, 3.0]}),
+            labels=pd.Series([0, 1]),
+            dataset="d",
+            data_as_of="d:1",
+        )
+
+
+def test_without_the_client_extra_the_message_names_it(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    monkeypatch.setitem(sys.modules, "tabpfn_client", None)
+    monkeypatch.setitem(sys.modules, "tabpfn_client.client", None)
+
+    with pytest.raises(ScoringError, match="--extra prediction"):
+        score_hosted(HostedTabPFNScorer(folds=4), cohort)
+
+
+def test_the_adapter_reads_the_version_from_the_predict_metadata() -> None:
+    """The one place we touch the vendor's metadata: `billing_model_version` is the
+    server's own statement, `package_version` the build that ran it."""
+
+    class Underlying:
+        _last_meta: dict[str, object] = {}
+
+        def fit(self, features: pd.DataFrame, labels: pd.Series) -> object:
+            assert len(features) == len(labels)
+            return self
+
+        def predict_proba(self, features: pd.DataFrame) -> list[tuple[float, float]]:
+            return [(0.4, 0.6)] * len(features)
+
+    wrapped = PriorLabsClassifier(Underlying())
+    assert wrapped.served_model_version() is None, "nothing predicted yet, nothing to report"
+
+    Underlying._last_meta = {"package_version": "9.1"}
+    assert wrapped.served_model_version() is None, "no billing_model_version: unrecordable"
+
+    Underlying._last_meta = {"billing_model_version": "v3.5", "package_version": "9.1"}
+    assert wrapped.served_model_version() == "v3.5+9.1"
+
+
+def test_the_pinned_host_is_a_constant() -> None:
+    assert PRIORLABS_HOST == "api.priorlabs.ai"
+
+
+def test_a_scoring_error_from_the_client_passes_through_unwrapped(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    scorer = hosted()
+    FakeHostedClient.fail_on_fit = ScoringError("train set above the service limit")
+
+    with pytest.raises(ScoringError) as caught:
+        score_hosted(scorer, cohort)
+
+    assert str(caught.value) == "train set above the service limit"
+
+
+def test_the_real_client_asks_for_the_named_checkpoint_and_the_pinned_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two seams' defaults, exercised without a call: constructing the client and
+    reading its base URL are local. Telemetry is switched off before the import."""
+    monkeypatch.setenv("TABPFN_DISABLE_TELEMETRY", "1")
+    monkeypatch.delenv("TABPFN_CLIENT_API_URL", raising=False)
+    from agentstack.execution import hosted_scorer
+
+    classifier = hosted_scorer._build_priorlabs_classifier("v3.5")
+
+    assert isinstance(classifier, PriorLabsClassifier)
+    assert classifier._underlying.model_path == "v3.5_default"
+    hosted_scorer.check_host(hosted_scorer._client_endpoint())
+
+
+def test_the_real_client_builder_names_the_extra_when_it_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agentstack.execution import hosted_scorer
+
+    monkeypatch.setitem(sys.modules, "tabpfn_client", None)
+
+    with pytest.raises(ScoringError, match="--extra prediction"):
+        hosted_scorer._build_priorlabs_classifier("v3.5")

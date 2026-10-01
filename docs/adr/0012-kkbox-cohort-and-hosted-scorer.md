@@ -110,6 +110,23 @@ and audited egress. The served model version is recorded or the scorer refuses.
 The service chooses the checkpoint, so recorded scores (local, never committed) define a cohort;
 a live call does not. A moving service cannot move a frozen cohort.
 
+K8 built it as `execution/hosted_scorer.py` (layer 7; scoring is a read, so no ledger entry):
+
+- **Recorded as `priorlabs:<billing_model_version>+<package_version>`**, both from the predict
+  metadata (`_last_meta`, private to the client: it has no public accessor). If either is absent
+  the scorer refuses, and a version that moves between folds is refused. Whether
+  `billing_model_version` is the checkpoint that actually ran is **unverified until K12's live
+  call**; the name suggests billing, and K12 must confirm or replace the field.
+- **Host is pinned** to `https://api.priorlabs.ai:443`, read from what the client *will use*
+  (`ServiceClient.base_url`), because `TABPFN_CLIENT_API_URL` can redirect it. Checked before any row
+  is sent.
+- **No retry of ours, no fallback.** Any failure is a `ScoringError`. The client library retries
+  transport errors itself (it depends on `backoff`); that sits below this seam.
+- **Upload deletion is not decided here.** Deleting what a run uploaded is a second egress call
+  (`delete_all_datasets` would also remove data the account uploaded for other reasons), so it is
+  left to Checkpoint C with the retention statement.
+- `engine._encode` is now `engine.encode` (rename only), shared by both scorers.
+
 ### 6. Data egress (K11, Checkpoint C)
 
 All engineered features are sent; `msno` and raw identifiers are not (modelling drops). Whether
