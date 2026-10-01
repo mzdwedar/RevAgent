@@ -86,6 +86,8 @@ class ExperimentWorkflow:
         self._awaiting: str | None = None
         self._asks = 0
         self._answered: list[str] = []
+        # Approval waits closed unasked because their world moved. Replay rebuilds it.
+        self._withdrawn: list[str] = []
         self._commits: list[CommitOutcome] = []
         self._reconciling: str | None = None
         # How many answers to each reconcile wait the run has acted on. Replay rebuilds it.
@@ -163,12 +165,16 @@ class ExperimentWorkflow:
         if proposed.wait_id is not None and cycle.experiment_version is not None:
             wait_id = proposed.wait_id
             await self._await_approval(wait_id, cycle)
-            while not await self._act(wait_id, cycle):
+            while wait_id not in self._withdrawn and not await self._act(wait_id, cycle):
                 # Woken, and the wait says nobody answered: a stray or forged signal. The
                 # wake is spent, and the run goes back to the question it was on. The
                 # answer that does come later wakes it again, and still counts.
                 self._answered.remove(wait_id)
                 await self._await_approval(wait_id, cycle, asked=True)
+            if wait_id in self._withdrawn:
+                # The question's world moved before anyone answered it again. It was
+                # closed unasked; tell the channel it was put in, and end the proposal.
+                await self._withdraw(wait_id, "superseded")
 
     async def _settled_turn(self, stage: str, cycle: CycleResult) -> TurnOutcome:
         """Take the turn; if it met an effect of unknown outcome, wait for the claim to be
@@ -276,6 +282,8 @@ class ExperimentWorkflow:
             if not asked:
                 await self._ask(wait_id, cycle.experiment_id, cycle.experiment_version)
             asked = False
+            if wait_id in self._withdrawn:
+                break  # the ask closed it: nothing to wait for
             try:
                 await workflow.wait_condition(
                     lambda: wait_id in self._answered, timeout=REASK_EVERY
@@ -306,6 +314,8 @@ class ExperimentWorkflow:
             # pending and visible, and the next interval tries again.
             result = AskResult(answered=False)
         self._asks += 1
+        if result.superseded and wait_id not in self._withdrawn:
+            self._withdrawn.append(wait_id)
         if result.answered and wait_id not in self._answered:
             # The answer was recorded but its signal never came: the timer caught it.
             self._answered.append(wait_id)
@@ -433,5 +443,6 @@ class ExperimentWorkflow:
             answered=tuple(self._answered),
             commits=tuple(self._commits),
             reconciling=self._reconciling,
+            withdrawn=tuple(self._withdrawn),
             cycles_before=self._cycles_before,
         )

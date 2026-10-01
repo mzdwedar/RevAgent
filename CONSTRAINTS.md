@@ -40,6 +40,9 @@ Stack-specific (from `STACK.md`):
 - No approval left standing in silence after the act it was for is refused as stale: the
   approver is told that nothing was committed, the telling is audited, and the run's
   status names the refusal
+- No re-ask of a question whose world has moved: the ask reads the resource again and, if
+  it no longer matches the snapshot the wait was parked against, closes the wait
+  unasked, audits it and tells the channel, instead of collecting a yes the act must refuse
 - No approval standing without a row somebody added, and a record of who added it
 - No notification failure swallowed — a run parked on a question nobody received
   waits forever, and looks exactly like waiting patiently

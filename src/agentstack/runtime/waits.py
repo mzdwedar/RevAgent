@@ -79,6 +79,19 @@ class Wait:
     # against the surface. The fingerprint says which action; this says which claim.
     idempotency_key: str | None = None
 
+    @property
+    def withdrawn(self) -> str | None:
+        """Why this wait was closed without an answer, if it was (audit M4).
+
+        A withdrawn wait is satisfied in the row, so nothing asks about it or reports it
+        as stalled, and the payload says what closed it: no approver is named, and none
+        could have been. Kept in the existing columns because the alternative, a column
+        every wait query then has to remember to filter, is how a withdrawn question
+        comes to be asked again.
+        """
+        reason = self.payload.get("withdrawn")
+        return None if reason is None else str(reason)
+
 
 def approval_wait_id(run_id: str, action_fingerprint: str, state_snapshot: str) -> str:
     """The one approval wait for this action, against this state, in this run.
@@ -280,6 +293,19 @@ class WaitStore:
             " WHERE wait_id = %s AND NOT satisfied AND reasks < %s"
             f" RETURNING {_COLUMNS}",
             (next_deadline, reasks, wait_id, reasks),
+        )
+        return None if row is None else Wait(*row)
+
+    def withdraw(self, wait_id: str, reason: str) -> Wait | None:
+        """Close a wait nobody answered, because what it asks about no longer exists.
+
+        Only while the wait is pending: an answer that landed first wins, and a second
+        withdrawal changes nothing. `None` means one of those happened.
+        """
+        row = self.db.fetch_one(
+            "UPDATE waits SET satisfied = true, satisfied_at = now(), payload = %s::jsonb"
+            f" WHERE wait_id = %s AND NOT satisfied RETURNING {_COLUMNS}",
+            (json.dumps({"withdrawn": reason}), wait_id),
         )
         return None if row is None else Wait(*row)
 

@@ -103,6 +103,11 @@ class ApprovalCoordinator:
         refusal: str | None = None
         if wait is None or wait.run_id != reply.run_id:
             refusal = f"{reply.wait_id} is not a pending wait on {reply.run_id}"
+        elif wait.withdrawn is not None:
+            refusal = (
+                f"{reply.wait_id} was withdrawn ({wait.withdrawn}); the world it asked "
+                "about changed, so an answer to it is not a decision"
+            )
         elif wait.satisfied:
             refusal = (
                 f"{reply.wait_id} was already answered; the second reply to one "

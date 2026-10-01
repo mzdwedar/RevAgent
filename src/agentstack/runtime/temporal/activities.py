@@ -93,6 +93,9 @@ from agentstack.tools.registry import ToolNotExposed
 from agentstack.tools.spec import Surface, ToolSpec
 from agentstack.tools.validation import InvalidToolArguments
 
+# Why a question was closed unasked: its world moved while it waited (audit M4).
+SUPERSEDED = "superseded"
+
 # A turn's p95 is 60s (SPEC.md), and the workflow gives it 120s. A heartbeat every few
 # seconds lets Temporal notice a dead worker in `HEARTBEAT_TIMEOUT` instead of waiting
 # out the full two minutes.
@@ -478,6 +481,8 @@ class RunActivities:
         recorded = self._runs.get(intent.run_id)
         wait = self._waits.get(intent.wait_id)
         assert recorded is not None and wait is not None  # parked by this run's turn
+        if wait.withdrawn is not None:
+            return AskResult(answered=False, superseded=True)  # closed by an earlier attempt
         if wait.satisfied:
             return AskResult(answered=True)  # answered before it could be asked again
         cohort = self._cohorts.get(
@@ -510,6 +515,10 @@ class RunActivities:
                     reason=deviates,
                     request=request,
                 )
+            if intent.asked > 0 and self._world_moved(wait, request, tracer):
+                # The question was put days ago, about a world that has since changed.
+                # Putting it again would collect a yes the act must refuse as stale.
+                return self._supersede(run, wait, request, tracer)
             with tracer.span("approval.ask", wait=wait.wait_id, asked=intent.asked):
                 self._asker.ask(run=run, wait=wait, cohort=cohort, action=request)
         finally:
@@ -521,6 +530,35 @@ class RunActivities:
                 next_deadline=datetime.now(UTC) + APPROVAL_REASK_AFTER,
             )
         return AskResult(answered=False)
+
+    def _world_moved(self, wait: Wait, request: ActionRequest, tracer: Tracer) -> bool:
+        """Whether the resource this wait asks about is no longer the one it was parked
+        against. A surface that cannot describe it now says nothing about whether it
+        moved, so that is not "moved": the act refuses an unreadable world on its own."""
+        world = self._host().deps.gateway.observe(request=request, tracer=tracer)
+        return world is not None and world_snapshot(request.resource, world) != wait.state_snapshot
+
+    def _supersede(self, run: Run, wait: Wait, request: ActionRequest, tracer: Tracer) -> AskResult:
+        """Close a question whose world moved, without putting it (audit M4). An answer
+        that landed first wins: the act will meet it and refuse it as stale, audited."""
+        with tracer.span("ask.supersede", wait=wait.wait_id):
+            closed = self._waits.withdraw(wait.wait_id, SUPERSEDED)
+        if closed is None:
+            return AskResult(answered=True)
+        self._audit.write(
+            run_id=run.run_id,
+            principal=run.user,
+            tenant=run.tenant,
+            action_fingerprint=request.fingerprint(),
+            surface=request.surface.value,
+            resource=request.resource,
+            policy_decision="ask.superseded",
+            approval_id=None,
+            outcome="refused",
+            wait_id=wait.wait_id,
+            state_snapshot=wait.state_snapshot,
+        )
+        return AskResult(answered=False, superseded=True)
 
     @activity.defn(name=WITHDRAW_APPROVAL)
     def withdraw_approval(self, intent: WithdrawIntent) -> None:

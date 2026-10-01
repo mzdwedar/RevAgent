@@ -147,6 +147,41 @@ def test_unanswered_for_three_days_it_is_asked_at_every_interval(
     assert wait.reasks == 3, "each re-ask recorded on the wait, for the operator to see"
 
 
+def test_a_question_whose_draft_was_revised_is_withdrawn_not_asked_again(
+    stack: Stack, app_database: Database
+) -> None:
+    """Audit M4. Asked once; a day later the draft it was about is revised. The re-ask
+    reads the world, finds it moved, and puts nothing: the question is closed, the channel
+    is told, and the run ends the proposal instead of asking about a draft that is gone."""
+
+    async def revised_then_a_day(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
+        cycle = parked.cycles[0]
+        app_database.execute(
+            "INSERT INTO draft_revisions"
+            " (tenant, experiment_id, experiment_version, revision_no, hypothesis)"
+            " VALUES ('acme', %s, %s, 2, 'a different offer than the one asked about')",
+            (cycle.experiment_id, cycle.experiment_version),
+        )
+        await env.sleep(REASK_EVERY + timedelta(minutes=1))
+        return await progress_until(handle, lambda p: bool(p.withdrawn), timeout=30)
+
+    run_id, parked, later = propose_and_wait(stack, app_database, then=revised_then_a_day)
+
+    assert later.withdrawn == (parked.awaiting_approval,)
+    assert later.awaiting_approval is None, "the run is no longer waiting on it"
+    assert len(posted(stack)) == 1, "asked once, and not again about a world that moved"
+    wait = WaitStore(db=app_database).get(parked.awaiting_approval or "")
+    assert wait is not None and wait.satisfied and wait.withdrawn == "superseded"
+    notifier = stack.notifier
+    assert isinstance(notifier, RecordingNotifier)
+    ((_, notice),) = notifier.notices
+    assert (notice.run_id, notice.reason) == (run_id, "superseded")
+    assert "nothing was committed" in notice.text
+    assert stack.registry_client.rollouts == []
+    decisions = [r.policy_decision for r in stack.audit.for_run(run_id)]
+    assert "ask.superseded" in decisions and "approval.withdrawn:superseded" in decisions
+
+
 def test_an_answer_stops_the_asking(stack: Stack, app_database: Database) -> None:
     """An answer: recorded by layer 8, then signalled. A bare signal is not one (A1, H2):
     the act finds the wait unanswered and the run goes on asking."""

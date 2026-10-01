@@ -220,6 +220,9 @@ class AskResult:
     """
 
     answered: bool
+    # The question was withdrawn instead of put: the world it asked about moved (M4). The
+    # default keeps every recorded history decoding as it always did.
+    superseded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,5 +280,7 @@ class RunProgress:
     # Every attempt at an act, in order, and the reconcile wait the run is parked on.
     commits: tuple[CommitOutcome, ...] = ()
     reconciling: str | None = None
+    # Questions closed unasked because the world they were about moved (M4).
+    withdrawn: tuple[str, ...] = ()
     # Cycles evaluated before the run last continued as new; `cycles` holds the rest.
     cycles_before: int = 0

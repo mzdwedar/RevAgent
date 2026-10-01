@@ -271,6 +271,8 @@ async def status_report(client: Client, db: Database, run_id: str) -> int:
         if progress.waiting_on:
             late = "  overdue" if progress.overdue else ""
             print(f"position waiting on trigger wait {progress.waiting_on}{late}")
+        for wait_id in progress.withdrawn:
+            print(f"position approval withdrawn {wait_id}")
         for act in progress.commits:
             if act.status == "refused":
                 print(f"position act refused {act.refusal}")

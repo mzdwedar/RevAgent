@@ -22,16 +22,26 @@ from agentstack.interfaces import operator_cli
 from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.slack import RecordingNotifier
 from agentstack.interfaces.triggers import parse_trigger
-from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, Stack, build_stack, handle
+from agentstack.interfaces.wiring import (
+    VERSIONS,
+    ChannelAsker,
+    ExperimentTurns,
+    Stack,
+    build_stack,
+    handle,
+)
+from agentstack.observability.spans import Tracer
 from agentstack.runtime.cycles import UNSETTLED_AFTER, CycleStore
 from agentstack.runtime.drafting import intended_rollout
 from agentstack.runtime.run import Run
-from agentstack.runtime.temporal.contracts import AskIntent
+from agentstack.runtime.snapshot import world_snapshot
+from agentstack.runtime.temporal.contracts import AskIntent, AskResult
 from agentstack.runtime.waits import (
     APPROVAL_REASK_AFTER,
     RECONCILE,
     RECONCILE_DUE_AFTER,
     ResumeEvent,
+    ResumeRejected,
     Wait,
     WaitWithoutDeadline,
     park_reconcile,
@@ -70,11 +80,20 @@ def park_approval(
         {"experiment_version": VERSION, "hypothesis": "a discount retains", "variant": "20-off"},
     )
     arguments = intended_rollout(cohort, prior_rollout_event=0)
+    request = prepare_rollout(arguments)
+    # The world as the surface describes it now, as the rollout turn parks it: a re-ask
+    # reads the world again and compares, so a placeholder here would read as "moved".
+    world = stack.deps.gateway.observe(
+        request=request,
+        tracer=Tracer(run_id=run.run_id, session_id=run.session_id, versions=VERSIONS),
+    )
+    assert world is not None
+    snapshot = world_snapshot(request.resource, world)
     return stack.waits.park(
         run_id=run.run_id,
         kind="human_approval",
-        state_snapshot="fp-1",
-        action_fingerprint=prepare_rollout(arguments).fingerprint(),
+        state_snapshot=snapshot,
+        action_fingerprint=request.fingerprint(),
         approval_summary=summary,
         action_tool=ROLLOUT.name,
         action_arguments=arguments,
@@ -419,10 +438,13 @@ class Asking:
         self.asked.append(wait.wait_id)
         return self.inner.ask(run=run, wait=wait, cohort=cohort, action=action)
 
+    def withdraw(self, *, run: Run, wait: Wait, reason: str) -> str:
+        return self.inner.withdraw(run=run, wait=wait, reason=reason)
 
-def ask(stack: Stack, run: Run, wait: Wait, asker: Asking, *, asked: int) -> None:
+
+def ask(stack: Stack, run: Run, wait: Wait, asker: Asking, *, asked: int) -> AskResult:
     # The turn host supplies the registry the wait's action is validated against again.
-    activities_for(stack.runs.db, asker=asker, turns=ExperimentTurns(stack)).ask_approval(
+    return activities_for(stack.runs.db, asker=asker, turns=ExperimentTurns(stack)).ask_approval(
         AskIntent(
             run_id=run.run_id,
             wait_id=wait.wait_id,
@@ -476,7 +498,10 @@ def test_the_same_reask_run_twice_counts_once(stack: Stack, run: Run) -> None:
 def test_an_answered_approval_is_not_asked_again(stack: Stack, run: Run) -> None:
     wait = park_approval(stack, run)
     frozen(stack, run)
-    resume(stack.waits, ResumeEvent(run.run_id, wait.wait_id, "fp-1", {"approved_by": "ana"}))
+    resume(
+        stack.waits,
+        ResumeEvent(run.run_id, wait.wait_id, wait.state_snapshot, {"approved_by": "ana"}),
+    )
     asker = Asking(stack)
 
     ask(stack, run, wait, asker, asked=1)
@@ -514,6 +539,64 @@ def test_an_answer_landing_mid_reask_wins(stack: Stack, run: Run) -> None:
     assert satisfied.wait_id == wait.wait_id and satisfied.reasks == 0
     assert asker.asked == [wait.wait_id], "it was put once; the answer beat the record"
     assert stack.waits.pending_for(run.run_id) == ()
+
+
+def revise(stack: Stack, run: Run) -> None:
+    """The draft the question was about is revised: the world its snapshot described moved."""
+    stack.runs.db.execute(
+        "INSERT INTO draft_revisions"
+        " (tenant, experiment_id, experiment_version, revision_no, hypothesis)"
+        " VALUES (%s, 'exp-7', %s, 2, 'a different offer than the one asked about')",
+        (run.tenant, VERSION),
+    )
+
+
+def test_a_reask_after_the_world_moved_withdraws_the_question_instead_of_putting_it(
+    stack: Stack, run: Run
+) -> None:
+    """Audit M4. The approver was asked about a draft; days later it was revised. Putting
+    the same question again would collect a yes about something that no longer exists, and
+    the act would then refuse it as stale. The question is withdrawn instead: recorded,
+    closed, and not asked."""
+    wait = park_approval(stack, run)
+    frozen(stack, run)
+    asker = Asking(stack)
+    revise(stack, run)
+
+    result = ask(stack, run, wait, asker, asked=1)
+
+    assert result.superseded and not result.answered
+    assert asker.asked == [] and posted(stack) == [], "nothing was put to anyone"
+    closed = stack.waits.get(wait.wait_id)
+    assert closed is not None and closed.satisfied and closed.withdrawn == "superseded"
+    assert "approved_by" not in closed.payload, "withdrawn is not answered"
+    assert stack.waits.pending_for(run.run_id) == ()
+    assert all(w.wait_id != wait.wait_id for w in stack.waits.stalled(now=later(WEEK * 10)))
+    assert ("ask.superseded", "refused") in [
+        (r.policy_decision, r.outcome) for r in stack.audit.for_run(run.run_id)
+    ]
+
+
+def test_a_reask_over_an_unmoved_world_is_still_put(stack: Stack, run: Run) -> None:
+    wait = park_approval(stack, run)
+    frozen(stack, run)
+    asker = Asking(stack)
+
+    result = ask(stack, run, wait, asker, asked=1)
+
+    assert not result.superseded and asker.asked == [wait.wait_id]
+
+
+def test_a_clicked_yes_on_a_withdrawn_question_is_refused_as_withdrawn(
+    stack: Stack, run: Run
+) -> None:
+    """The old message is still in the channel. A click on it is not a decision."""
+    wait = park_approval(stack, run)
+    assert stack.waits.withdraw(wait.wait_id, "superseded") is not None
+
+    assert stack.waits.withdraw(wait.wait_id, "superseded") is None, "closed once"
+    with pytest.raises(ResumeRejected):
+        resume(stack.waits, ResumeEvent(run.run_id, wait.wait_id, wait.state_snapshot, {}))
 
 
 def test_a_wait_that_does_not_say_what_it_asks_is_never_put(stack: Stack, run: Run) -> None:

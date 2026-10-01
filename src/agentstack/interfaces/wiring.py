@@ -390,6 +390,10 @@ WITHDRAWN_TEXT: dict[str, str] = {
         "Approved: {summary}\nThe draft changed after you approved it, so nothing was "
         "committed. It will not roll out unless it is proposed and approved again."
     ),
+    "superseded": (
+        "Withdrawn: {summary}\nThe draft changed while this was waiting for an answer, so "
+        "the question is closed and nothing was committed. Answering it now does nothing."
+    ),
 }
 
 
