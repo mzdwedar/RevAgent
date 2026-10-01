@@ -189,6 +189,40 @@ def test_the_question_is_sized_from_the_action_it_binds_not_from_a_constant() ->
     ((_, asked),) = notifier.posted
     assert (asked.percentage, asked.estimated_customers) == (25, 120)
     assert asked.experiment_version == "exp:v1"
+    assert asked.currency == "USD"
+
+
+def test_the_question_carries_the_frozen_cohorts_currency() -> None:
+    """The figure the approver weighs is in the cohort's currency, read from the record
+    the cohort was frozen as, not assumed."""
+    notifier = RecordingNotifier()
+    cohort = FrozenCohort(
+        tenant="acme",
+        experiment_id="exp-7",
+        experiment_version="exp:v1",
+        data_as_of="kkbox-churn:abc",
+        targeting_model_version="stub-1",
+        risk_threshold=0.6,
+        size=480,
+        annual_value_at_risk_cents=1_000_000,
+        description={"currency": "NTD"},
+    )
+    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0))
+    run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
+    wait = Wait(
+        wait_id="wait-1",
+        run_id=run.run_id,
+        kind="human_approval",
+        state_snapshot="s",
+        created_at=datetime.now(UTC),
+        action_fingerprint=action.fingerprint(),
+        approval_summary="roll_out_variant_to_percentage — IRREVERSIBLE",
+    )
+
+    ChannelAsker(notifier).ask(run=run, wait=wait, cohort=cohort, action=action)
+
+    ((_, asked),) = notifier.posted
+    assert asked.money() == "NTD 10,000"
 
 
 def park_deviating(stack: Stack, parked: RunProgress, **changes: Any) -> Wait:

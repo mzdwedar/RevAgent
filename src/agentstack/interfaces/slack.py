@@ -67,6 +67,7 @@ class ApprovalAsk:
     estimated_customers: int
     annual_value_at_risk_cents: int
     tenant: str
+    currency: str = "USD"
 
     def __post_init__(self) -> None:
         if not self.summary.strip():
@@ -91,7 +92,8 @@ class ApprovalAsk:
         )
 
     def money(self) -> str:
-        return f"${self.annual_value_at_risk_cents / 100:,.0f}"
+        amount = f"{self.annual_value_at_risk_cents / 100:,.0f}"
+        return f"${amount}" if self.currency == "USD" else f"{self.currency} {amount}"
 
 
 def render_blocks(ask: ApprovalAsk) -> list[dict[str, Any]]:

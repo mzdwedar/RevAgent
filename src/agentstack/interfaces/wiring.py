@@ -427,6 +427,7 @@ class ChannelAsker:
                 estimated_customers=estimated_customers(cohort, percentage),
                 annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
                 tenant=run.tenant,
+                currency=cohort.currency,
             ),
             channel=self.channel,
         )
