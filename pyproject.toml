@@ -42,9 +42,6 @@ dev = [
     # it reaches the network, and only agentstack.execution may do that.
     "kaggle>=1.6",
 ]
-spike = [
-    "cedarpy>=4.12.1",
-]
 
 [build-system]
 requires = ["hatchling"]

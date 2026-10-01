@@ -53,7 +53,8 @@ Consequences to know about:
 - **`spikes/`** are point-in-time evidence with committed `RESULTS` files. Nothing imports
   them, and `spikes/temporal/_gateway.py` still calls `issue_refund` through the registry,
   so those spikes will not run against this tree. They are records of what was measured,
-  not tests, and are not rewritten.
+  not tests, and are not rewritten. (Later: the probe code was deleted and the `RESULTS`
+  files moved to `docs/evidence/`; the code is recoverable at `c48553c`.)
 - **Legacy `surface_calls` in the eval runner** still counts the API client. The cases
   that use it assert zero and are about injection; new expectations use `rollouts`.
 
