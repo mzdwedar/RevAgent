@@ -127,6 +127,7 @@ async def _serve(
                 # The audit trail is Postgres, written by the gateway and by the
                 # activities' own refusals: never this, never Temporal's history.
                 traces=LoggingSink(),
+                versions=stack.deps.versions,
                 # Refusals at the ask and the act that never reach the gateway.
                 audit=stack.audit,
                 turns=ExperimentTurns(stack),

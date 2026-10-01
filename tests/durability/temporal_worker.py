@@ -167,6 +167,7 @@ async def serve(args: argparse.Namespace) -> None:
                 scorer=RecordingScorer(Path(args.scorer_calls)),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
                 traces=LoggingSink(),
+                versions=stack.deps.versions,
                 audit=stack.audit,
                 rule=RULE,
                 turns=turns,

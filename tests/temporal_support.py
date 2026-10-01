@@ -24,7 +24,13 @@ from temporalio.worker import Replayer
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces.triggers import parse_trigger
-from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, Stack, run_for_trigger
+from agentstack.interfaces.wiring import (
+    VERSIONS,
+    ChannelAsker,
+    ExperimentTurns,
+    Stack,
+    run_for_trigger,
+)
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import CollectingSink, SpanSink
@@ -156,6 +162,7 @@ def activities_for(
         scorer=scorer or NoScoring(),
         trigger_deadline=trigger_deadline,
         traces=traces if traces is not None else CollectingSink(),
+        versions=VERSIONS,
         rule=rule,
         turns=turns,
         asker=asker,

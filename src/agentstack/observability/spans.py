@@ -29,6 +29,12 @@ REQUIRED_SPANS: frozenset[str] = frozenset(
     }
 )
 
+# The steps of a cycle that sit around a turn rather than inside one: the evaluation that
+# decides whether to propose, the question put to a person, and their answer. A turn run
+# by `handle` never takes them, so they are a second contract, not more of the first;
+# `tests/durability/test_traces.py` holds them against a run through the production worker.
+CYCLE_SPANS: frozenset[str] = frozenset({"cycle.evaluate", "approval.ask", "approval.answer"})
+
 
 @dataclass(frozen=True, slots=True)
 class VersionStamp:

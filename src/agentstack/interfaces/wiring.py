@@ -30,7 +30,7 @@ from agentstack.interfaces.slack_callback import ReplayGuard, accept
 from agentstack.interfaces.triggers import parse_trigger
 from agentstack.model.engine import EchoEngine
 from agentstack.observability.audit import AuditSink
-from agentstack.observability.spans import VersionStamp
+from agentstack.observability.spans import LoggingSink, SpanSink, VersionStamp
 from agentstack.policy.approval import ApprovalStore
 from agentstack.policy.approvers import ApproverDirectory
 from agentstack.policy.envelope import IdentityEnvelope
@@ -104,7 +104,9 @@ class Stack:
     experiment_runs: ExperimentRunStore
 
 
-def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Stack:
+def build_stack(
+    db: Database, checkpointer: Any, *, tenant: str = "acme", traces: SpanSink | None = None
+) -> Stack:
     """Assemble the stack against a migrated database.
 
     `db` and `checkpointer` are required rather than defaulted. A default would open a
@@ -136,7 +138,13 @@ def build_stack(db: Database, checkpointer: Any, *, tenant: str = "acme") -> Sta
     replay_guard = ReplayGuard(db=db)
     approvers = ApproverDirectory(db=db)
     coordinator = ApprovalCoordinator(
-        runs=runs, waits=waits, approvals=approvals, directory=approvers, audit=audit
+        runs=runs,
+        waits=waits,
+        approvals=approvals,
+        directory=approvers,
+        audit=audit,
+        traces=traces if traces is not None else LoggingSink(),
+        versions=VERSIONS,
     )
 
     gateway = Gateway(

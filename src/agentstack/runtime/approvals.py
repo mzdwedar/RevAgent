@@ -32,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agentstack.observability.audit import AuditSink
+from agentstack.observability.spans import SpanSink, Tracer, VersionStamp
 from agentstack.policy.approval import ApprovalRecord, ApprovalStore
 from agentstack.policy.approvers import (
     ApprovalReply,
@@ -73,6 +74,10 @@ class ApprovalCoordinator:
     approvals: ApprovalStore
     directory: ApproverDirectory
     audit: AuditSink
+    # The answer is taken in the process that handles the click, which has no turn: its
+    # span is exported from here, tagged with the run it answers.
+    traces: SpanSink
+    versions: VersionStamp
 
     def apply(self, reply: ApprovalReply) -> Resolution:
         run = self.runs.get(reply.run_id)
@@ -174,6 +179,10 @@ class ApprovalCoordinator:
         """One answer, as an accountability record: who, about which wait, bound to which
         action and which state. Read from the wait, never from the reply: the reply names
         a wait and nothing it says about it is taken on trust."""
+        tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=self.versions)
+        with tracer.span("approval.answer", wait=reply.wait_id, decision=decision, outcome=outcome):
+            pass
+        self.traces.export(tracer.spans)
         if wait is None:
             found = self.waits.get(reply.wait_id)
             # A wait on another run is not this run's to describe.

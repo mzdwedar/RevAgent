@@ -10,6 +10,7 @@ committed.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from typing import Any
@@ -17,7 +18,13 @@ from typing import Any
 import pytest
 
 from agentstack.interfaces.wiring import Stack, answer
-from agentstack.observability.spans import REQUIRED_SPANS, CollectingSink, LoggingSink, Span
+from agentstack.observability.spans import (
+    CYCLE_SPANS,
+    REQUIRED_SPANS,
+    CollectingSink,
+    LoggingSink,
+    Span,
+)
 from agentstack.runtime.temporal.contracts import RunProgress, workflow_id
 from agentstack.storage.database import Database
 from tests.durability.test_approval_wait import propose_and_wait
@@ -39,6 +46,8 @@ def test_a_run_through_the_worker_is_traced_across_every_layer(
     stack: Stack, app_database: Database
 ) -> None:
     sink = CollectingSink()
+    # The answer is taken in the process that handles the click, not the worker.
+    stack.coordinator = dataclasses.replace(stack.coordinator, traces=sink)
     temporal: dict[str, str] = {}
 
     async def approve(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
@@ -52,6 +61,9 @@ def test_a_run_through_the_worker_is_traced_across_every_layer(
     spans = sink.spans
     missing = REQUIRED_SPANS - {span.name for span in spans}
     assert not missing, f"the worker's trace does not cross the stack; missing {sorted(missing)}"
+    # A cycle's own steps are traced too (audit M3): evaluating, asking and the answer.
+    unspanned = CYCLE_SPANS - {span.name for span in spans}
+    assert not unspanned, f"a cycle's steps are not traced; missing {sorted(unspanned)}"
 
     # Our identity, never Temporal's: the run and its session, as the record has them.
     run = stack.runs.get(run_id)

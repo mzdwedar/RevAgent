@@ -26,7 +26,7 @@ from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.observability.audit import AuditSink
-from agentstack.observability.spans import SpanSink, Tracer
+from agentstack.observability.spans import SpanSink, Tracer, VersionStamp
 from agentstack.policy.envelope import IdentityEnvelope
 from agentstack.policy.triggers import (
     Outcome,
@@ -157,6 +157,7 @@ class RunActivities:
         scorer: ChurnScorer,
         trigger_deadline: timedelta,
         traces: SpanSink,
+        versions: VersionStamp,
         audit: AuditSink,
         rule: TargetingRule | None = None,
         turns: TurnHost | None = None,
@@ -165,6 +166,9 @@ class RunActivities:
         # Required: an activity's caller is the workflow, which never holds spans (they
         # would be history). Without a sink, every span a turn or a commit emits is lost.
         self._traces = traces
+        # What a span is stamped with. Held here, not read from the turn host, because the
+        # cycle's evaluation is traced on a worker that may take no turns.
+        self._versions = versions
         # Required too: a refusal at the ask or the act that never reaches the gateway
         # is still an accountability event, and the gateway can't record what it never saw.
         self._audit = audit
@@ -210,6 +214,21 @@ class RunActivities:
             tenant=trigger.tenant,
             source=trigger.source,
         )
+        tracer = self._tracer(recorded)
+        try:
+            with tracer.span(
+                "cycle.evaluate",
+                experiment=event.experiment_id,
+                kind=event.kind.value,
+                data_as_of=event.data_as_of,
+            ) as span:
+                result = self._evaluate(event, recorded)
+                span.attributes["outcome"] = result.outcome
+                return result
+        finally:
+            self._traces.export(tracer.spans)
+
+    def _evaluate(self, event: TriggerEvent, recorded: Run) -> CycleResult:
         try:
             authorize_trigger_tenant(event, run_tenant=recorded.tenant)
         except TenantClaimRefused as refusal:
@@ -484,7 +503,8 @@ class RunActivities:
                     reason=deviates,
                     request=request,
                 )
-            self._asker.ask(run=run, wait=wait, cohort=cohort, action=request)
+            with tracer.span("approval.ask", wait=wait.wait_id, asked=intent.asked):
+                self._asker.ask(run=run, wait=wait, cohort=cohort, action=request)
         finally:
             self._traces.export(tracer.spans)
         if intent.asked > 0:
@@ -534,9 +554,7 @@ class RunActivities:
             self._traces.export(tracer.spans)
 
     def _tracer(self, run: Run) -> Tracer:
-        return Tracer(
-            run_id=run.run_id, session_id=run.session_id, versions=self._host().deps.versions
-        )
+        return Tracer(run_id=run.run_id, session_id=run.session_id, versions=self._versions)
 
     def _not_answered(self, run: Run, wait: Wait, tracer: Tracer) -> CommitOutcome:
         """Woken for a wait nobody answered. Recorded, because a forged wake-up is worth
