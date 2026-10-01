@@ -31,7 +31,7 @@ from agentstack.policy.approvers import (
 )
 from agentstack.storage.database import Database, IntegrityViolation
 
-SECRET = "8f742231b10e8888abcd99yyyzzz85a5"
+SECRET = "test-signing-secret"
 
 
 @pytest.fixture

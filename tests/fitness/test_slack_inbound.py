@@ -36,7 +36,7 @@ from agentstack.interfaces.slack_callback import (
 )
 from agentstack.storage.database import Database
 
-SECRET = "8f742231b10e8888abcd99yyyzzz85a5"
+SECRET = "test-signing-secret"
 BINDING = "run-7|wait-1|exp:5cbf2762|telecom-bigml:f107d488"
 
 

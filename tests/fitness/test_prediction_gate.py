@@ -29,7 +29,7 @@ from agentstack.prediction.churn import (
 from agentstack.prediction.engine import MODEL_VERSION, TabPFNScorer, _encode
 from agentstack.prediction.licence import LicenceRefused
 
-GOOD_TOKEN = "prior-labs-key-0123456789"
+GOOD_TOKEN = "test-prediction-token"
 ROOT = Path(__file__).resolve().parents[2]
 
 
