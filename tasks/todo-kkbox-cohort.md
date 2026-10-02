@@ -10,7 +10,12 @@ over ~5 files).
 
 **Preconditions (yours, not tasks):** Kaggle competition rules accepted for
 `kkbox-churn-prediction-challenge` and `~/.kaggle` set (needed from K11a); `TABPFN_TOKEN` in
-`.env` valid for the hosted API (K9's preflight proves it; real calls from K12).
+`.env` valid for the local model's gated weights (`TabPFNScorer.preflight` proves it; first used in K12).
+**Amended 2026-10-02:** KKBox is scored locally; no row leaves the machine (ADR-0012 §6). K12 and
+K14 are rewritten accordingly; K7-K10 are done and stay, for cohorts cleared to go to the hosted
+service. The spec is amended to match (plan Open questions 3). `TABPFN_TOKEN` is read from `.env`
+by `record_scores.py`, `agentstack-preflight` and (through its preflight) the worker; a variable already
+exported wins (plan Open question 5, resolved).
 
 ---
 
@@ -178,7 +183,7 @@ their position in the *order* is here.)
     plus a new assertion that a recorded call carries no feature values or token.
   - Depends: K8. Files: scorer/observability glue, tests (~3).
 
-### Checkpoint B: egress path built, nothing sent
+### Checkpoint B: egress path built, nothing sent (KKBox will not use it, 2026-10-02)
 - [ ] `uv run pytest tests/fitness`, `lint-imports`, `stack_guard.py`, `check_task.sh` green
 - [ ] `tabpfn_client` imported only in `agentstack.execution` (K7/K8 proof)
 - [ ] ADR-0012: placement, egress bound, read-not-effect, version provenance written
@@ -248,20 +253,25 @@ their position in the *order* is here.)
     `scripts/build_kkbox_cohort.py` (~30 s) wrote 49,863 rows, churn 8.9%; manifest entry recorded;
     `tests/live/test_real_cohorts.py` green for all three cohorts. 6 tests added (41 in the file).
 
-### Checkpoint C: before the first real egress of cohort rows
-- [ ] You state whether the Kaggle competition rules permit third-party processing:
-      "checked" or "accepted unverified" — the ADR records which, verbatim
-- [ ] `TABPFN_TOKEN` is set in `.env`; the hosted preflight (K9) passes
-- [ ] Cut size and what leaves the machine reviewed (all engineered features; no `msno`)
+### Checkpoint C: before the first long local scoring run
+- [x] Third-party processing: **decided no** (2026-10-02, ADR-0012 §6). No rows leave the machine
+- [x] `TABPFN_TOKEN` is set in `.env`; local `preflight` loads the weights (2026-10-02: `tabpfn-3.5 loaded`, 5 s)
+- [x] The machine can hold the run: 113 GiB disk free, 18 GiB RAM, 11 cores (device: see K12); RAM for the fold size K12 measures
 - [ ] Human review
 
-- [ ] **K12: measure the hosted limits with one call, then size the cut** · layer 7 · *S*
-  - Acceptance: one real call records rows-per-fit, rate/credit quota and latency in
-    ADR-0012; the cut size in `build_kkbox_cohort.py` is set from that measurement; if the
-    quota cannot cover 5 folds the **cut shrinks, the folds do not**.
-  - Verify: `uv run pytest tests/live/test_real_scores.py` hosted-preflight case passes;
-    ADR section populated; K11's `sample_users` test still green at the new size.
-  - Depends: K9, K10, CP-C. Files: ADR, build script constant, live test (~3).
+- [x] **K12: time one local fold, then size the cut** · layer 4b · *S* (rewritten 2026-10-02)
+  - Acceptance: `scripts/` timing run (no committed output) fits `TabPFNScorer` on one fold at
+    two or three sample sizes of the real cohort and records fit+predict seconds per fold and
+    peak memory in ADR-0012, with the device used (CPU / MPS / CUDA); the cut size in
+    `build_kkbox_cohort.py` is set so the full 5-fold run fits a budget you name (e.g. one
+    overnight run); if it does not, the **cut shrinks, the folds do not**. The cohort is
+    rebuilt at the new size and its `data_as_of` re-recorded.
+  - Verify: `uv run pytest tests/live/test_real_scores.py::test_preflight_loads_the_weights`
+    passes; ADR section populated; K11's `sample_users` test and `tests/live/test_real_cohorts.py`
+    green at the new size.
+  - Depends: K11, CP-C (K9/K10 no longer gate it). Files: ADR, build script constant, timing script (~3).
+  - **Done 2026-10-02.** `scripts/time_kkbox_fold.py`; full 49,863-row fold 502 s, so 5 folds ≈ 42 min,
+    peak 2.2 GiB (MPS). Cut stays 50,000, no rebuild, manifest unchanged. Table in ADR-0012 §6.
 
 - [x] **K13: the raw-date comparison, once** · layer 5 + scripts · *S*
   - Acceptance: a single declared out-of-fold comparison, with vs without the raw
@@ -275,14 +285,19 @@ their position in the *order* is here.)
     (local, 5,000 users, declared tie band). **Without wins:** log loss 0.17008 vs 0.17068 with `expiry_date_raw`;
     `registration_date_raw` was refused as an identifier at that sample size. Cohort and manifest unchanged. ADR-0012 3c.
 
-- [ ] **K14: record the KKBox scores (local only)** · scripts + layer 4b · *M*
-  - Acceptance: `record_scores.py --datasets kkbox-churn` uses the hosted scorer and
-    records `data/scores/kkbox-churn.json`, **not committed**; a fitness test asserts the
-    file path is git-ignored.
+- [ ] **K14: record the KKBox scores (local only)** · scripts + layer 4b · *M* (rewritten 2026-10-02)
+  - Acceptance: `record_scores.py --datasets kkbox-churn` uses the local `TabPFNScorer` (as it
+    already does; no scorer switch is added, so the hosted path is not reachable from this
+    script) and records `data/scores/kkbox-churn.json`, **not committed**; a fitness test asserts
+    the file path is git-ignored; the script's docstring stops saying every output is committed.
+    The run is long: it prints per-fold progress and does not write a partial file.
   - Verify: `uv run pytest tests/live/test_real_scores.py` (recorded scores match the real
     model; scores separate churners; out-of-fold log loss beats the prior; reproducible);
     new `tests/fitness` assertion `git check-ignore data/scores/kkbox-churn.json`.
   - Depends: K13. Files: `record_scores.py`, tests (~3).
+  - Note: `test_the_recorded_scores_are_still_what_the_model_produces` re-scores in the live lane,
+    so at the K12 cut it is as slow as the recording. If that is too slow for a routine local
+    run, it scores a fixed subsample, declared in the test, and never a widened one.
 
 ### Checkpoint D: before the cohort is used in an experiment
 - [ ] `uv run pytest tests/live` green locally (cohort, correlation bar, scores)

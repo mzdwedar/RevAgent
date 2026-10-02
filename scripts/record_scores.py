@@ -17,29 +17,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-from pathlib import Path
 
 from agentstack.context import datasets
 from agentstack.prediction.churn import SCORES_ROOT
 from agentstack.prediction.engine import TabPFNScorer
-
-
-def load_env(path: Path = Path(".env")) -> None:
-    """Read KEY=VALUE lines from `.env` into the environment, without overriding it.
-
-    The token lives in `.env` (gitignored); this saves exporting it by hand. Whatever the
-    shell already set wins, and a missing file is not an error: `check_token` says what is
-    missing and how to get it.
-    """
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+from agentstack.prediction.licence import load_env
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -156,12 +156,36 @@ All engineered features are sent; `msno` and raw identifiers are not (modelling 
 the Kaggle competition rules permit third-party processing is **not verified by the author**;
 the owner's statement is recorded here at Checkpoint C.
 
+**Owner decision (2026-10-02): KKBox is not sent to a third party.** Sending Kaggle competition
+data to a vendor is not acceptable, so `kkbox-churn` is scored locally (`--scores tabpfn`, the
+default, or `recorded`). `--scores hosted` must not be run against it. This is a procedural
+decision only: nothing in code yet refuses it. A dataset egress allowlist in `HostedTabPFNScorer`
+is the enforcing follow-up, and needs its own spec task.
+
 **K11 (built 2026-10-02): the declared cut.** `scripts/build_kkbox_cohort.py` writes
 `data/kkbox-cohort.csv` offline. `kkbox.sample_users` draws `COHORT_USERS = 50,000` labelled
 users, stratified on `is_churn`, seed `20170228`, independent of row order; users with no
 history before the cutoff drop out afterwards, so the file has 49,863 rows, churn 8.9%
 (`data_as_of kkbox-churn:7b2787de78c817e3`, recorded in `data/manifest.json`). The size is
-**provisional**: K12 measures the hosted limits and the cut shrinks to fit them, never the folds.
+**provisional until K12** (below), which measured local scoring instead.
+
+**K12 (measured 2026-10-02): the cut stands at 50,000.** One local fold (`scripts/time_kkbox_fold.py`,
+`TabPFNScorer`, checkpoint v3.5, 11-core Mac, 18 GiB RAM, torch reports MPS available) at the real
+cohort's fold sizes, seed-pinned:
+
+| rows | fit | predict | fold | x5 folds | peak RSS |
+|---|---|---|---|---|---|
+| 2,000 | 1.0 s | 5.0 s | 6 s | 0.5 min | 2.1 GiB |
+| 5,000 | 1.0 s | 12.9 s | 14 s | 1.2 min | 2.1 GiB |
+| 10,000 | 1.1 s | 32.7 s | 34 s | 2.8 min | 2.1 GiB |
+| 25,000 | 1.1 s | 140.5 s | 142 s | 11.8 min | 2.2 GiB |
+| 49,863 | 1.1 s | 501.1 s | 502 s | **41.9 min** | 2.2 GiB |
+
+Fit is constant (TabPFN conditions on the context, it does not train); predict grows between linear
+and quadratic in rows, and memory is flat. The full five-fold run is about 42 minutes, well inside an
+overnight budget, so the cut does not shrink and the folds stay at 5. The device TabPFN actually
+used is not exposed by the classifier; only availability of MPS is known. Timings are for this
+machine and would differ on CUDA.
 
 ### 7. Revenue and currency (decided, built: K1-K3, K6)
 

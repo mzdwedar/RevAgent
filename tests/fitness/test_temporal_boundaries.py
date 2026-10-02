@@ -250,8 +250,11 @@ def test_the_worker_does_not_reach_for_work_when_preflight_refuses(
     assert worker_cli.main([], preflight=lambda _: 1) == 1
 
 
-def test_the_worker_runs_the_real_preflight_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_worker_runs_the_real_preflight_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)  # no .env here: the repo's own must not rescue the test
 
     assert worker_cli.main([]) == 1
 

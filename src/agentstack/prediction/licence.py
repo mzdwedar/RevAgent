@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from pathlib import Path
 
 TOKEN_VARIABLE = "TABPFN_TOKEN"
 
@@ -38,6 +39,23 @@ HOW_TO_GET_ONE = (
 # Short enough to catch an empty or obviously truncated value, loose enough not to
 # pretend it knows the issuer's format. This is a typo check, not a validity check.
 MINIMUM_TOKEN_LENGTH = 16
+
+
+def load_env(path: Path = Path(".env")) -> None:
+    """Read KEY=VALUE lines from `.env` into the environment, without overriding it.
+
+    The token lives in `.env` (gitignored); this saves exporting it by hand. Whatever the
+    shell already set wins, and a missing file is not an error: `check_token` says what is
+    missing and how to get it.
+    """
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
 class LicenceRefused(RuntimeError):

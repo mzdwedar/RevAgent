@@ -92,13 +92,26 @@ def test_preflight_refuses_without_a_token(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_the_startup_command_exits_nonzero_without_a_token(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     """What a deploy runs before shifting traffic."""
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)  # no .env here: the repo's own must not rescue the test
 
     assert preflight_cli.main([]) == 1
     assert "TABPFN_TOKEN" in capsys.readouterr().err
+
+
+def test_the_startup_command_reads_the_token_from_dot_env(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """The worker runs this first, so it is what makes `.env` reach the worker."""
+    (tmp_path / ".env").write_text(f"TABPFN_TOKEN={GOOD_TOKEN}\n")
+    monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert preflight_cli.main(["--token-only"]) == 0
+    assert "TABPFN_TOKEN is set" in capsys.readouterr().out
 
 
 def test_the_token_only_check_says_what_it_did_not_verify(
@@ -1003,9 +1016,10 @@ def test_the_preflight_command_runs_the_hosted_variant_when_asked(
 
 
 def test_the_hosted_preflight_command_checks_the_token_first(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)  # no .env here: the repo's own must not rescue the test
     built: list[int] = []
     monkeypatch.setattr(preflight_cli, "HostedTabPFNScorer", lambda: built.append(1) or hosted())
 

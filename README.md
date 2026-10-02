@@ -7,6 +7,7 @@ rolls it out only after a person approves it.
 ## Contents
 - [What it does](#what-it-does)
 - [The business problem](#the-business-problem)
+- [Why PriorLabs' TabPFN fits this use case](#why-priorlabs-tabpfn-fits-this-use-case)
 - [Licensing, before anything else](#licensing-before-anything-else)
 - [Quickstart](#quickstart)
 - [Datasets](#datasets)
@@ -81,6 +82,30 @@ trail, and every failure that reaches production becomes a regression case in `e
 
 How the code is organised to deliver that is in the table above and in
 [`STACK.md`](STACK.md).
+
+## Why PriorLabs' TabPFN fits this use case
+
+RevAgent serves many apps, and most of them are small or new. A new app has a few
+hundred subscribers and only a few weeks of churn labels; a mature one has years. A
+churn model that has to be trained per app fails exactly where the agent is asked to act
+first. TabPFN is a tabular foundation model, pretrained on a large number of synthetic
+tabular tasks, and that changes the picture:
+
+- **It works with very little data.** Prediction is in-context: the app's labelled
+  subscribers are passed alongside the ones to score, and there is no per-app training
+  run. Small datasets are the case it was built for, where gradient-boosted trees
+  tend to overfit or need tuning.
+- **No cold-start pipeline per app.** There is no feature-selection pass, hyperparameter
+  search or retraining schedule to onboard a new app. The same checkpoint scores a
+  telecom, bank or KKBox-shaped cohort, which is what the datasets in this repo exercise.
+- **It copes with messy subscription tables.** Mixed numeric and categorical columns and
+  missing values go in as they are, so the feature mapping stays thin.
+- **It returns probabilities.** The targeting step needs a churn probability to rank and
+  threshold on, and the Incremental Net Saved Value maths needs that probability to be
+  usable, not just a class label.
+- **Provenance is simple.** One named checkpoint scores every run, and it is recorded
+  in each experiment's `experiment_version` (see [Licensing](#licensing-before-anything-else)).
+  There is no per-app model artefact to version, store or go stale.
 
 ## Licensing, before anything else
 

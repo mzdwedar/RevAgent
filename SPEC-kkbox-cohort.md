@@ -3,6 +3,10 @@
 Status: **rev 3 — approved; amended 2026-10-01 after the data exploration** (see
 `docs/evidence/kkbox-exploration.md` and `kkbox-exploration-reading.md`).
 Date: 2026-10-01
+**Amended 2026-10-02 (owner): KKBox is scored locally; it is never sent to a third party.**
+Where this file says hosted, PriorLabs or egress for KKBox, read the amendment below. The
+hosted scorer (K7-K10) stays built and `tabpfn-client` stays a dependency, for cohorts cleared to
+leave the machine; it is not used on KKBox data. `TABPFN_TOKEN` comes from `.env`.
 Module id: `kkbox-cohort` (single capability; Phase 0 scope check: no capability map needed —
 the mapping, the cohort spec and the scorer have one consumer, the existing
 targeting → experiment → approval path, and none ships or is verified apart from the others)
@@ -17,9 +21,11 @@ Inferences, not decisions you made. Correct any of them before planning.
 
 1. **Placement is inside the agent**, TabPFN only, no Kaggle submission, no leaderboard
    goal (your revisions to the plan, taken as final).
-2. **Hosted TabPFN is the scoring path** (`tabpfn-client`, egress to PriorLabs), chosen
-   because local TabPFN on ~50k rows × 5 folds is hours on a non-CUDA machine. The
-   recorded scores (local, uncommitted) remain the replay path.
+2. **Local TabPFN is the scoring path** (`TabPFNScorer`; amended 2026-10-02, was hosted
+   `tabpfn-client`). Sending Kaggle competition data to a vendor is not acceptable. Cost: ~50k
+   rows × 5 folds may be hours on a non-CUDA machine (unmeasured), so the cut is sized by timing
+   one local fold, and shrinks rather than the folds. The recorded scores (local, uncommitted)
+   remain the replay path.
 3. **Raw inputs (amended):** `train_v2.csv` (label), `members_v3.csv`, v1 `transactions.csv`
    (the history, to 2017-02-28) and `transactions_v2.csv` (rows up to the cutoff only; 75% of
    it is the March label window and is never a feature). `user_logs*.csv` (~30 GB) is **not** used; listening logs are listed as extras in the
@@ -69,7 +75,7 @@ Three moves, each a separate thing:
 2. **Collapse** those events to one row per subscriber (per-user features at the cutoff),
    written offline to `data/kkbox-cohort.csv` (gitignored); `datasets.load` then treats it
    as any file.
-3. **Score** it out of fold with hosted TabPFN through the existing `ChurnScorer` Protocol,
+3. **Score** it out of fold with local TabPFN through the existing `ChurnScorer` Protocol,
    record the scores, and use the recordings in CI and replay.
 
 **Why it fits.** KKBox has an observed paid amount, so unlike `bank-churn` it is
@@ -132,7 +138,7 @@ uv sync --extra prediction
 uv run python scripts/fetch_datasets.py                       # now also fetches KKBox raw files
 uv run python scripts/build_kkbox_cohort.py                   # raw -> data/kkbox-cohort.csv
 uv run python scripts/fetch_datasets.py --record              # rewrite data/manifest.json
-uv run python scripts/record_scores.py --datasets kkbox-churn # hosted scorer, TABPFN_TOKEN from .env
+uv run python scripts/record_scores.py --datasets kkbox-churn # local scorer, TABPFN_TOKEN from .env
 uv run pytest tests/fitness/test_kkbox_mapping.py tests/fitness/test_data_snapshot.py \
   tests/fitness/test_targeting.py tests/fitness/test_prediction_gate.py \
   tests/fitness/test_layer_boundaries.py
@@ -373,15 +379,16 @@ passes the leakage rules: it is known before the cutoff, it is not an identifier
   with and without them in one declared comparison (small sample, run once, recorded in the
   ADR). A candidate that wins and passes the rules stays; the comparison is not repeated
   until one gets a better number, since that is tuning against the gate.
-- **All features are sent to the hosted scorer.** No privacy filter on the engineered columns.
+- **No feature leaves the machine** (amended 2026-10-02; was "all features are sent to the hosted
+  scorer"). Scoring is local, so there is no privacy filter to design.
 
 ## Decisions taken (2026-10-01)
 
 | # | Decision |
 |---|---|
 | 1 | Add `currency` to `DatasetSpec`; render it in the approval text. No FX conversion. |
-| 2 | Send everything to the hosted scorer. Raw columns are in if they improve prediction and pass the leakage rules (see Feature set). |
-| 3 | `tabpfn-client` approved. Still yours: accept the Kaggle rules; the hosted preflight proves the token works. |
+| 2 | ~~Send everything to the hosted scorer.~~ **Superseded 2026-10-02: score locally; nothing is sent.** Raw columns are in if they improve prediction and pass the leakage rules (see Feature set). |
+| 3 | `tabpfn-client` approved and **kept**, but not used on KKBox data. The Kaggle-rules question is moot for scoring: no third-party processing. `TABPFN_TOKEN` from `.env`; the local preflight proves it loads the weights. |
 | 4 | No score is committed. |
 | 5 | `user_logs` stay out. |
 | 6 | `bd` outside 10–90 → null with a missing flag. |
@@ -392,5 +399,5 @@ passes the leakage rules: it is known before the cutoff, it is not an identifier
 1. **Plan truncation:** decisions 2–3 of your pasted plan were cut off; worth a glance.
 2. **Competition rules on third-party processing:** not verified by me; the ADR will say
    "decided by the owner, unverified" unless you tell me you've checked.
-3. **Raw-column comparison costs hosted credits.** It runs on a small sample; the size is
-   set after the one measuring call.
+3. **Raw-column comparison costs local compute, not credits** (amended 2026-10-02). It runs on a
+   small sample; the size is set after K12's timing run.

@@ -46,8 +46,9 @@ import pandas as pd
 # February. Fixed by the data, not chosen (docs/evidence/kkbox-exploration-reading.md).
 CUTOFF: Final = 20170228
 
-# The declared cut: how many labelled users are scored. Provisional until K12 measures the hosted
-# limits (rows per fit, quota); the cut shrinks to fit them, the folds never do (ADR-0012).
+# The declared cut: how many labelled users are scored. K12 timed the full five-fold local run at
+# about 42 minutes, so it stands; if it ever must shrink, the cut does and the folds never do
+# (ADR-0012).
 COHORT_USERS: Final = 50_000
 COHORT_SEED: Final = 20170228
 
@@ -254,7 +255,8 @@ def sample_users(labels: pd.DataFrame, n: int, *, seed: int) -> pd.Series:
     for _, group in ordered_labels.groupby(TARGET, sort=True):
         take = max(1, round(n * len(group) / len(ordered_labels)))
         chosen.append(group.msno.iloc[np.sort(rng.choice(len(group), size=take, replace=False))])
-    return pd.concat(chosen).sort_values().reset_index(drop=True)
+    drawn: pd.Series[str] = pd.concat(chosen)
+    return drawn.sort_values().reset_index(drop=True)
 
 
 def candidate_refusals(frame: pd.DataFrame, cutoff: int = CUTOFF) -> dict[str, str]:
