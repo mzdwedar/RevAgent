@@ -313,7 +313,7 @@ their position in the *order* is here.)
 
 ## Phase D: end to end and close-out
 
-- [ ] **K15: trigger → candidate → approval on `kkbox-churn`** · layers 1, 3, 5 (no change to 8) · *M*
+- [x] **K15: trigger → candidate → approval on `kkbox-churn`** · layers 1, 3, 5 (no change to 8) · *M*
   - Acceptance: **CI variant:** a tiny fixture cohort + deterministic fake scorer takes a
     trigger to an approval prompt that names a headcount and an NTD value at risk, and
     approval still sits immediately before the rollout, bound to run id, fingerprint and
@@ -323,6 +323,13 @@ their position in the *order* is here.)
     `tests/fitness/test_approve_resume_rollout.py` (CI); local smoke run; `uv run pytest
     tests/durability` and `uv run python -m evals run --gates` green.
   - Depends: K3, K6, K14. Files: tests, fixture glue (~3).
+  - **Done 2026-10-02 (CI variant).** `test_a_non_usd_cohort_goes_from_trigger_to_a_bound_approval_and_one_rollout`
+    in `tests/durability/test_proposal_admission.py`: NTD fixture cohort, stub scorer, full Temporal path; the
+    ask says `~4 customers` and `NTD 24,000` (no `$`), nothing rolls out before the answer, the approval is
+    found by run id + the wait's fingerprint + snapshot, one rollout commits. Red-checked by hard-coding
+    `currency="USD"` in `ChannelAsker` (test fails). No `src/` change: K1-K3 already carried it.
+    **Not done: the local variant** (worker + `RecordedScorers` on the real recording). Checkpoint D's
+    `tests/live` run (~2.5 h) has not happened, so the real cohort has not been used in an experiment.
 
 - [ ] **K16: close-out** · docs + guards · *S*
   - Acceptance: ADR-0012 complete (all nine topics, incl. the owner's competition-rules

@@ -15,6 +15,7 @@ action the wait holds: the payload that commits if the answer is yes.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,8 +23,9 @@ import pytest
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
+from agentstack.context.datasets import REGISTRY
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
-from agentstack.interfaces.slack import RecordingNotifier
+from agentstack.interfaces.slack import RecordingNotifier, render_blocks
 from agentstack.interfaces.wiring import ChannelAsker, Stack, answer, deliver
 from agentstack.model.contract import ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.runtime.drafting import PROPOSAL_DEVIATES, estimated_customers, intended_rollout
@@ -31,7 +33,7 @@ from agentstack.runtime.run import new_run
 from agentstack.runtime.temporal.activities import DEVIATES
 from agentstack.runtime.temporal.contracts import AskIntent, RunProgress, workflow_id
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
-from agentstack.runtime.waits import ResumeEvent, Wait, resume
+from agentstack.runtime.waits import ResumeEvent, Wait, WaitStore, resume
 from agentstack.storage.database import Database
 from agentstack.tools.experiments import ROLLOUT, prepare_rollout
 from tests.durability.test_approval_wait import PAYLOAD, posted, propose_and_wait
@@ -223,6 +225,42 @@ def test_the_question_carries_the_frozen_cohorts_currency() -> None:
 
     ((_, asked),) = notifier.posted
     assert asked.money() == "NTD 10,000"
+
+
+def test_a_non_usd_cohort_goes_from_trigger_to_a_bound_approval_and_one_rollout(
+    stack: Stack, app_database: Database
+) -> None:
+    """K15, the CI variant: the KKBox cohort's shape (NTD, revenue observed, no hosted
+    scorer) on a tiny fixture and a deterministic scorer. The question names a headcount
+    and an NTD figure, the rollout waits for the answer, and the approval is bound to the
+    run, the fingerprint and the snapshot the wait recorded. The local variant is the
+    worker with `RecordedScorers` on the real recording."""
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+
+    async def approve(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
+        assert stack.registry_client.rollouts == [], "the rollout went out before anyone answered"
+        await answer(stack, env.client, **slack_click(parked))
+        return await acted(handle)
+
+    run_id, parked, done = propose_and_wait(stack, app_database, then=approve)
+
+    (asked,) = posted(stack)
+    assert asked.currency == "NTD" and asked.money() == "NTD 24,000"
+    assert asked.estimated_customers == 4
+    rendered = str(render_blocks(asked))
+    assert "Roll out to ~4 customers" in rendered and "NTD 24,000" in rendered
+    assert "$" not in rendered
+
+    wait = WaitStore(db=app_database).get(parked.awaiting_approval or "")
+    assert wait is not None and wait.action_fingerprint
+    approval = stack.approvals.find(
+        run_id=run_id,
+        action_fingerprint=wait.action_fingerprint,
+        state_snapshot=wait.state_snapshot,
+    )
+    assert approval is not None and approval.by_a_human is True
+    assert done.commits[0].status == "committed"
+    assert len(stack.registry_client.rollouts) == 1
 
 
 def park_deviating(stack: Stack, parked: RunProgress, **changes: Any) -> Wait:
