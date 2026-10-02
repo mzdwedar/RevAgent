@@ -169,7 +169,7 @@ their position in the *order* is here.)
     `uv run pytest tests/fitness/test_layer_boundaries.py` green.
   - Depends: K8. Files: `licence.py`/`hosted_scorer.py`, `worker_cli.py`, `preflight_cli.py`, test (~4).
 
-- [ ] **K10: evidence for the hosted call** · layer 9 · *S*
+- [x] **K10: evidence for the hosted call** · layer 9 · *S* — **Done 2026-10-02.** `runtime.operator.TracedScorer` wraps the cycle's scorer per call and leaves one `execution.read` span (`tool=churn.score`, dataset, rows, folds, served `model_version`, `latency_ms`, `outcome`; a failure records `error` as the exception type, never its message). Wired in `evaluate_cycle`; no span type added (still 9), no audit record (a read is traced, not audited). 5 tests in `test_hosted_call_evidence.py`, including that no feature value, column name or token reaches a span. One span per `score()`, not per fold fit: the fold fits are one call to the cohort's owner. README fitness count 49 to 50.
   - Acceptance: each hosted call emits a trace/audit record with rows, folds, served
     version, latency and outcome, using an **existing** span type (no type removed; none
     added unless none fits, in which case the count bump is stated); **never** row contents

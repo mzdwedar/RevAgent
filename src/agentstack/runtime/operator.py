@@ -13,11 +13,15 @@ targeting being deterministic is that no model gets a say in who enters the expe
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
+
+import pandas as pd
 
 from agentstack.context import datasets
 from agentstack.context.targeting import Cohort, TargetingRefused, TargetingRule, money, select
+from agentstack.observability.spans import Tracer
 from agentstack.policy.triggers import Outcome, TriggerEvent
-from agentstack.prediction.churn import ChurnScorer, ScoringError
+from agentstack.prediction.churn import ChurnScorer, ChurnScores, ScoringError
 
 
 class TriggerNotUnderstood(RuntimeError):
@@ -35,6 +39,59 @@ class Evaluation:
     def as_seam_result(self) -> tuple[Outcome, str | None]:
         """The shape `cycles.evaluate` expects."""
         return self.outcome, None if self.cohort is None else self.cohort.experiment_version
+
+
+@dataclass(frozen=True, slots=True)
+class TracedScorer:
+    """A `ChurnScorer` that leaves a span for each call it makes (K10).
+
+    Scoring through the hosted scorer sends cohort rows to a third party, and a run that
+    scored a cohort should be able to say how big, under which served version, how long it
+    took and whether it worked. It is a read, so the span is `execution.read`, the type the
+    gateway emits for one; no span type is added.
+
+    The wrapper only sees sizes, the scores' own provenance and a clock. It is never handed
+    a feature value or a token to leave out, and a failure records the exception's type and
+    not its message, because a vendor's message is not ours to vouch for.
+    """
+
+    inner: ChurnScorer
+    tracer: Tracer
+
+    @property
+    def model_version(self) -> str:
+        return self.inner.model_version
+
+    def score(
+        self,
+        *,
+        features: pd.DataFrame,
+        labels: pd.Series,
+        dataset: str,
+        data_as_of: str,
+    ) -> ChurnScores:
+        started = perf_counter()
+        with self.tracer.span(
+            "execution.read", tool="churn.score", dataset=dataset, rows=len(features)
+        ) as span:
+            try:
+                scores = self.inner.score(
+                    features=features, labels=labels, dataset=dataset, data_as_of=data_as_of
+                )
+            except Exception as exc:
+                span.attributes.update(
+                    outcome="failed",
+                    error=type(exc).__name__,
+                    latency_ms=round((perf_counter() - started) * 1000),
+                )
+                raise
+            span.attributes.update(
+                outcome="scored",
+                folds=scores.folds,
+                model_version=scores.model_version,
+                latency_ms=round((perf_counter() - started) * 1000),
+            )
+        return scores
 
 
 def dataset_of(data_as_of: str) -> str:

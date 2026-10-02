@@ -47,7 +47,7 @@ from agentstack.runtime.drafting import (
 from agentstack.runtime.graph import finished_turn, turn_thread
 from agentstack.runtime.loop import TurnDeps
 from agentstack.runtime.loop import run_turn as take_turn
-from agentstack.runtime.operator import Evaluation, evaluate_trigger
+from agentstack.runtime.operator import Evaluation, TracedScorer, evaluate_trigger
 from agentstack.runtime.run import Run, RunStore
 from agentstack.runtime.snapshot import world_snapshot
 from agentstack.runtime.steps import execute_step_name
@@ -232,13 +232,13 @@ class RunActivities:
                 kind=event.kind.value,
                 data_as_of=event.data_as_of,
             ) as span:
-                result = self._evaluate(event, recorded)
+                result = self._evaluate(event, recorded, tracer)
                 span.attributes["outcome"] = result.outcome
                 return result
         finally:
             self._traces.export(tracer.spans)
 
-    def _evaluate(self, event: TriggerEvent, recorded: Run) -> CycleResult:
+    def _evaluate(self, event: TriggerEvent, recorded: Run, tracer: Tracer) -> CycleResult:
         try:
             authorize_trigger_tenant(event, run_tenant=recorded.tenant)
         except TenantClaimRefused as refusal:
@@ -259,7 +259,9 @@ class RunActivities:
         evaluated: list[Evaluation] = []
 
         def evaluator(e: TriggerEvent) -> tuple[Outcome, str | None]:
-            evaluated.append(evaluate_trigger(e, scorer=self._scorer, rule=self._rule))
+            evaluated.append(
+                evaluate_trigger(e, scorer=TracedScorer(self._scorer, tracer), rule=self._rule)
+            )
             return evaluated[-1].as_seam_result()
 
         def freeze(outcome: Outcome, _: str | None) -> None:
