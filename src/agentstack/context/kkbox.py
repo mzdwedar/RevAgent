@@ -46,6 +46,11 @@ import pandas as pd
 # February. Fixed by the data, not chosen (docs/evidence/kkbox-exploration-reading.md).
 CUTOFF: Final = 20170228
 
+# The declared cut: how many labelled users are scored. Provisional until K12 measures the hosted
+# limits (rows per fit, quota); the cut shrinks to fit them, the folds never do (ADR-0012).
+COHORT_USERS: Final = 50_000
+COHORT_SEED: Final = 20170228
+
 # A first observed transaction this soon after registration is read as an initial purchase.
 INITIAL_WINDOW_DAYS: Final = 30
 
@@ -221,6 +226,30 @@ def to_events(
         columns="_order"
     )
     return out.reset_index(drop=True)
+
+
+def sample_users(labels: pd.DataFrame, n: int, *, seed: int) -> pd.Series:
+    """The declared cut: `n` users drawn from `labels`, stratified on the label, sorted by `msno`.
+
+    Pure and seeded: the same labels and seed give the same users whatever the row order, so the
+    cohort is a reproducible population rather than a lucky draw. Each class keeps its share
+    (at least one user, so a rare class survives); a cut at or above the population is the whole
+    population. It chooses *who*, from the label alone, and is never widened to suit a target.
+    """
+    if n <= 0:
+        raise ValueError("the cut must be a positive number of users")
+    if not labels.msno.is_unique:
+        raise ValueError("labels must have one row per msno")
+    ordered_labels = labels.sort_values("msno")
+    if n >= len(ordered_labels):
+        return ordered_labels.msno.reset_index(drop=True)
+
+    rng = np.random.default_rng(seed)
+    chosen = []
+    for _, group in ordered_labels.groupby(TARGET, sort=True):
+        take = max(1, round(n * len(group) / len(ordered_labels)))
+        chosen.append(group.msno.iloc[np.sort(rng.choice(len(group), size=take, replace=False))])
+    return pd.concat(chosen).sort_values().reset_index(drop=True)
 
 
 def _level(series: pd.Series) -> pd.Series:

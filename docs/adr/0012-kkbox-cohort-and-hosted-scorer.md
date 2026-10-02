@@ -133,6 +133,13 @@ All engineered features are sent; `msno` and raw identifiers are not (modelling 
 the Kaggle competition rules permit third-party processing is **not verified by the author**;
 the owner's statement is recorded here at Checkpoint C.
 
+**K11 (built 2026-10-02): the declared cut.** `scripts/build_kkbox_cohort.py` writes
+`data/kkbox-cohort.csv` offline. `kkbox.sample_users` draws `COHORT_USERS = 50,000` labelled
+users, stratified on `is_churn`, seed `20170228`, independent of row order; users with no
+history before the cutoff drop out afterwards, so the file has 49,863 rows, churn 8.9%
+(`data_as_of kkbox-churn:7b2787de78c817e3`, recorded in `data/manifest.json`). The size is
+**provisional**: K12 measures the hosted limits and the cut shrinks to fit them, never the folds.
+
 ### 7. Revenue and currency (decided, built: K1-K3, K6)
 
 Observed `actual_amount_paid` of the last pre-cutoff transaction, annualised x12. Holds for the
@@ -141,13 +148,12 @@ Currency is NTD, carried in a `currency` field and shown in the approval prompt;
 conversion, because a converted figure would be a modelled quantity.
 
 Registered as `REGISTRY["kkbox-churn"]` with `derived_by="scripts/build_kkbox_cohort.py"`: the cohort
-file is built, not downloaded, so it has no `data_as_of` until K11 records one. The manifest test
+file is built, not downloaded (K11 recorded its `data_as_of`). The manifest test
 exempts a derived cohort only until then; a downloaded cohort is never exempt.
 
 ## Consequences
 
 - Sections 4-7 are decisions not yet built; this ADR is `proposed` until K16.
-- `tests/live` fails (does not skip) for KKBox until the cohort is built (K11).
 - One new dependency, `tabpfn-client` (approved 2026-10-01), arrives in K7.
 
 ### K9 amendment: contract 3 ignores two edges (approved by the owner, 2026-10-02)

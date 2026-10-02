@@ -233,7 +233,7 @@ their position in the *order* is here.)
 - [x] Spec amended: v1 `transactions.csv` is a raw input
 - [x] Human review
 
-- [ ] **K11: build the cohort file, declared cut** · scripts + layer 5 · *M*
+- [x] **K11: build the cohort file, declared cut** · scripts + layer 5 · *M*
   - Acceptance: `scripts/build_kkbox_cohort.py` builds
     `data/kkbox-cohort.csv` via `kkbox.py` (offline, outside the package); a pure
     `sample_users` (stratified on the label, seed-pinned, deterministic) draws the cut;
@@ -243,6 +243,10 @@ their position in the *order* is here.)
     same users; never widened to a target) in `test_kkbox_mapping.py`; then locally
     `uv run pytest tests/live/test_real_cohorts.py` (cohort matches manifest).
   - Depends: K11a + Checkpoint E. Files: `build_kkbox_cohort.py`, `kkbox.py`, test, manifest (~4).
+  - **Done 2026-10-02.** `kkbox.sample_users` (pure, seeded, stratified, row-order independent, rare
+    class keeps >= 1) plus `COHORT_USERS = 50,000` (provisional until K12) and `COHORT_SEED`;
+    `scripts/build_kkbox_cohort.py` (~30 s) wrote 49,863 rows, churn 8.9%; manifest entry recorded;
+    `tests/live/test_real_cohorts.py` green for all three cohorts. 6 tests added (41 in the file).
 
 ### Checkpoint C: before the first real egress of cohort rows
 - [ ] You state whether the Kaggle competition rules permit third-party processing:

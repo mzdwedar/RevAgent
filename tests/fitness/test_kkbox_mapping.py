@@ -535,3 +535,63 @@ def test_an_absent_derived_cohort_names_its_build_script_not_the_downloader(
     with pytest.raises(datasets.DatasetError, match="build_kkbox_cohort"):
         datasets.load("kkbox-churn", root=tmp_path)
     assert datasets.REGISTRY["telecom-bigml"].derived_by == ""
+
+
+# ---------------------------------------------------------------------------------------------
+# The declared cut (agentstack.context.kkbox.sample_users)
+
+
+def population(users: int = 1000, churn_every: int = 10) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "msno": [f"u{i:05d}" for i in range(users)],
+            "is_churn": [int(i % churn_every == 0) for i in range(users)],
+        }
+    )
+
+
+def test_the_cut_is_deterministic_and_does_not_depend_on_row_order() -> None:
+    labels = population()
+    first = kkbox.sample_users(labels, 200, seed=7)
+
+    assert first.equals(kkbox.sample_users(labels, 200, seed=7))
+    assert first.equals(kkbox.sample_users(labels.sample(frac=1, random_state=3), 200, seed=7))
+    assert not first.equals(kkbox.sample_users(labels, 200, seed=8))
+
+
+def test_the_cut_keeps_the_label_balance() -> None:
+    labels = population()
+    cut = kkbox.sample_users(labels, 200, seed=7)
+    rate = labels.set_index("msno").loc[cut, "is_churn"].mean()
+
+    assert len(cut) == 200
+    assert rate == pytest.approx(labels.is_churn.mean(), abs=0.005)
+    assert cut.is_unique
+
+
+def test_a_cut_at_or_above_the_population_is_the_whole_population() -> None:
+    labels = population(50)
+
+    assert list(kkbox.sample_users(labels, 50, seed=1)) == sorted(labels.msno)
+    assert list(kkbox.sample_users(labels, 500, seed=1)) == sorted(labels.msno)
+
+
+def test_a_rare_class_is_never_sampled_out_of_existence() -> None:
+    labels = population(1000, churn_every=500)
+    cut = kkbox.sample_users(labels, 10, seed=1)
+
+    assert labels.set_index("msno").loc[cut, "is_churn"].sum() >= 1
+
+
+def test_the_cut_refuses_what_it_cannot_stratify() -> None:
+    with pytest.raises(ValueError, match="one row per msno"):
+        kkbox.sample_users(pd.concat([population(10), population(10)]), 5, seed=1)
+    with pytest.raises(ValueError, match="positive"):
+        kkbox.sample_users(population(10), 0, seed=1)
+
+
+def test_the_cut_is_a_declared_size_and_the_build_script_stays_outside_the_package() -> None:
+    assert kkbox.COHORT_USERS > 0
+    assert (ROOT / "scripts" / "build_kkbox_cohort.py").exists()
+    src = ROOT / "src" / "agentstack"
+    assert not any("import build_kkbox_cohort" in p.read_text() for p in src.rglob("*.py"))

@@ -21,6 +21,39 @@
     "dataset": "bank-churn",
     "rows": 10000
   },
+  "kkbox-churn": {
+    "churn_rate": 0.088723,
+    "columns": [
+      "bd",
+      "bd_missing",
+      "city",
+      "days_since_last_event",
+      "days_to_expiry",
+      "ever_trial",
+      "gender",
+      "is_churn",
+      "last_actual_amount_paid",
+      "last_is_auto_renew",
+      "last_is_cancel",
+      "last_payment_method_id",
+      "last_payment_plan_days",
+      "last_plan_list_price",
+      "left_censored",
+      "n_cancellation",
+      "n_expiration",
+      "n_initial_purchase",
+      "n_renewal",
+      "n_transactions",
+      "paid_vs_list",
+      "plan_changes",
+      "registered_via",
+      "tenure_days",
+      "total_paid"
+    ],
+    "data_as_of": "kkbox-churn:7b2787de78c817e3",
+    "dataset": "kkbox-churn",
+    "rows": 49863
+  },
   "telecom-bigml": {
     "churn_rate": 0.144914,
     "columns": [
