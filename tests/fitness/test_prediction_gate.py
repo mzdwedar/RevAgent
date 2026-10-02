@@ -1084,3 +1084,129 @@ def test_the_scripts_that_need_the_token_read_it_from_dot_env(
     assert os.environ["OTHER"] == "x y"
     assert os.environ["BARE"] == "from-the-shell", "the real environment wins"
     module.load_env(tmp_path / "missing.env")  # absent file is not an error
+
+
+# --- K14: recording the KKBox scores, locally ---
+
+
+def record_scores_module() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "record_scores", ROOT / "scripts/record_scores.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_kkbox_scores_file_is_git_ignored() -> None:
+    """Scores are a function of third-party rows; a committed file is those rows' shadow."""
+    import subprocess
+
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "data/scores/kkbox-churn.json"],
+        cwd=ROOT,
+        check=False,
+    )
+
+    assert ignored.returncode == 0, "data/scores/kkbox-churn.json would be committed"
+
+
+def test_the_local_scorer_reports_each_fold_as_it_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    reported: list[tuple[int, int]] = []
+
+    class Fake:
+        def fit(self, x: object, y: object) -> None: ...
+
+        def predict_proba(self, x: pd.DataFrame) -> list[list[float]]:
+            return [[0.5, 0.5] for _ in range(len(x))]
+
+    TabPFNScorer(
+        folds=3,
+        build_classifier=lambda _checkpoint: Fake(),
+        progress=lambda done, total: reported.append((done, total)),
+    ).score(
+        features=pd.DataFrame({"x": [float(i) for i in range(30)]}),
+        labels=pd.Series([i % 2 for i in range(30)]),
+        dataset="d",
+        data_as_of="d:1",
+    )
+
+    assert reported == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_record_scores_prints_progress_and_writes_one_complete_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    module = record_scores_module()
+    frame = pd.DataFrame({"x": [0.0, 1.0, 0.0, 1.0], "is_churn": [0, 1, 0, 1]})
+    monkeypatch.setattr(module, "load_env", lambda: None)
+    monkeypatch.setattr(module, "SCORES_ROOT", tmp_path / "scores")
+    monkeypatch.setattr(
+        module.datasets,
+        "load",
+        lambda _key: type("S", (), {"frame": frame, "rows": 4, "data_as_of": "k:1"}),
+    )
+
+    class Scorer:
+        def __init__(self, *, progress: Callable[[int, int], None]) -> None:
+            self.progress = progress
+
+        def preflight(self) -> str:
+            return MODEL_VERSION
+
+        def score(self, **_: object) -> ChurnScores:
+            for fold in range(1, 6):
+                self.progress(fold, 5)
+            return scores(dataset="kkbox-churn", data_as_of="k:1", probabilities=(0.1,) * 4)
+
+    monkeypatch.setattr(module, "TabPFNScorer", Scorer)
+
+    assert module.main(["--datasets", "kkbox-churn"]) == 0
+
+    assert "fold 3/5" in capsys.readouterr().out
+    assert (
+        json.loads((tmp_path / "scores/kkbox-churn.json").read_text())["dataset"] == "kkbox-churn"
+    )
+
+
+def test_record_scores_writes_no_partial_file_when_scoring_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = record_scores_module()
+    frame = pd.DataFrame({"x": [0.0, 1.0], "is_churn": [0, 1]})
+    monkeypatch.setattr(module, "load_env", lambda: None)
+    monkeypatch.setattr(module, "SCORES_ROOT", tmp_path / "scores")
+    monkeypatch.setattr(
+        module.datasets,
+        "load",
+        lambda _key: type("S", (), {"frame": frame, "rows": 2, "data_as_of": "k:1"}),
+    )
+
+    class Scorer:
+        def __init__(self, *, progress: Callable[[int, int], None]) -> None: ...
+
+        def preflight(self) -> str:
+            return MODEL_VERSION
+
+        def score(self, **_: object) -> ChurnScores:
+            raise ScoringError("fold 3 died")
+
+    monkeypatch.setattr(module, "TabPFNScorer", Scorer)
+
+    with pytest.raises(ScoringError):
+        module.main(["--datasets", "kkbox-churn"])
+
+    assert not list((tmp_path / "scores").glob("*"))
+
+
+def test_record_scores_is_local_only_and_says_so() -> None:
+    text = (ROOT / "scripts/record_scores.py").read_text()
+
+    assert "hosted_scorer" not in text and "HostedTabPFNScorer" not in text
+    assert "IS committed" not in text
+    assert "not committed" in text.lower()

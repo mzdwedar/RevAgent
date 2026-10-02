@@ -70,6 +70,9 @@ class TabPFNScorer:
     # that applies outside CUDA. The benchmark set this too; it is a limit on the
     # advertised operating range, not a correctness switch.
     ignore_pretraining_limits: bool = True
+    # Called as (folds done, folds) after each fold, so a long local run can say where it
+    # is. It sees two integers and nothing of the data.
+    progress: Callable[[int, int], None] | None = None
 
     @property
     def model_version(self) -> str:
@@ -145,6 +148,8 @@ class TabPFNScorer:
             predicted = classifier.predict_proba(encoded.iloc[held_out])
             for position, row in enumerate(held_out):
                 probabilities[row] = float(predicted[position][1])
+            if self.progress is not None:
+                self.progress(fold + 1, self.folds)
 
         return ChurnScores(
             dataset=dataset,

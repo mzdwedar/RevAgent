@@ -285,7 +285,7 @@ their position in the *order* is here.)
     (local, 5,000 users, declared tie band). **Without wins:** log loss 0.17008 vs 0.17068 with `expiry_date_raw`;
     `registration_date_raw` was refused as an identifier at that sample size. Cohort and manifest unchanged. ADR-0012 3c.
 
-- [ ] **K14: record the KKBox scores (local only)** · scripts + layer 4b · *M* (rewritten 2026-10-02)
+- [x] **K14: record the KKBox scores (local only)** · scripts + layer 4b · *M* (rewritten 2026-10-02)
   - Acceptance: `record_scores.py --datasets kkbox-churn` uses the local `TabPFNScorer` (as it
     already does; no scorer switch is added, so the hosted path is not reachable from this
     script) and records `data/scores/kkbox-churn.json`, **not committed**; a fitness test asserts
@@ -295,6 +295,11 @@ their position in the *order* is here.)
     model; scores separate churners; out-of-fold log loss beats the prior; reproducible);
     new `tests/fitness` assertion `git check-ignore data/scores/kkbox-churn.json`.
   - Depends: K13. Files: `record_scores.py`, tests (~3).
+  - **Done 2026-10-02.** `TabPFNScorer.progress` callback; `record_scores.py` prints `fold n/5`, writes a
+    dataset's file only after every fold, docstring says local-only and not committed; 5 tests in
+    `test_prediction_gate.py` (incl. `git check-ignore`). Recorded `data/scores/kkbox-churn.json`
+    (49,863 rows, `tabpfn-3.5`): out-of-fold log loss 0.1616 vs prior 0.2996, AUC 0.9117, churners
+    0.512 vs rest 0.048. **Not yet run:** `tests/live/test_real_scores.py` (re-scores; ~2.5 h).
   - Note: `test_the_recorded_scores_are_still_what_the_model_produces` re-scores in the live lane,
     so at the K12 cut it is as slow as the recording. If that is too slow for a routine local
     run, it scores a fixed subsample, declared in the test, and never a widened one.
