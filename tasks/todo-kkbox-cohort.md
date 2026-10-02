@@ -306,7 +306,16 @@ their position in the *order* is here.)
 
 ### Checkpoint D: before the cohort is used in an experiment
 - [ ] `uv run pytest tests/live` green locally (cohort, correlation bar, scores)
-- [ ] `git status` shows no score, raw data or token staged
+  - **Partly run 2026-10-02; the scores half is deliberately not run.** Passed (21): exploration report
+    matches the real files, cohort + correlation bar for all three datasets, Ollama tool-call tests.
+    **Not run: `tests/live/test_real_scores.py`** (recorded-vs-fresh, churner separation, cross-process
+    reproducibility; 10 tests). Owner decision: skip it, and do not subsample (a subsample's out-of-fold
+    scores cannot match the full recording). A partial run reached 4 of 10 passing before it was
+    stopped. Until it is run, nothing proves TabPFN still returns what `data/scores/kkbox-churn.json`
+    recorded, so the real cohort is **not cleared for an experiment**.
+  - Harness note: pytest does not read `.env`; `tests/live` needs `TABPFN_TOKEN` exported
+    (`set -a; . ./.env; set +a`). Un-exported, all 10 error at setup with `LicenceRefused`.
+- [x] `git status` shows no score, raw data or token staged (checked 2026-10-02: nothing staged)
 - [ ] Human review
 
 ---
