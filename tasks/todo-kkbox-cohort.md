@@ -263,7 +263,7 @@ their position in the *order* is here.)
     ADR section populated; K11's `sample_users` test still green at the new size.
   - Depends: K9, K10, CP-C. Files: ADR, build script constant, live test (~3).
 
-- [ ] **K13: the raw-date comparison, once** · layer 5 + scripts · *S*
+- [x] **K13: the raw-date comparison, once** · layer 5 + scripts · *S*
   - Acceptance: a single declared out-of-fold comparison, with vs without the raw
     registration/expiry date candidates, on a small sample; the winner and both numbers go
     in ADR-0012; a candidate is kept only if known pre-cutoff, not an identifier, and
@@ -271,6 +271,9 @@ their position in the *order* is here.)
   - Verify: `uv run pytest tests/live/test_real_cohorts.py` (no feature |corr| > 0.9);
     `tests/fitness/test_data_snapshot.py` (drops still all have reasons).
   - Depends: K12. Files: `datasets.py`/`kkbox.py`, ADR, manifest (~4).
+  - **Done 2026-10-02.** `kkbox.candidate_refusals` (the three rules, pure) with 5 tests; `scripts/compare_kkbox_raw_dates.py`
+    (local, 5,000 users, declared tie band). **Without wins:** log loss 0.17008 vs 0.17068 with `expiry_date_raw`;
+    `registration_date_raw` was refused as an identifier at that sample size. Cohort and manifest unchanged. ADR-0012 3c.
 
 - [ ] **K14: record the KKBox scores (local only)** · scripts + layer 4b · *M*
   - Acceptance: `record_scores.py --datasets kkbox-churn` uses the hosted scorer and

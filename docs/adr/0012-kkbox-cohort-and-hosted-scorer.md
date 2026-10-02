@@ -75,8 +75,31 @@ byte for byte. No hosted call, no egress.
   `registered_via`, payment method) are categories, not ordered numbers; missing is a level.
 - Total paid counts non-cancel rows only: a cancel row repeats the plan's amount, not a payment.
 - `msno` and the raw dates are excluded with reasons (`kkbox.EXCLUDED`); the raw registration and
-  expiry dates are candidates behind `raw_dates=True`, decided once in K13.
+  expiry dates are candidates behind `raw_dates=True`, decided once in K13 (3c).
 - Real sample: max |corr| with the label is 0.40, so the 0.9 rule excludes nothing yet.
+
+### 3c. The raw-date comparison (K13, decided 2026-10-02: without)
+
+Run once, locally (`scripts/compare_kkbox_raw_dates.py`, local `TabPFNScorer`, no egress): 5,000
+users drawn with `COHORT_SEED`, the same rows, folds and seed in both arms, 5-fold out-of-fold.
+The rule was declared before the run: lower log loss wins, a gap under 0.0005 goes to without, and
+a candidate must pass `kkbox.candidate_refusals` (known at the cutoff, not an identifier,
+|corr| with `is_churn` at most 0.9).
+
+| Arm | Out-of-fold log loss | AUC |
+|---|---|---|
+| without the candidates (the cohort as built) | 0.17008 | 0.8987 |
+| with `expiry_date_raw` | 0.17068 | 0.8980 |
+
+- **Winner: without.** The cohort, its `data_as_of` and the manifest are unchanged; nothing is rebuilt.
+- `registration_date_raw` was **refused by the identifier rule** on this sample (more than half its
+  values distinct among 4,989 users), so it was not scored. The 0.5 share is a property of the
+  sample size: a 50,000-user cut repeats registration days far more. The comparison is not repeated
+  to find out, because the rule says once; reopening it is a new decision with its own declared bar.
+- `|corr|` with the label: registration 0.013, expiry 0.125, both far under 0.9.
+- Both candidates are the same information as features already in the cohort: registration is the
+  cutoff minus `tenure_days`, and expiry is the cutoff plus `days_to_expiry`. The expected gain was
+  small, and the measured one is slightly negative.
 
 ### 4. Hosted scorer, placement and egress (decided in the spec; lands in K7-K10)
 

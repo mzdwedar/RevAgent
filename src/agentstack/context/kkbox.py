@@ -85,6 +85,11 @@ EXCLUDED: Final = {
 CANDIDATE_COLUMNS: Final = ("registration_date_raw", "expiry_date_raw")
 TARGET: Final = "is_churn"
 
+# A candidate column is kept only if it passes all three (K13): known at the cutoff, not an
+# identifier, and not correlated with the label like an outcome (the bar `tests/live` enforces).
+IDENTIFIER_SHARE: Final = 0.5
+MAX_LABEL_CORRELATION: Final = 0.9
+
 # `bd` outside this range is a data-entry artefact (zero for most users), not an age.
 BD_RANGE: Final = (10, 90)
 _DAY_MS: Final = 86_400_000
@@ -250,6 +255,27 @@ def sample_users(labels: pd.DataFrame, n: int, *, seed: int) -> pd.Series:
         take = max(1, round(n * len(group) / len(ordered_labels)))
         chosen.append(group.msno.iloc[np.sort(rng.choice(len(group), size=take, replace=False))])
     return pd.concat(chosen).sort_values().reset_index(drop=True)
+
+
+def candidate_refusals(frame: pd.DataFrame, cutoff: int = CUTOFF) -> dict[str, str]:
+    """Why each raw-date candidate present in `frame` may not be kept; empty means all pass.
+
+    Registration must not be after the cutoff (the builder nulls those, so one here means a
+    caller bypassed it). A candidate that is distinct for about every row names the row, and one
+    correlated with `is_churn` above `MAX_LABEL_CORRELATION` is the label in another form.
+    """
+    refused: dict[str, str] = {}
+    for column in CANDIDATE_COLUMNS:
+        if column not in frame:
+            continue
+        values = frame[column].dropna()
+        if column == "registration_date_raw" and (values > cutoff).any():
+            refused[column] = f"known only after the cutoff {cutoff}: a registration after it"
+        elif len(values) and values.nunique() / len(values) > IDENTIFIER_SHARE:
+            refused[column] = "identifier: distinct for most rows, so it names the row"
+        elif abs(frame[column].corr(frame[TARGET])) > MAX_LABEL_CORRELATION:
+            refused[column] = f"|corr| with {TARGET} above {MAX_LABEL_CORRELATION}"
+    return refused
 
 
 def _level(series: pd.Series) -> pd.Series:

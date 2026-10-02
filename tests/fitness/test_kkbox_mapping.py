@@ -595,3 +595,53 @@ def test_the_cut_is_a_declared_size_and_the_build_script_stays_outside_the_packa
     assert (ROOT / "scripts" / "build_kkbox_cohort.py").exists()
     src = ROOT / "src" / "agentstack"
     assert not any("import build_kkbox_cohort" in p.read_text() for p in src.rglob("*.py"))
+
+
+# K13: a raw-date candidate is admitted only if it passes the three rules
+
+
+def candidates(users: int = 200) -> pd.DataFrame:
+    """A cohort-shaped frame with both candidate columns, dates shared by many users."""
+    return pd.DataFrame(
+        {
+            "registration_date_raw": [20160101 + (i % 20) for i in range(users)],
+            "expiry_date_raw": [20170301 + (i % 28) for i in range(users)],
+            "is_churn": [(i * 7) % 11 == 0 for i in range(users)],
+        }
+    ).astype({"is_churn": int})
+
+
+def test_a_candidate_that_passes_all_three_rules_is_admitted() -> None:
+    assert kkbox.candidate_refusals(candidates(), CUTOFF) == {}
+
+
+def test_a_registration_after_the_cutoff_is_refused_as_unknown_at_the_cutoff() -> None:
+    frame = candidates()
+    frame.loc[3, "registration_date_raw"] = CUTOFF + 1
+
+    refused = kkbox.candidate_refusals(frame, CUTOFF)
+
+    assert set(refused) == {"registration_date_raw"}
+    assert "after the cutoff" in refused["registration_date_raw"]
+
+
+def test_a_candidate_that_names_each_row_is_refused_as_an_identifier() -> None:
+    frame = candidates()
+    frame["expiry_date_raw"] = range(20170301, 20170301 + len(frame))
+
+    assert set(kkbox.candidate_refusals(frame, CUTOFF)) == {"expiry_date_raw"}
+    assert "identifier" in kkbox.candidate_refusals(frame, CUTOFF)["expiry_date_raw"]
+
+
+def test_a_candidate_that_correlates_with_the_label_like_an_outcome_is_refused() -> None:
+    frame = candidates()
+    frame["registration_date_raw"] = 20160101 + frame.is_churn
+
+    refused = kkbox.candidate_refusals(frame, CUTOFF)
+
+    assert set(refused) == {"registration_date_raw"}
+    assert "0.9" in refused["registration_date_raw"]
+
+
+def test_the_rules_ignore_a_candidate_that_is_not_in_the_frame() -> None:
+    assert kkbox.candidate_refusals(candidates().drop(columns=["expiry_date_raw"]), CUTOFF) == {}

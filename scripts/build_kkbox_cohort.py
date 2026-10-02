@@ -34,7 +34,7 @@ def history(root: Path, users: set[str]) -> pd.DataFrame:
     return pd.concat([*parts, v2], ignore_index=True).drop_duplicates()
 
 
-def build(root: Path, users: int, seed: int) -> pd.DataFrame:
+def build(root: Path, users: int, seed: int, *, raw_dates: bool = False) -> pd.DataFrame:
     """The cohort frame: one row per sampled subscriber, `msno` as a column."""
     labels = pd.read_csv(root / "train_v2.csv")
     cut = kkbox.sample_users(labels, users, seed=seed)
@@ -43,7 +43,9 @@ def build(root: Path, users: int, seed: int) -> pd.DataFrame:
     members = members[members.msno.isin(chosen)]
     registration = members.set_index("msno").registration_init_time.astype("float64")
     events = kkbox.to_events(history(root, chosen), registration, kkbox.CUTOFF)
-    features = kkbox.to_features(events, members, labels[labels.msno.isin(chosen)], kkbox.CUTOFF)
+    features = kkbox.to_features(
+        events, members, labels[labels.msno.isin(chosen)], kkbox.CUTOFF, raw_dates=raw_dates
+    )
     return features.reset_index()
 
 
