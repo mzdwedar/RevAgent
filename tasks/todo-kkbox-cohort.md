@@ -341,6 +341,13 @@ their position in the *order* is here.)
     `uv run python scripts/checkpoint_guard.py --base main`, `uv run python scripts/replay_guard.py`,
     README-claims test in `tests/fitness`, `osv-scanner scan source -r .` (CI).
   - Depends: K15. Files: docs, `CONSTRAINTS.md`, README (~4).
+  - **Docs half done 2026-10-02; K16 stays open.** ADR-0012 already had all topics incl. the owner's
+    statement. Counts were true (fitness 45, coverage 98%, `check_full.sh` green). Two stale claims fixed:
+    the uncoverable-lines paragraph now names the two `PriorLabsClassifier` passthroughs (five -> seven),
+    and "Not yet recorded" became "Recorded locally, not yet re-run" (three score files exist; the
+    ~2.5 h `tests/live` re-score has not run). README says three datasets. **Both `CONSTRAINTS.md` edits
+    are prose, no rule or threshold touched; `stack_guard` clean.** Still to do: `/review`,
+    `/stack-audit` (mandatory), Checkpoint D, `/ship`.
 
 ### Checkpoint: complete
 - [ ] All 8 success criteria in `SPEC-kkbox-cohort.md` met or explicitly deferred with a reason

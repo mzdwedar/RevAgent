@@ -149,7 +149,7 @@ bash scripts/dev_up.sh        # Postgres 16 + Temporal dev server, then migratio
 uv run agentstack
 ```
 
-Recorded TabPFN scores for the two dev datasets live in `data/scores/`; to regenerate
+Recorded TabPFN scores for the three local datasets live in `data/scores/`; to regenerate
 them, set `TABPFN_TOKEN` and run `uv run python scripts/record_scores.py` (needs
 `uv sync --extra prediction`).
 
@@ -328,8 +328,9 @@ contributor rules are `CLAUDE.md` and `AGENTS.md`, and every change must pass
   auditing the stores at Checkpoint A rather than by trusting the task list, and
   recorded in `tasks/todo.md` instead of quietly left.
 - **Recorded TabPFN scores exist only on the machine that made them.** `data/scores/`
-  holds `telecom-bigml.json` and `bank-churn.json` (`tabpfn-3.5`, 5 folds, seed
-  20260922), written by `scripts/record_scores.py`. The gate, the fold assignment, the
+  holds `telecom-bigml.json`, `bank-churn.json` (`tabpfn-3.5`, 5 folds, seed
+  20260922), written by `scripts/record_scores.py`, and `kkbox-churn.json` (`tabpfn-3.5`,
+  recorded 2026-10-02, not yet re-scored by `tests/live`). The gate, the fold assignment, the
   cross-fitting and the replay guards run against them. But `data/` is gitignored and
   the `!data/scores/` exception does not re-include a directory whose parent is ignored,
   so CI and a fresh clone still do not get the files. Regenerating them needs the

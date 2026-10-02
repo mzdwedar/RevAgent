@@ -155,9 +155,10 @@ Why these numbers:
 - **High and above** for dependencies: below that is mostly noise.
 
 **A few lines reaching a real serving system cannot be covered in CI.** Three in `prediction/engine.py` construct and
-call `TabPFNClassifier`; two in `model/ollama_engine.py` construct the Ollama client.
-None executes where the extra, the licence or a running model is absent — which is CI,
-by design. All five are exercised by `tests/live`, which is why that lane exists.
+call `TabPFNClassifier`; two in `model/ollama_engine.py` construct the Ollama client; two in
+`execution/hosted_scorer.py` (`PriorLabsClassifier.fit` and `.predict_proba`) pass straight through to
+`tabpfn_client`. None executes where the extra, the licence or a running model is absent — which is
+CI, by design. All seven are exercised by `tests/live`, which is why that lane exists.
 
 The alternatives were a `pragma` (banned by the floor), installing torch and running a
 model in CI to raise a percentage, or pretending. The ratchet says what is true today,
@@ -198,9 +199,12 @@ It does not prove the data upstream is unchanged, and it does not prove TabPFN s
 returns what we recorded. That is what the live lane is for, and it has to actually
 be run.
 
-**Not yet recorded.** `data/scores/` is empty: producing it needs a `TABPFN_TOKEN`,
-and none is configured on this machine. Until it exists, `tests/live` fails with the
-command that fixes it rather than skipping — the same posture as a missing database.
+**Recorded locally, not yet re-run.** `data/scores/` holds `telecom-bigml.json`, `bank-churn.json`
+and `kkbox-churn.json` on the machine that made them; `data/` is gitignored, so CI and a fresh
+clone get none of them and `tests/live` fails with the command that fixes it rather than
+skipping — the same posture as a missing database. `kkbox-churn.json` (`tabpfn-3.5`, recorded
+2026-10-02) has not been re-scored by `tests/live/test_real_scores.py` (~2.5 h), so Checkpoint D
+of `tasks/todo-kkbox-cohort.md` is open and the real cohort has not been used in an experiment.
 
 ## Where checks run (cost decides placement)
 
