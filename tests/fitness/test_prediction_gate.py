@@ -9,7 +9,9 @@ refuse when they are absent, and that is exactly the condition CI is in.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import replace
@@ -893,3 +895,178 @@ def test_the_real_client_builder_names_the_extra_when_it_is_missing(
 
     with pytest.raises(ScoringError, match="--extra prediction"):
         hosted_scorer._build_priorlabs_classifier("v3.5")
+
+
+# --- K9: the hosted scorer behind the same startup gate ---
+
+
+def test_hosted_preflight_refuses_without_a_token_before_any_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    scorer = hosted()
+
+    with pytest.raises(LicenceRefused, match="not set"):
+        scorer.preflight()
+
+    assert FakeHostedClient.fit_calls == 0
+
+
+def test_hosted_preflight_refuses_a_short_token_before_any_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", "abc")
+    scorer = hosted()
+
+    with pytest.raises(LicenceRefused, match="too short"):
+        scorer.preflight()
+
+    assert FakeHostedClient.fit_calls == 0
+
+
+def test_hosted_preflight_refuses_a_foreign_host_before_any_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    scorer = hosted(endpoint=lambda: "https://evil.example:443")
+
+    with pytest.raises(ScoringError, match="api.priorlabs.ai"):
+        scorer.preflight()
+
+    assert FakeHostedClient.fit_calls == 0
+
+
+def test_hosted_preflight_passes_and_names_the_version_the_service_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    scorer = hosted(build_classifier=WorkingHostedClient)
+    WorkingHostedClient.served = "v3.5+9.1"
+
+    assert scorer.preflight() == "priorlabs:v3.5+9.1"
+
+
+def test_hosted_preflight_that_cannot_learn_the_version_fails_as_a_licence_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the service will not say what it ran, scoring would refuse every cohort later."""
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    scorer = hosted(build_classifier=WorkingHostedClient)
+    WorkingHostedClient.served = None
+
+    with pytest.raises(LicenceRefused, match="did not report"):
+        scorer.preflight()
+
+
+def test_a_rejected_key_at_the_hosted_preflight_is_reported_as_a_licence_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    scorer = hosted()
+    FakeHostedClient.fail_on_fit = ConnectionError("401 invalid token")
+
+    with pytest.raises(LicenceRefused, match="401 invalid token"):
+        scorer.preflight()
+
+    assert FakeHostedClient.fit_calls == 1, "one attempt, no retry"
+
+
+class WorkingHostedClient:
+    served: str | None = "v3.5+9.1"
+
+    def __init__(self, checkpoint: str) -> None:
+        self.checkpoint = checkpoint
+
+    def fit(self, features: pd.DataFrame, labels: pd.Series) -> None:
+        assert len(features) == len(labels)
+
+    def predict_proba(self, features: pd.DataFrame) -> list[tuple[float, float]]:
+        return [(0.5, 0.5)] * len(features)
+
+    def served_model_version(self) -> str | None:
+        return WorkingHostedClient.served
+
+
+def test_the_preflight_command_runs_the_hosted_variant_when_asked(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    monkeypatch.setattr(
+        preflight_cli,
+        "HostedTabPFNScorer",
+        lambda: hosted(build_classifier=WorkingHostedClient),
+    )
+    WorkingHostedClient.served = "v3.5+9.1"
+
+    assert preflight_cli.main(["--scorer", "hosted"]) == 0
+    assert "priorlabs:v3.5+9.1" in capsys.readouterr().out
+
+
+def test_the_hosted_preflight_command_checks_the_token_first(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    built: list[int] = []
+    monkeypatch.setattr(preflight_cli, "HostedTabPFNScorer", lambda: built.append(1) or hosted())
+
+    assert preflight_cli.main(["--scorer", "hosted"]) == 1
+    assert "TABPFN_TOKEN" in capsys.readouterr().err
+    assert FakeHostedClient.fit_calls == 0
+
+
+def test_the_worker_can_score_through_the_hosted_service_and_preflights_that_variant() -> None:
+    from agentstack.interfaces import worker_cli
+
+    assert isinstance(worker_cli._scorer("hosted"), HostedTabPFNScorer)
+
+    seen: list[list[str]] = []
+
+    def refuse(argv: list[str]) -> int:
+        seen.append(argv)
+        return 1
+
+    assert worker_cli.main(["--scores", "hosted"], preflight=refuse) == 1
+    assert worker_cli.main(["--scores", "tabpfn"], preflight=refuse) == 1
+    assert seen == [["--scorer", "hosted"], []]
+
+
+def test_importing_the_hosted_client_switches_its_telemetry_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0012 4a: the client's usage events go to a second third party, PostHog."""
+    from agentstack.execution import hosted_scorer
+
+    monkeypatch.setenv("TABPFN_DISABLE_TELEMETRY", "0")
+    monkeypatch.setitem(sys.modules, "tabpfn_client", None)
+
+    with pytest.raises(ScoringError):
+        hosted_scorer._build_priorlabs_classifier("v3.5")
+
+    assert os.environ["TABPFN_DISABLE_TELEMETRY"] == "1"
+
+
+def test_the_scripts_that_need_the_token_read_it_from_dot_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "record_scores", ROOT / "scripts/record_scores.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "# a comment\nTABPFN_TOKEN='from-the-file'\nOTHER=\"x y\"\nBARE=1\n\nnot a pair\n"
+    )
+    monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.delenv("OTHER", raising=False)
+    monkeypatch.setenv("BARE", "from-the-shell")
+
+    module.load_env(env)
+
+    assert os.environ["TABPFN_TOKEN"] == "from-the-file"
+    assert os.environ["OTHER"] == "x y"
+    assert os.environ["BARE"] == "from-the-shell", "the real environment wins"
+    module.load_env(tmp_path / "missing.env")  # absent file is not an error

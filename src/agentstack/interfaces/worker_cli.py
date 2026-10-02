@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
+from agentstack.execution.hosted_scorer import HostedTabPFNScorer
 from agentstack.interfaces import preflight_cli
 from agentstack.interfaces.slack import SlackNotifier
 from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, build_stack
@@ -56,13 +57,16 @@ def main(
     )
     parser.add_argument(
         "--scores",
-        choices=("tabpfn", "recorded"),
+        choices=("tabpfn", "hosted", "recorded"),
         default="tabpfn",
-        help="`recorded` replays data/scores/*.json (real TabPFN output) instead of scoring live",
+        help=(
+            "`hosted` scores through PriorLabs' service (sends cohort rows to it); "
+            "`recorded` replays data/scores/*.json (real TabPFN output) instead of scoring live"
+        ),
     )
     args = parser.parse_args(argv)
 
-    if preflight([]) != 0:
+    if preflight(["--scorer", "hosted"] if args.scores == "hosted" else []) != 0:
         print("FAIL  preflight refused; not polling for work", file=sys.stderr)
         return 1
     try:
@@ -82,13 +86,16 @@ def main(
 
 
 def _scorer(kind: str) -> ChurnScorer:
-    """Live TabPFN, whose weights preflight just proved load, or the recorded output of it.
+    """Live TabPFN, whose weights preflight just proved load; the hosted service, which
+    preflight just proved answers; or the recorded output of either.
 
     Recorded scores are real TabPFN numbers for a named snapshot, and refuse any other
     (`RecordedScorer`): the way to run the workflow end to end without paying for
     inference again.
     """
-    return RecordedScorers.load() if kind == "recorded" else TabPFNScorer()
+    if kind == "recorded":
+        return RecordedScorers.load()
+    return HostedTabPFNScorer() if kind == "hosted" else TabPFNScorer()
 
 
 async def _serve(

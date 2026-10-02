@@ -160,7 +160,7 @@ their position in the *order* is here.)
     refused; `uv run lint-imports` + `test_capability_is_not_execution.py` stay green.
   - Depends: K7. Files: `hosted_scorer.py`, `engine.py` (rename only), `churn.py`?, test (~4).
 
-- [ ] **K9: hosted preflight and startup wiring** · layers 4b + 1 · *S*
+- [x] **K9: hosted preflight and startup wiring** · layers 4b + 1 · *S* — **Done 2026-10-02.** `HostedTabPFNScorer.preflight()` (token, host, four synthetic rows, served version required; failure is `LicenceRefused`); `preflight --scorer hosted`; `worker --scores hosted` preflights that variant; client telemetry forced off before import; `record_scores.py` reads `.env`. **Contract 3 amended, owner-approved:** `ignore_imports` for exactly the two CLI edges to `hosted_scorer`, pinned by a test and recorded in ADR-0012. 13 tests added.
   - Acceptance: a hosted preflight (one tiny fit/predict) behind the existing licence gate;
     `worker_cli` accepts a `hosted` scorer kind and `preflight_cli` runs the hosted
     variant; `check_token` still runs first; the scripts that need `TABPFN_TOKEN` load `.env`.

@@ -165,3 +165,19 @@ def test_a_probe_importing_tabpfn_client_fails_outside_execution(tmp_path: pathl
 def test_a_probe_importing_tabpfn_client_is_allowed_in_execution(tmp_path: pathlib.Path) -> None:
     result = _lint_with_probe(tmp_path, "execution")
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+def test_contract_3_ignores_exactly_the_two_startup_edges_to_the_hosted_scorer() -> None:
+    """The exception for K9 is two edges, so it grows only deliberately."""
+    import configparser
+
+    parser = configparser.ConfigParser()
+    parser.read(pathlib.Path(__file__).resolve().parents[2] / ".importlinter")
+    ignored = parser["importlinter:contract:3"]["ignore_imports"].split()
+    edges = {
+        (ignored[i], ignored[i + 2]) for i in range(0, len(ignored), 3) if ignored[i + 1] == "->"
+    }
+    assert edges == {
+        ("agentstack.interfaces.worker_cli", "agentstack.execution.hosted_scorer"),
+        ("agentstack.interfaces.preflight_cli", "agentstack.execution.hosted_scorer"),
+    }

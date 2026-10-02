@@ -18,6 +18,7 @@ transport-level retries; those are the vendor's and sit below this seam.)
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -33,7 +34,7 @@ from agentstack.prediction.churn import (
     fold_assignment,
 )
 from agentstack.prediction.engine import CHECKPOINT, encode
-from agentstack.prediction.licence import check_token
+from agentstack.prediction.licence import LicenceRefused, check_token
 
 # The one host cohort rows may be sent to. `tabpfn-client` takes its base URL from a bundled
 # config but lets `TABPFN_CLIENT_API_URL` override it, so the check reads what the client
@@ -84,7 +85,20 @@ class PriorLabsClassifier:
         return f"{billing}+{package}"
 
 
+TELEMETRY_SWITCH = "TABPFN_DISABLE_TELEMETRY"
+
+
+def _silence_client_telemetry() -> None:
+    """`tabpfn-common-utils` reports usage to PostHog, a second third party (ADR-0012 4a).
+
+    Forced, not defaulted: a shell that exported 0 does not get to send events, and it has
+    to be set before the client is imported because the client reads it at import.
+    """
+    os.environ[TELEMETRY_SWITCH] = "1"
+
+
 def _build_priorlabs_classifier(checkpoint: str) -> HostedClassifier:
+    _silence_client_telemetry()
     try:
         from tabpfn_client import TabPFNClassifier
     except ImportError as exc:
@@ -95,6 +109,7 @@ def _build_priorlabs_classifier(checkpoint: str) -> HostedClassifier:
 
 
 def _client_endpoint() -> str:
+    _silence_client_telemetry()
     try:
         from tabpfn_client.client import ServiceClient
     except ImportError as exc:
@@ -133,6 +148,37 @@ class HostedTabPFNScorer:
     def model_version(self) -> str:
         # The version *requested*. What a score is recorded under is what was served.
         return f"{MODEL_VERSION_PREFIX}{CHECKPOINT}"
+
+    def preflight(self) -> str:
+        """Prove hosted scoring can happen, before anything depends on it (criterion 18).
+
+        One tiny fit and predict on four synthetic rows: nothing from any cohort leaves the
+        machine. It is the only check that tells a well-formed key from an accepted one, and
+        it fails for a service that will not name the version it ran, because every later
+        `score` would refuse on that anyway.
+        """
+        check_token()
+        check_host((self.endpoint or _client_endpoint)())
+        frame = pd.DataFrame({"x": [0.0, 1.0, 0.0, 1.0]})
+        labels = pd.Series([0, 1, 0, 1])
+        try:
+            classifier = (self.build_classifier or _build_priorlabs_classifier)(CHECKPOINT)
+            classifier.fit(frame, labels)
+            classifier.predict_proba(frame)
+        except ScoringError:
+            raise
+        except Exception as exc:
+            raise LicenceRefused(
+                f"the hosted TabPFN service did not accept the request, so churn scoring "
+                f"cannot run: {exc}"
+            ) from exc
+        reported = (classifier.served_model_version() or "").strip()
+        if not reported:
+            raise LicenceRefused(
+                "the hosted service did not report which model version it ran, so scores "
+                "could not be recorded under one."
+            )
+        return f"{MODEL_VERSION_PREFIX}{reported}"
 
     def score(
         self,

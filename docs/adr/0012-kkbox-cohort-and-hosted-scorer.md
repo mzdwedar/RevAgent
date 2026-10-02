@@ -149,3 +149,12 @@ exempts a derived cohort only until then; a downloaded cohort is never exempt.
 - Sections 4-7 are decisions not yet built; this ADR is `proposed` until K16.
 - `tests/live` fails (does not skip) for KKBox until the cohort is built (K11).
 - One new dependency, `tabpfn-client` (approved 2026-10-01), arrives in K7.
+
+### K9 amendment: contract 3 ignores two edges (approved by the owner, 2026-10-02)
+
+Contract 3 is transitive, so no layer-1 module could reach `execution.hosted_scorer` (it holds
+`tabpfn_client` and `urllib`). `worker_cli` and `preflight_cli` are where the hosted scorer is
+built and proved at startup, so `.importlinter` contract 3 gains `ignore_imports` for exactly
+those two edges. `test_layer_boundaries.py` pins the set. Rejected: moving the client into
+`prediction` (contract 2 and 3 forbid it; scoring rows to a third party is egress) and a
+composition root (a new architectural concept for two call sites).
