@@ -1862,7 +1862,8 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   M3 `CYCLE_SPANS` for evaluate/ask/answer, M4 a re-ask re-checks the world and withdraws a
   question that moved, M5 a cancelled run ended cancelled (the workflow was reading the
   cancel as a refusal; turn and heartbeat were already correct), M6 a stale approval ends
-  visibly (approver told, named in `operator status`). Open: L1–L7.
+  visibly (approver told, named in `operator status`). The seven Lows were never itemised in the repo and are
+  dropped by the owner (2026-10-03); the `/stack-audit` re-run will surface any that matter.
   Merging with `main` (C2, H1, H3 there; `test_concurrency`) is its own task after these.
 - [ ] Human review
 
@@ -2150,6 +2151,6 @@ Recorded here because the commit landed without a ledger entry. Read
 per-invocation test databases done. Verified by running: `evals run --gates` 20/20.
 **Not re-run in this pass:** the full suite, so the pass counts quoted in older entries
 are historical. Still open: A3 (partial), the `/stack-audit` re-run, every "Human review"
-box, Checkpoint F, the audit's M2–M6 and L1–L7 follow-ups, the merge with `main`, the
-per-run lease decision (T21), the `MemoryStore` durability gap (Checkpoint A), PII in
+box, Checkpoint F, the merge with `main`, the
+per-run lease decision (T21), PII in
 traces, and secrets in environment variables.
