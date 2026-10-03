@@ -690,7 +690,9 @@ def hosted(
 
 def score_hosted(scorer: HostedTabPFNScorer, cohort: tuple[pd.DataFrame, pd.Series]) -> ChurnScores:
     features, labels = cohort
-    return scorer.score(features=features, labels=labels, dataset="d", data_as_of="d:1")
+    return scorer.score(
+        features=features, labels=labels, dataset="bank-churn", data_as_of="bank-churn:1"
+    )
 
 
 def test_the_hosted_scorer_is_a_churn_scorer() -> None:
@@ -817,6 +819,43 @@ def test_the_hosted_scorer_refuses_without_a_token_before_it_calls_out(
     assert FakeHostedClient.fit_calls == 0
 
 
+def test_no_cohort_the_owner_withheld_is_ever_sent_to_the_hosted_service(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    """ADR-0012 6: kkbox-churn is Kaggle competition data and does not leave the machine."""
+    from agentstack.context import datasets
+    from agentstack.execution.hosted_scorer import EGRESS_ALLOWED
+
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    features, labels = cohort
+
+    assert "kkbox-churn" not in EGRESS_ALLOWED
+    assert set(datasets.REGISTRY) >= EGRESS_ALLOWED, "an allowed name that is not a cohort"
+
+    for dataset, watermark in [
+        ("kkbox-churn", "kkbox-churn:7b2787de78c817e3"),  # the cohort itself
+        ("telecom-bigml", "kkbox-churn:7b2787de78c817e3"),  # relabelled as an allowed one
+        ("kkbox-churn", "telecom-bigml:abc"),  # and the other way round
+        ("a-cohort-nobody-decided-on", "a-cohort-nobody-decided-on:1"),  # default deny
+    ]:
+        scorer = hosted()
+        with pytest.raises(ScoringError):
+            scorer.score(features=features, labels=labels, dataset=dataset, data_as_of=watermark)
+        assert FakeHostedClient.fit_calls == 0, "a row was sent before the refusal"
+
+
+def test_the_egress_refusal_comes_before_the_token_and_the_host_checks(
+    monkeypatch: pytest.MonkeyPatch, cohort: tuple[pd.DataFrame, pd.Series]
+) -> None:
+    monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    features, labels = cohort
+
+    with pytest.raises(ScoringError, match="may not be sent"):
+        hosted(endpoint=lambda: "https://elsewhere.example:443").score(
+            features=features, labels=labels, dataset="kkbox-churn", data_as_of="kkbox-churn:1"
+        )
+
+
 def test_the_hosted_scorer_refuses_mismatched_features_and_labels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -826,8 +865,8 @@ def test_the_hosted_scorer_refuses_mismatched_features_and_labels(
         hosted().score(
             features=pd.DataFrame({"x": [1.0, 2.0, 3.0]}),
             labels=pd.Series([0, 1]),
-            dataset="d",
-            data_as_of="d:1",
+            dataset="bank-churn",
+            data_as_of="bank-churn:1",
         )
 
 

@@ -44,6 +44,32 @@ PRIORLABS_PORT = 443
 
 MODEL_VERSION_PREFIX = "priorlabs:"
 
+# The cohorts whose rows may leave the machine, by name. An allowlist, not a denylist: a new
+# cohort is refused until someone decides it may go, in a diff that names it. `kkbox-churn`
+# is absent on purpose: Kaggle competition data is not sent to a vendor (owner decision
+# 2026-10-02, ADR-0012 6). It scores locally or from recorded scores only.
+EGRESS_ALLOWED: frozenset[str] = frozenset({"telecom-bigml", "bank-churn"})
+
+
+def check_egress(dataset: str, data_as_of: str) -> None:
+    """Refuse a cohort that may not leave the machine, before anything else is checked.
+
+    The watermark is `{dataset}:{digest}`, so a caller that labels one cohort with another's
+    name still carries the real name in `data_as_of`; both must be allowed and agree.
+    """
+    named_in_watermark = data_as_of.partition(":")[0]
+    if dataset != named_in_watermark:
+        raise ScoringError(
+            f"the cohort is named {dataset!r} but its watermark says {named_in_watermark!r}; "
+            "refusing to decide what may leave the machine from a label that disagrees."
+        )
+    if dataset not in EGRESS_ALLOWED:
+        raise ScoringError(
+            f"cohort {dataset!r} may not be sent to the hosted service: only "
+            f"{sorted(EGRESS_ALLOWED)} are allowed to leave the machine (ADR-0012 6). "
+            "Score it locally (--scores tabpfn) or from recorded scores."
+        )
+
 
 class HostedClassifier(Protocol):
     """The verified `tabpfn-client` surface (ADR-0012 4a), plus the version read-back."""
@@ -189,6 +215,7 @@ class HostedTabPFNScorer:
         data_as_of: str,
     ) -> ChurnScores:
         """Out-of-fold churn probability for every row, from the hosted service."""
+        check_egress(dataset, data_as_of)
         check_token()
         if len(features) != len(labels):
             raise ScoringError(f"{len(features)} rows of features, {len(labels)} labels")

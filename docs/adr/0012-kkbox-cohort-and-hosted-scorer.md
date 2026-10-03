@@ -158,9 +158,17 @@ the owner's statement is recorded here at Checkpoint C.
 
 **Owner decision (2026-10-02): KKBox is not sent to a third party.** Sending Kaggle competition
 data to a vendor is not acceptable, so `kkbox-churn` is scored locally (`--scores tabpfn`, the
-default, or `recorded`). `--scores hosted` must not be run against it. This is a procedural
-decision only: nothing in code yet refuses it. A dataset egress allowlist in `HostedTabPFNScorer`
-is the enforcing follow-up, and needs its own spec task.
+default, or `recorded`). `--scores hosted` must not be run against it.
+
+**Enforced (2026-10-03).** `HostedTabPFNScorer.score` calls `check_egress` first, before the
+token, the host check or any row: a cohort is sent only if its name is in
+`hosted_scorer.EGRESS_ALLOWED` (`telecom-bigml`, `bank-churn`). It is an allowlist, so a new
+cohort is refused until a diff names it. `kkbox-churn` is not in it. The name and the
+watermark (`{dataset}:{digest}`) must agree, so relabelling a cohort does not get it through.
+`test_no_cohort_the_owner_withheld_is_ever_sent_to_the_hosted_service` holds it, and a mutation
+that adds `kkbox-churn` to the set fails it. Not covered: a caller that bypasses
+`HostedTabPFNScorer` and uses `tabpfn_client` directly, which contract 3 already keeps out of
+everything but `agentstack.execution`.
 
 **K11 (built 2026-10-02): the declared cut.** `scripts/build_kkbox_cohort.py` writes
 `data/kkbox-cohort.csv` offline. `kkbox.sample_users` draws `COHORT_USERS = 50,000` labelled

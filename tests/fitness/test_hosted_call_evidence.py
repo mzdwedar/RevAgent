@@ -58,12 +58,12 @@ def test_a_scoring_call_leaves_one_span_naming_its_size_version_latency_and_outc
     features, labels = cohort
 
     TracedScorer(hosted_scorer(), t).score(
-        features=features, labels=labels, dataset="d", data_as_of="d:1"
+        features=features, labels=labels, dataset="bank-churn", data_as_of="bank-churn:1"
     )
 
     (span,) = reads(t)
     assert span.attributes["tool"] == "churn.score"
-    assert span.attributes["dataset"] == "d"
+    assert span.attributes["dataset"] == "bank-churn"
     assert span.attributes["rows"] == 60
     assert span.attributes["folds"] == 4
     assert span.attributes["model_version"] == "priorlabs:v3.5+9.1", "the version served"
@@ -82,7 +82,7 @@ def test_a_refused_call_is_traced_as_failed_and_still_raises(
 
     with pytest.raises(ScoringError):
         TracedScorer(scorer, t).score(
-            features=features, labels=labels, dataset="d", data_as_of="d:1"
+            features=features, labels=labels, dataset="bank-churn", data_as_of="bank-churn:1"
         )
 
     (span,) = reads(t)
@@ -100,13 +100,13 @@ def test_the_record_carries_no_feature_value_and_no_token(
     features, labels = cohort
 
     TracedScorer(hosted_scorer(), ok).score(
-        features=features, labels=labels, dataset="d", data_as_of="d:1"
+        features=features, labels=labels, dataset="bank-churn", data_as_of="bank-churn:1"
     )
     scorer = hosted_scorer()
     FakeHostedClient.fail_on_fit = RuntimeError(f"rejected {GOOD_TOKEN} for {SECRET_FEATURE}")
     with pytest.raises(ScoringError):
         TracedScorer(scorer, failed).score(
-            features=features, labels=labels, dataset="d", data_as_of="d:1"
+            features=features, labels=labels, dataset="bank-churn", data_as_of="bank-churn:1"
         )
 
     for t in (ok, failed):
@@ -126,8 +126,10 @@ def test_the_wrapper_is_a_churn_scorer_and_answers_with_the_inner_scores(
 
     assert traced.model_version == inner.model_version
     assert traced.score(
-        features=features, labels=labels, dataset="d", data_as_of="d:1"
-    ) == inner.score(features=features, labels=labels, dataset="d", data_as_of="d:1")
+        features=features, labels=labels, dataset="bank-churn", data_as_of="bank-churn:1"
+    ) == inner.score(
+        features=features, labels=labels, dataset="bank-churn", data_as_of="bank-churn:1"
+    )
 
 
 def test_the_evidence_uses_an_existing_span_type() -> None:
