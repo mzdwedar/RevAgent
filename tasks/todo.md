@@ -564,9 +564,16 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
     that authorises its claim. It carries no tenant — that comes from the run.
 
 ### ✅ Checkpoint E — the end-to-end path runs
-- [ ] Trigger → score → target → draft → registry → Slack → approve → rollout
-- [ ] Killed while parked, resumed, still correct
-- [ ] Stale approval refused; unresolved effect not retried blind
+- [x] Trigger → score → target → draft → registry → Slack → approve → rollout
+  (redone on Temporal as T44, `test_approve_after_death`; Checkpoint L)
+- [x] Killed while parked, resumed, still correct
+  (T44, resumed in 9.2s; and a worker killed mid-scoring on a real cohort, Checkpoint C)
+- [x] Stale approval refused; unresolved effect not retried blind
+  (T43, `test_commit`, mutation-checked)
+  - Ticked 2026-10-03: these were left open when the work moved to Temporal. What none of
+    them proves is the path with the real model, or a real cohort that reaches a proposal
+    (`bank-churn` abstains; `kkbox-churn` would need its deferred re-score). That is the
+    `live` suite item under Phase 8.
 - [ ] Human review
 
 ---
