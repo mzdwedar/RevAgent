@@ -328,11 +328,21 @@ criteria are met.
 - [x] **Checkpoint round-trips through Postgres, not memory.** Four tables in the
       `langgraph` schema; a SIGKILLed worker's turn resumes in another process without
       re-calling the model, and both sabotages (resume disabled, in-memory saver) fail it.
-- [ ] **A triggered run scores a real cohort, is killed mid-flight, and resumes** —
-      **mostly met.** The wiring landed in T13 (`runtime/operator.py`), real recorded
-      scores exist (T6), and kill-and-resume is proven on Postgres (T10) and on Temporal
-      (T44). No single test drives trigger → real scores → kill → resume; that is what
-      keeps this open.
+- [x] **A triggered run scores a real cohort, is killed mid-flight, and resumes** —
+      `tests/live/test_real_cohort_durability.py` (2026-10-03): the real `bank-churn` file,
+      its recorded TabPFN scores, a trigger through ingress, the worker SIGKILLed with
+      scoring in flight, a fresh worker resuming. Scored twice (the dead start and the
+      retry), settled once, and the cycle ends `abstain`.
+  - **What it does not prove.** `bank-churn` has no observed revenue by design, so the run
+    never reaches a proposal, approval or rollout (human decision, 2026-10-03: use it for
+    the durability of scoring and of an honest refusal, and leave the registry alone). The
+    approval boundary under a kill is `test_approve_after_death`.
+  - **Seen:** `evaluate_cycle` has no heartbeat, so a worker killed mid-scoring is
+    replaced after `CYCLE_TIMEOUT` (120s), not the ~15s a killed turn takes. Resumed
+    121s after the new worker started. Bounded, and inside a cycle that SPEC.md budgets at
+    60s p95, but a heartbeat would shorten it if that wait ever matters.
+  - Lives in `tests/live` (needs `data/`); the worker harness gained `--real-cohort`,
+    `--hang-in-scorer` and `--lifetime`.
 - [ ] **Human review before side effects are wired**
 
 **What is actually true.** Every piece exists and is tested on its own:

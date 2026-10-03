@@ -24,9 +24,10 @@ import pytest
 from agentstack.context import datasets
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
+from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces.wiring import build_stack
 from agentstack.observability.spans import LoggingSink
-from agentstack.prediction.churn import ChurnScores
+from agentstack.prediction.churn import ChurnScorer, ChurnScores, RecordedScorer
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import Run, RunStore
@@ -50,17 +51,24 @@ LIFETIME_S = 120.0
 
 
 class RecordingScorer:
-    """Appends a line per scoring call to a file both processes can read."""
+    """Appends a line per scoring call to a file both processes can read.
 
-    model_version = StubScorer.model_version
+    `hang` makes the call announce itself and then never return: the kill lands with
+    scoring in flight, before anything was recorded about the cycle.
+    """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, inner: ChurnScorer | None = None, *, hang: bool = False) -> None:
         self.path = path
-        self.inner = StubScorer()
+        self.inner = inner or StubScorer()
+        self.hang = hang
+        self.model_version = self.inner.model_version
 
     def score(self, **kwargs: Any) -> ChurnScores:
         with self.path.open("a") as handle:
             handle.write(f"{os.getpid()}\n")
+        if self.hang:
+            time.sleep(LIFETIME_S)
+            raise AssertionError("a hanging scorer outlived its test")
         return self.inner.score(**kwargs)
 
 
@@ -164,12 +172,16 @@ async def serve(args: argparse.Namespace) -> None:
                 cycles=CycleStore(db=db),
                 cohorts=FrozenCohortStore(db=db),
                 waits=WaitStore(db=db),
-                scorer=RecordingScorer(Path(args.scorer_calls)),
+                scorer=RecordingScorer(
+                    Path(args.scorer_calls),
+                    RecordedScorer.load(args.real_cohort) if args.real_cohort else None,
+                    hang=args.hang_in_scorer,
+                ),
                 trigger_deadline=TriggerCadence.load().trigger_deadline,
                 traces=LoggingSink(),
                 versions=stack.deps.versions,
                 audit=stack.audit,
-                rule=RULE,
+                rule=TargetingRule.load() if args.real_cohort else RULE,
                 turns=turns,
                 asker=RecordingAsker(asker_for(stack), Path(args.asks or f"{args.ready}.asks")),
             )
@@ -178,7 +190,7 @@ async def serve(args: argparse.Namespace) -> None:
             )
             async with worker:
                 Path(args.ready).write_text(str(os.getpid()))
-                await asyncio.sleep(LIFETIME_S)
+                await asyncio.sleep(args.lifetime)
     finally:
         checkpoints.close()
 
@@ -194,8 +206,24 @@ def main() -> None:
     parser.add_argument("--asks", default=None)
     parser.add_argument("--hang-before-gateway", default=None, metavar="REACHED_FILE")
     parser.add_argument("--hang-after-gateway", default=None, metavar="REACHED_FILE")
+    parser.add_argument(
+        "--real-cohort",
+        default=None,
+        metavar="DATASET",
+        help="score this registered dataset from data/ with its recorded scores, "
+        "instead of the fixture and the stub",
+    )
+    parser.add_argument("--hang-in-scorer", action="store_true")
+    parser.add_argument(
+        "--lifetime",
+        type=float,
+        default=LIFETIME_S,
+        help="seconds before this worker exits on its own; a test that waits out a "
+        "120s activity timeout needs a worker that outlives it",
+    )
     args = parser.parse_args()
-    _fixture_dataset()
+    if not args.real_cohort:
+        _fixture_dataset()
     asyncio.run(serve(args))
 
 
