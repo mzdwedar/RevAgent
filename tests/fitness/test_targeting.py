@@ -291,6 +291,45 @@ def test_a_frozen_cohort_reads_its_currency_from_what_was_recorded() -> None:
     assert frozen(ntd).currency == "NTD"
 
 
+def test_the_draft_turn_is_told_what_the_churn_model_found() -> None:
+    """The drafting model writes why an offer should retain these customers. It is given
+    the frozen cohort's TabPFN profile to reason from, not just the cohort's name."""
+    from datetime import UTC, datetime
+
+    from agentstack.policy.triggers import Outcome, TriggerKind
+    from agentstack.runtime.cycles import Cycle
+    from agentstack.runtime.drafting import draft_instruction
+
+    cohort = targeting.select(snapshot(charge=10.0), scores(), rule=DEV)
+    frozen = FrozenCohort(
+        tenant="t",
+        experiment_id="e",
+        experiment_version=cohort.experiment_version,
+        data_as_of=cohort.data_as_of,
+        targeting_model_version=cohort.model_version,
+        risk_threshold=cohort.risk_threshold,
+        size=cohort.size,
+        annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
+        description=cohort.description(),
+    )
+    cycle = Cycle(
+        experiment_id="e",
+        data_as_of=cohort.data_as_of,
+        kind=TriggerKind.DATA_ARRIVAL,
+        outcome=Outcome.PROPOSE,
+        run_id=cohort.experiment_version,
+        claimed_at=datetime.now(UTC),
+        settled_at=None,
+    )
+
+    told = draft_instruction(tenant="t", cycle=cycle, cohort=frozen)
+
+    assert f"Churn model {cohort.model_version}" in told
+    assert f"{cohort.size} customers" in told
+    assert f"{cohort.risk_threshold:.2f} or above" in told
+    assert targeting.money(cohort.annual_value_at_risk_cents) in told
+
+
 def test_value_at_risk_uses_observed_revenue_annualised() -> None:
     cohort = targeting.select(snapshot(charge=10.0), scores(), rule=DEV)
 

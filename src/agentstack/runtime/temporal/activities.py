@@ -427,7 +427,9 @@ class RunActivities:
     ) -> str:
         """What this stage's turn is told, from the record. Never passed through history."""
         if intent.stage == DRAFT:
-            return draft_instruction(tenant=run.tenant, cycle=cycle)
+            return draft_instruction(
+                tenant=run.tenant, cycle=cycle, cohort=self._frozen(run.tenant, cycle)
+            )
         assert prior_rollout_event is not None  # every non-draft stage here is a rollout turn
         return rollout_instruction(
             experiment_id=intent.experiment_id,

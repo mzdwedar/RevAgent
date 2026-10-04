@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from agentstack.context.frozen_cohorts import FrozenCohort
+from agentstack.context.targeting import money
 from agentstack.observability.audit import AuditSink
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.run import Run
@@ -145,7 +146,27 @@ def rollout_instruction(
     )
 
 
-def draft_instruction(*, tenant: str, cycle: Cycle) -> str:
+def cohort_profile(cohort: FrozenCohort) -> str:
+    """What TabPFN found about this cohort, in words the drafting model can reason over.
+
+    Read from the frozen record, never re-scored: the draft is about the cohort that was
+    frozen, and a second scoring pass could describe a different one. Without this the
+    model is asked why an offer should retain "these customers" and told nothing about
+    them, so the hypothesis it writes is generic by construction.
+    """
+    described = cohort.description
+    quantiles = described.get("risk_quantiles", {})
+    spread = ", ".join(f"{float(q):.0%} {float(v):.2f}" for q, v in quantiles.items())
+    return (
+        f"Churn model {cohort.targeting_model_version} scored this cohort: {cohort.size} "
+        f"customers, every one at churn probability {cohort.risk_threshold:.2f} or above "
+        f"(risk quantiles within the cohort: {spread}). "
+        f"{money(cohort.annual_value_at_risk_cents, cohort.currency)} of annualised revenue "
+        f"is at risk ({described.get('revenue_basis', 'basis not recorded')})."
+    )
+
+
+def draft_instruction(*, tenant: str, cycle: Cycle, cohort: FrozenCohort) -> str:
     if cycle.outcome is None or cycle.outcome.value != "propose" or cycle.run_id is None:
         raise NothingToDraft(
             f"{cycle.experiment_id} @ {cycle.data_as_of} concluded {cycle.outcome}; only a "
@@ -155,6 +176,7 @@ def draft_instruction(*, tenant: str, cycle: Cycle) -> str:
         "A cohort was frozen for a retention experiment. Draft it by calling "
         f"create_experiment_draft with tenant={tenant} experiment_id={cycle.experiment_id} "
         f"experiment_version={cycle.run_id} exactly as given. Write the hypothesis and the "
-        "variant yourself: what offer to test, and why it should retain these customers. "
-        f"The cohort was scored on the batch {cycle.data_as_of}."
+        "variant yourself: what offer to test, and why it should retain these customers, "
+        "grounded in the risk profile below. "
+        f"The cohort was scored on the batch {cycle.data_as_of}. {cohort_profile(cohort)}"
     )
