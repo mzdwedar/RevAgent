@@ -20,6 +20,7 @@ rolls it out only after a person approves it.
 - [Workflow](#workflow)
 - [Documentation](#documentation)
 - [Deployment notes](#deployment-notes)
+- [Gaps before production](#gaps-before-production)
 - [Contributing and security](#contributing-and-security)
 - [What is deliberately unfinished](#what-is-deliberately-unfinished)
 - [References](#references)
@@ -391,6 +392,31 @@ influences an authority decision. The full list is in [`CLAUDE.md`](CLAUDE.md).
 `docker-compose.yml` is for development only. Production Postgres is covered by
 [ADR-0005](docs/adr/0005-state-substrate-and-migrations.md) and Temporal hosting by [ADR-0009](docs/adr/0009-temporal-production-hosting.md). Before a deploy, run
 `agentstack-preflight` (licence gate) and `checkpoint_guard` (no stranded runs).
+
+## Gaps before production
+
+The workflow runs end to end locally, against public datasets, with a person approving
+in Slack. That is not the same as running it for a real subscription business. Each gap
+below is either an open decision in a spec or ADR, or a reference stand-in in the code.
+
+| Gap | Where it stands | What closing it needs |
+|---|---|---|
+| **Model licence** | TabPFN-3.5 weights are non-commercial ([Licensing](#licensing-before-anything-else)) | a commercial licence from Prior Labs, or a different checkpoint whose terms allow it |
+| **Subscriber data** | cohorts are Kaggle snapshots on disk (`context/datasets.py`, `data/`); KKBox is mapped to RevenueCat's event schema but is not live data | ingestion from RevenueCat webhooks or exports, its cadence and watermark (`SPEC.md`, open question) |
+| **Trigger source** | triggers are injected by hand; the only caller of `deliver` is `agentstack-slack` (`slack_cli.py`), and nothing detects a metric movement | a scheduled or event-driven ingress that computes the metric and emits `data_arrival` / `metric_movement` with a watermark |
+| **The rollout target** | a rollout commits to our own Postgres registry; the external API client is `RecordingClient`, a reference fake (`interfaces/wiring.py`) | a real client for wherever variants are served (offerings, paywall or flag service), behind the gateway, plus its credential and identity model (iteration 2) |
+| **Measuring the effect** | Incremental Net Saved Value, ANCOVA and the regressor are designed but not built (`SPEC.md`, iteration 2) | the readout, so an experiment can be concluded rather than only rolled out |
+| **LLM serving** | Ollama `qwen3:8b`, host defaults to `localhost:11434` (`model/ollama_engine.py`) | a GPU serving stack (open), verified tool-call equivalence with dev, and a per-evaluation cost budget |
+| **TabPFN serving** | runs as an in-process library; most recorded scores exist only on the machine that made them | GPU capacity or a scoring service behind the `prediction/` seam, and scores reproducible outside one laptop |
+| **Hosting** | `docker-compose.yml` is dev only; no container image or deploy manifest exists; Temporal hosting is deferred ([ADR-0009](docs/adr/0009-temporal-production-hosting.md)) | images for the worker and the Slack receiver, managed Postgres with backups, and the Temporal decision (Cloud needs a payload codec) |
+| **Secrets** | read through one seam (`storage/secrets.py`), but the source is still the process environment ([ADR-0013](docs/adr/0013-secrets-seam-and-span-allowlist.md)) | a secret store, and rotation that does not strand approvals already waiting |
+| **Observability** | spans go to `LoggingSink` (Python logging), with an attribute allowlist; no metrics or alerts | a trace backend, alerts on stalled runs and unresolved effects, and a decided retention period for traces, transcripts and audit rows |
+| **PII** | the span allowlist keeps rows out of traces; prose redaction is a net, and transcripts and audit rows are untouched | a retention and deletion job, and a review of what transcripts hold once real subscriber data lands |
+| **Operator tooling** | no reconcile command for an unresolved effect; `operator stalled` does not list reconcile waits | both, before anyone is on call for this |
+
+The first four are blockers: without them there is nothing legal to run, no real data to run
+on, nothing to start a run, and no customer-visible effect. The rest are what makes it safe
+to leave running.
 
 ## Contributing and security
 
