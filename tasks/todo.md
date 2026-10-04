@@ -748,7 +748,13 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
     mapping, not new tests. 10, 12, 13 and 16 are the statistics criteria, and the spec
     defers the inference rule to iteration 2 ("Terminal vs repeated analysis"). 26-28
     (replayable trace, legible abstentions, p95/cost budget) have no test I can find.
-    **Open: which of these are deferred is the owner's call, not mine.**
+    **Decided by the owner, 2026-10-04: 10, 12, 13 and 16 are deferred to iteration 2.**
+    They test the statistical readout (covariate window, observed-only primary metric,
+    degraded covariate, degraded targeting), and SPEC.md already defers the inference rule
+    ("Terminal vs repeated analysis"), so there is no readout in iteration 1 to test. They
+    are deferred, not met.
+    Still unresolved: 7 and 8 (need a mapping to the tests that cover them) and 26-28
+    (no test found).
 - [x] The `live` suite has been run at least once against the real model — 2026-10-04:
   `test_ollama.py` + `test_real_cohorts.py` (qwen3:8b, real cohorts) 20 passed. Not re-run:
   `test_real_scores.py`, `test_real_cohort_durability.py`, `test_kkbox_exploration.py` (they re-score).
