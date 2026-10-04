@@ -741,7 +741,8 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
     checkpoint) remain harmless by construction: both are idempotent in effect.
 
 ### ✅ Checkpoint F — iteration 1 complete
-- [ ] All 28 success criteria in `SPEC.md` met or explicitly deferred with a reason
+- [x] All 28 success criteria in `SPEC.md` met or explicitly deferred with a reason —
+  met: 1-9, 11, 14, 15, 17-25 (8 with the caveat below); deferred to iteration 2: 10, 12, 13, 16, 26, 27, 28.
   - 2026-10-04 mapping (tests that name the criterion): held by a named test: 1-6, 11,
     14, 15, 17-25. No test names 7-10, 12, 13, 16, 26-28. 7 and 8 are covered under other
     names (registry contract suite, spec criterion 7; claim semantics), so they need a
@@ -768,7 +769,17 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
       Passed 2026-10-04. **Caveat:** the "API that times out" is `FlakyRegistry`, an
       in-memory client that applies the effect and drops the answer, not a real HTTP
       timeout; the criterion says "a real API".
-    Still unresolved: 26-28 (no test found).
+    **26, 27 and 28 deferred to iteration 2 (owner's decision, 2026-10-04).** I looked
+    before writing tests, and a test would have passed only if the behaviour existed:
+    - 26 (every cycle reconstructable from a run id): the records exist but are scattered
+      (`trigger_cycles`, `frozen_cohorts`, the audit sink, `waits`, spans). There is no
+      reader that takes a run id and returns the sequence, and the cycle row does not name
+      its experiment version, so a cycle links to its cohort only by `data_as_of`.
+    - 27 (abstentions legible in Slack): an abstention is a registry record with an
+      explanation. Nothing posts one to Slack; Slack carries approval asks and plain notices.
+    - 28 (p95 <= 60s, cost recorded): no per-evaluation latency or cost is measured or
+      recorded. The 60s figure appears only as a timeout budget in the workflow.
+    Each needs a feature built first, so none was given a vacuous test.
 - [x] The `live` suite has been run at least once against the real model — 2026-10-04:
   `test_ollama.py` + `test_real_cohorts.py` (qwen3:8b, real cohorts) 20 passed. Not re-run:
   `test_real_scores.py`, `test_real_cohort_durability.py`, `test_kkbox_exploration.py` (they re-score).
