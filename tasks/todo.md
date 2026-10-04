@@ -753,8 +753,22 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
     degraded covariate, degraded targeting), and SPEC.md already defers the inference rule
     ("Terminal vs repeated analysis"), so there is no readout in iteration 1 to test. They
     are deferred, not met.
-    Still unresolved: 7 and 8 (need a mapping to the tests that cover them) and 26-28
-    (no test found).
+    **7 and 8 mapped 2026-10-04 (I had wrongly pointed at "registry criterion 7", which is
+    `SPEC-registry.md`'s numbering, not this list's):**
+    - 7 (the evaluation account cannot roll out): the scope is absent from the envelope of
+      every stage but rollout (`test_stage_authority.py::test_only_a_run_in_the_rollout_stage_carries_the_rollout_scope`),
+      a run without it gets `PolicyDenied` at the gateway before approval is consulted
+      (`test_identity_envelope.py::test_a_run_without_the_scope_is_refused_at_the_gateway`),
+      and the release gate `insufficient-scope-refused`. Passed 2026-10-04.
+    - 8 (an unresolved rollout is never retried blind): `test_unresolved_effects.py`
+      (effect lands, answer lost; the claim survives the process; a restarted process
+      parks on the reconcile wait and the registry sees no second rollout),
+      `tests/durability/test_commit.py::test_an_unresolved_rollout_parks_until_reconciled_then_deduplicates`
+      (real Postgres), and the gate `an-unresolved-effect-is-never-retried-blind`.
+      Passed 2026-10-04. **Caveat:** the "API that times out" is `FlakyRegistry`, an
+      in-memory client that applies the effect and drops the answer, not a real HTTP
+      timeout; the criterion says "a real API".
+    Still unresolved: 26-28 (no test found).
 - [x] The `live` suite has been run at least once against the real model — 2026-10-04:
   `test_ollama.py` + `test_real_cohorts.py` (qwen3:8b, real cohorts) 20 passed. Not re-run:
   `test_real_scores.py`, `test_real_cohort_durability.py`, `test_kkbox_exploration.py` (they re-score).
