@@ -23,7 +23,7 @@ from agentstack.observability.audit import AuditSink
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.run import Run
 from agentstack.tools.action import ActionRequest
-from agentstack.tools.experiments import prepare_rollout
+from agentstack.tools.experiments import DRAFT, prepare_rollout
 
 # SPEC.md: "On approval, roll the winning variant out to ~10% of the targeted cohort."
 ROLLOUT_PERCENTAGE = 10
@@ -98,15 +98,45 @@ def rollout_deviation(
     )
 
 
-def rollout_admission(
-    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str, prior_rollout_event: int
+def draft_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | None:
+    """Why `request` is not a draft of the frozen cohort, or None if it is.
+
+    The hypothesis and the variant are the model's to write, and nothing here judges
+    them. Which cohort they are written about is not: the version is the key the rollout
+    is held to and the approver is shown, so a draft that carries a mistyped or invented
+    one lands in the registry beside a cohort it was never about. The model was told the
+    version "exactly as given" and copied it with one character added (Checkpoint B).
+    """
+    resource = f"{cohort.tenant}/experiments/{cohort.experiment_id}"
+    if request.tool != DRAFT.name:
+        return f"{request.tool} is not the draft of frozen cohort {cohort.experiment_version}"
+    if request.resource != resource:
+        return (
+            f"{request.resource} is not the experiment frozen cohort "
+            f"{cohort.experiment_version} belongs to ({resource})"
+        )
+    version = request.payload.get("experiment_version")
+    if version != cohort.experiment_version:
+        return (
+            f"the draft names experiment_version {version!r} and the frozen cohort is "
+            f"{cohort.experiment_version!r}. A draft is held to the record: one written "
+            "under another version is about a cohort nobody froze"
+        )
+    return None
+
+
+def _admitting(
+    reason_for: Callable[[ActionRequest], str | None],
+    *,
+    audit: AuditSink,
+    run: Run,
+    principal: str,
 ) -> Admission:
-    """An `Admission` for a rollout turn: the frozen cohort's rollout, or a refusal that is
-    written to the audit trail, because a proposal stopped before anyone saw it is exactly
-    what someone will later ask about."""
+    """An `Admission` that audits what it refuses: a proposal stopped before anyone saw
+    it is exactly what someone will later ask about."""
 
     def admit(request: ActionRequest) -> str | None:
-        reason = rollout_deviation(request, cohort, prior_rollout_event=prior_rollout_event)
+        reason = reason_for(request)
         if reason is not None:
             audit.write(
                 run_id=run.run_id,
@@ -122,6 +152,28 @@ def rollout_admission(
         return reason
 
     return admit
+
+
+def draft_admission(
+    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str
+) -> Admission:
+    """An `Admission` for a drafting turn: a draft of the frozen cohort, or an audited refusal."""
+    return _admitting(
+        lambda request: draft_deviation(request, cohort), audit=audit, run=run, principal=principal
+    )
+
+
+def rollout_admission(
+    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str, prior_rollout_event: int
+) -> Admission:
+    """An `Admission` for a rollout turn: the frozen cohort's rollout, or a refusal that is
+    written to the audit trail."""
+    return _admitting(
+        lambda request: rollout_deviation(request, cohort, prior_rollout_event=prior_rollout_event),
+        audit=audit,
+        run=run,
+        principal=principal,
+    )
 
 
 def rollout_instruction(

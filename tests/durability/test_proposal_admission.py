@@ -42,6 +42,7 @@ from tests.durability.test_commit import acted, commit_again, held
 from tests.durability.test_slack_answer import APPROVER, slack_click
 from tests.fitness.test_trigger_to_candidate import RULE, StubScorer
 from tests.temporal_support import (
+    DRAFT_TOOL,
     DraftingEngine,
     activities_for,
     asker_for,
@@ -326,3 +327,62 @@ def test_a_wait_holding_another_rollout_is_never_committed_even_approved(
     assert stack.registry_client.rollouts == []
     (record,) = [r for r in stack.audit.for_run(parked.run_id) if r.wait_id == wait.wait_id]
     assert (record.policy_decision, record.outcome) == (PROPOSAL_DEVIATES, "refused")
+
+
+class MistypingDraftEngine(DraftingEngine):
+    """Drafts, but copies the version it was told with one character added: what a model
+    does when "exactly as given" is a thing it has to retype."""
+
+    def _answer(self, request: ModelRequest) -> ModelResponse:
+        told = super()._answer(request)
+        return ModelResponse(
+            text=told.text,
+            proposals=tuple(
+                ToolCallProposal(
+                    tool=p.tool,
+                    arguments={
+                        **p.arguments,
+                        "experiment_version": p.arguments["experiment_version"] + "7",
+                    },
+                )
+                if p.tool == DRAFT_TOOL
+                else p
+                for p in told.proposals
+            ),
+        )
+
+
+def test_a_draft_of_a_cohort_nobody_froze_never_lands_and_ends_the_run(
+    stack: Stack, app_database: Database
+) -> None:
+    async def go() -> tuple[str, RunProgress]:
+        async with (
+            time_skipping() as env,
+            worker_on(
+                env.client,
+                "draft-admission",
+                app_database,
+                scorer=StubScorer(),
+                rule=RULE,
+                turns=turns_for(stack, MistypingDraftEngine()),
+                asker=asker_for(stack),
+            ),
+        ):
+            run_id = await deliver(
+                stack, env.client, PAYLOAD, source="a1", task_queue="draft-admission"
+            )
+            handle = env.client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+            done = await progress_until(
+                handle, lambda p: len(p.turns) == 1 and p.waiting_on is not None
+            )
+            return run_id, done
+
+    run_id, done = asyncio.run(go())
+
+    (draft,) = done.turns
+    assert (draft.status, draft.receipts, draft.refusals) == ("rejected", 0, 1)
+    assert stack.registry_client.drafts == {}, "nothing was written to the registry"
+    assert posted(stack) == [] and done.asks == 0, "and with no draft there is nothing to roll out"
+    (refused,) = [r for r in stack.audit.for_run(run_id) if r.policy_decision == PROPOSAL_DEVIATES]
+    assert refused.outcome == "refused" and refused.resource == "acme/experiments/exp-7"
+    assert refused.principal == "agent-operator"
