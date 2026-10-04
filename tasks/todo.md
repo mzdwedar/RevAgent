@@ -744,7 +744,8 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
 - [ ] All 28 success criteria in `SPEC.md` met or explicitly deferred with a reason
 - [ ] The `live` suite has been run at least once against the real model
 - [ ] Fitness tests and gates green; ratchets held
-- [ ] `/stack-audit` run and its findings addressed
+- [~] `/stack-audit` run and its findings addressed — run 2026-10-03/04; all but Important 2
+  addressed (see "Stack audit, iteration 1" below). Not ticked until that one is decided.
 - [ ] The two named debts still named: PII in traces, secrets in environment variables
 
 ## Phase 7 — Experiment registry and narrow registry tools
@@ -2161,3 +2162,38 @@ are historical. Still open: A3 (partial), the `/stack-audit` re-run, every "Huma
 box, Checkpoint F, the merge with `main`, the
 per-run lease decision (T21), PII in
 traces, and secrets in environment variables.
+
+## Stack audit, iteration 1 (run 2026-10-03, fixes in `cc3386a`, 2026-10-04)
+
+Mechanical gate passed before the auditor ran. Findings: 1 Critical, 3 Important,
+6 Suggestions. Layers touched: 1, 3, 4b, 5, 7.
+
+- [x] **Critical: KKBox value at risk was about 2.5x too high.** It annualised
+  `last_actual_amount_paid x 12` (about NTD 21.6M against about 8.6M by plan length).
+  Now `amount x 365 / plan days`; a cancel-as-last-event row or a plan with no length
+  counts as zero. **Zeroing cancel rows is my decision, not the spec's**: it is
+  conservative and lowers value at risk a little further. No cohort feature changed, so
+  `data_as_of` and the recorded scores are untouched. Tests: `test_kkbox_mapping.py`.
+  Not re-run on the real cohort, so the ~NTD 8M figure is the audit's estimate.
+- [x] **Important 1 (a hosted refusal was retried and re-uploaded the cohort)** and
+  **Important 3 (egress evidence, retention, `gateway.execute` as the only path)**:
+  moot. The owner withdrew the hosted scorer, so `HostedTabPFNScorer`, `TracedScorer`,
+  `tabpfn-client` and the contract-3 exception are gone and no row leaves the machine.
+  ADR-0012 records the withdrawal. The `STACK.md` row 7 amendment is no longer needed.
+- [ ] **Important 2: the value-at-risk floor has no currency**, so the gate is about 30x
+  weaker for KKBox (NTD) than for a USD cohort. **Open, deliberately.** Fixing it changes
+  the rule fingerprint and every `experiment_version`. Needs the owner's call.
+- [x] **Cheap Suggestions:** `.env` anchored to the repo root; duplicate `money` removed
+  from the Slack ask; osv-scanner action pinned to a commit SHA; ADR wording corrected.
+  Not done: the `check_egress` watermark recompute (the code it applied to is deleted).
+- Floor amendment: 32 tests and 46 assertions removed with the hosted scorer, recorded
+  in the constraints file under "Amendments to the floor". `stack_guard` flags them
+  against the previous commit regardless; against `main` the bar is intact.
+
+**Verified:** full `tests/fitness` passes; changed-line coverage 93.1% (floor 80%);
+`ruff`, `mypy`, `checkpoint_guard` and `replay_guard` clean.
+**Not re-run:** `tests/infra`, `tests/durability`, `evals run --gates`, `tests/live`.
+
+**Still open, for a human:** every "Human review" box, the T21 per-run lease trade-off,
+the two named debts (PII in traces, secrets in environment variables), Important 2,
+Checkpoint D's live re-score (about 2.5 h), and K16.
