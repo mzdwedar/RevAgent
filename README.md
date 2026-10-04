@@ -83,47 +83,14 @@ telecom, boosted trees catch up by about 1,000 rows). On IBM Telco the lead is s
 Netflix there is no lead: the data is easy (AUC 0.97 to 1.0 for every model), so we make **no
 TabPFN claim on Netflix**.
 
-### Proof 2: the agent uses it inside a governed run
-
-`scripts/checkpoint_b.py` sends one real KKBox trigger through the whole stack with
-qwen3:8b and replays recorded TabPFN scores. Every line below comes from Postgres:
-
-1. TabPFN's scores froze a cohort of 4,987 subscribers (risk threshold 0.24, median risk
-   0.54, 7.6M NTD of annual value at risk).
-2. The drafting turn was told that profile and nothing about the customers' reasons for
-   leaving.
-3. qwen3:8b wrote the hypothesis and variant, grounded in that profile. The draft landed in
-   the registry with the frozen experiment version, one receipt, no refusals, and the run
-   parked on a human approval.
-
-**A bug this found, and the fix.** On the first real run the model mistyped the experiment
-version in its draft (`exp:d39ddbec7cda1967` became `exp:d39ddbec7c7da1967`) and the turn
-still reported success: the draft was attached to a cohort nobody froze. Drafts are now held
-to the frozen record the same way rollouts are: a draft that deviates is refused, audited
-as `proposal.deviates`, and ends the run (`tests/durability/test_proposal_admission.py`). The
-re-run after the fix landed the exact version. That is one run; the mistake was
-intermittent, and the guarantee comes from the refusal tests, not from that run.
-
-**A second run, on Netflix, shows the pipeline and not the targeting.** The same checkpoint
-on the committed Netflix file (`dev` profile, because the default profile wants a cohort of
-1,000 and Netflix's top decile is 500) froze 500 customers with $78,708 of annualised revenue
-at risk, and the draft landed with the exact frozen version, one receipt and no refusals
-(`docs/evidence/checkpoint_b_netflix.txt`). But TabPFN's scores on this file are saturated:
-2,248 of 5,000 customers score 0.9999 or higher, and all 500 targeted customers sit at exactly
-0.99996. The "top decile" is a tie, so which 500 were picked is arbitrary, and the model's
-hypothesis leans on "100% churn probability", which is rounding, not evidence. That fits a
-synthetic file with an AUC near 0.97. Read it as proof the plumbing works on a second
-dataset. The evidence that targeting is meaningful is KKBox, where scores are spread out
-(median risk 0.54).
-
 ### What is not claimed
 
 - Not shown: that the agent beats a human analyst, or that an offer retains anyone. No offer
   was ever sent.
 - Not built: the planned `get_cohort_risk` tool and uncertainty abstention were cut. TabPFN
   reaches the agent as the cohort profile in its instruction, not as a callable tool.
-- Netflix is a demo and schema fixture, and its Checkpoint B cohort is a tie among saturated
-  scores (see Proof 2); the real-data evidence is KKBox, telecom, bank and IBM Telco. The Telecom set was not part of Proof 1.
+- Netflix is a demo and schema fixture, and its scores are saturated (2,248 of 5,000 at 0.9999
+  or higher), so it says nothing about targeting; the real-data evidence is KKBox, telecom, bank and IBM Telco. The Telecom set was not part of Proof 1.
 - A second entry, **revbench**, measures the same idea as a benchmark:
   `~/Desktop/revagent-tabpfn` (link to be added on publishing).
 - Demo video: _link to be added_.
