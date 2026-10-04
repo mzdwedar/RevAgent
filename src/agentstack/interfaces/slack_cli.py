@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from typing import Any
 
@@ -21,6 +20,7 @@ from agentstack.interfaces.slack_app import build_app
 from agentstack.interfaces.slack_callback import SECRET_VARIABLE
 from agentstack.interfaces.wiring import Stack, build_stack, deliver
 from agentstack.runtime.temporal.client import connect, temporal_address
+from agentstack.storage import secrets
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import database_url, open_pool, redacted
@@ -92,12 +92,14 @@ async def _deliver(stack: Stack, address: str, payload: dict[str, Any]) -> str:
 
 
 def _serve(stack: Stack, address: str, port: int) -> int:
-    token = os.environ.get(TOKEN_VARIABLE, "").strip()
-    secret = os.environ.get(SECRET_VARIABLE, "").strip()
-    if not token or not secret:
+    token = secrets.read(TOKEN_VARIABLE)
+    secret = secrets.read(SECRET_VARIABLE)
+    if token is None or secret is None:
         print(f"FAIL  {TOKEN_VARIABLE} and {SECRET_VARIABLE} must both be set", file=sys.stderr)
         return 1
-    app = build_app(stack, lambda: connect(address), signing_secret=secret, token=token)
+    app = build_app(
+        stack, lambda: connect(address), signing_secret=secret.reveal(), token=token.reveal()
+    )
     print(f"listening: :{port}/slack/events  (set this as the Interactivity Request URL)")
     app.start(port=port)
     return 0

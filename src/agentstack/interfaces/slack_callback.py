@@ -23,12 +23,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from agentstack.policy.approvers import ApprovalReply
+from agentstack.storage import secrets
 from agentstack.storage.database import Database
 
 SECRET_VARIABLE = "SLACK_SIGNING_SECRET"
@@ -63,15 +63,14 @@ class MalformedCallback(ValueError):
 
 
 def signing_secret(env: dict[str, str] | None = None) -> str:
-    source = os.environ if env is None else env
-    secret = source.get(SECRET_VARIABLE, "").strip()
-    if not secret:
+    secret = secrets.read(SECRET_VARIABLE, env=env)
+    if secret is None:
         raise CallbackRefused(
             f"{SECRET_VARIABLE} is not set, so no interaction can be shown to come from "
             "Slack. Refusing every callback is the correct behaviour here - accepting "
             "unverified ones would make the approval boundary decorative."
         )
-    return secret
+    return secret.reveal()
 
 
 def expected_signature(secret: str, *, sent_at: str, raw_body: bytes) -> str:

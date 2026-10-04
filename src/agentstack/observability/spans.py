@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
+from agentstack.observability.redaction import scrub
+
 REQUIRED_SPANS: frozenset[str] = frozenset(
     {
         "run.start",
@@ -114,7 +116,11 @@ class CollectingSink:
 @dataclass(frozen=True, slots=True)
 class LoggingSink:
     """One JSON line per span, on a named logger: what the worker exports until a trace
-    backend is chosen. The logger is the seam; where it ships is deployment's choice."""
+    backend is chosen. The logger is the seam; where it ships is deployment's choice.
+
+    Attributes pass through `redaction.scrub` here, at the edge of the process: only
+    allowlisted names leave, and prose and secrets are masked. A future sink must do the
+    same."""
 
     logger: str = "agentstack.traces"
 
@@ -128,7 +134,7 @@ class LoggingSink:
                         "run_id": span.run_id,
                         "session_id": span.session_id,
                         "versions": asdict(span.versions),
-                        "attributes": span.attributes,
+                        "attributes": scrub(span.attributes),
                     },
                     default=str,
                     sort_keys=True,

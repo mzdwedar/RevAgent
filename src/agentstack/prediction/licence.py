@@ -29,6 +29,8 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
+from agentstack.storage import secrets
+
 TOKEN_VARIABLE = "TABPFN_TOKEN"
 
 HOW_TO_GET_ONE = (
@@ -69,12 +71,12 @@ class LicenceRefused(RuntimeError):
 
 def check_token(env: Mapping[str, str] | None = None) -> str:
     """Cheap, local, and honest about what it does not know."""
-    source = os.environ if env is None else env
-    token = source.get(TOKEN_VARIABLE, "").strip()
-    if not token:
+    found = secrets.read(TOKEN_VARIABLE, env=env)
+    if found is None:
         raise LicenceRefused(
             f"{TOKEN_VARIABLE} is not set, so churn scoring cannot run. {HOW_TO_GET_ONE}"
         )
+    token = found.reveal()
     if len(token) < MINIMUM_TOKEN_LENGTH:
         raise LicenceRefused(
             f"{TOKEN_VARIABLE} is {len(token)} characters, which is too short to be a key. "

@@ -2247,3 +2247,21 @@ Mechanical gate passed before the auditor ran. Findings: 1 Critical, 3 Important
 **Still open, for a human:** every "Human review" box, the T21 per-run lease trade-off,
 the two named debts (PII in traces, secrets in environment variables),
 Checkpoint D's live re-score (about 2.5 h), and K16.
+
+## The two named debts, first half (2026-10-04, ADR-0013)
+
+Neither debt is closed. What is now enforced, and what is left:
+
+- [x] **Spans export an allowlist** · layer 9 · `observability/redaction.py`,
+  `LoggingSink`. Unlisted attributes are dropped (their names are reported); free text is
+  truncated and masked. `test_span_attributes.py` holds every `tracer.span(...)` call site
+  to the list and the list to what is used.
+- [x] **Secrets enter through one door** · layer 10 · `storage/secrets.py`. `DATABASE_URL`,
+  `TABPFN_TOKEN`, the Slack bot token and signing secret are read there; a `Secret` does not
+  print or pickle; a revealed value is masked in exported spans. `test_secrets.py` holds the
+  modules that read the environment to three named, non-credential ones.
+- [ ] **Retention** (traces, transcripts, audit): not decided. Owner's number and a job.
+- [ ] **A real secret store, and rotation** (including the signing secret with approvals
+  waiting): a deployment choice, open. The source is still the process environment.
+- [ ] **Prose redaction is a net, not a proof**; transcripts and the audit sink are untouched.
+- [ ] `STACK.md`'s layer-10 row does not mention secrets (hook-protected; the owner may want it).

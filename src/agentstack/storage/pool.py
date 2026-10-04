@@ -7,11 +7,11 @@ clients". So the size is explicit, named, and owned by one module that T21 can t
 
 from __future__ import annotations
 
-import os
-
 from psycopg import ProgrammingError
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import ConnectionPool
+
+from agentstack.storage import secrets
 
 # Dev only, and pointed at 5433 rather than 5432 so a laptop's existing Postgres is
 # never mistaken for this one. Real credentials are the named iteration-2 debt.
@@ -30,7 +30,8 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 
 def database_url() -> str:
     """The configured database, or the dev substrate `scripts/dev_up.sh` brings up."""
-    return os.environ.get("DATABASE_URL") or DEV_DATABASE_URL
+    configured = secrets.read("DATABASE_URL")
+    return configured.reveal() if configured else DEV_DATABASE_URL
 
 
 def open_pool(
