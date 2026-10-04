@@ -284,10 +284,10 @@ the rest are third-party and fetch-only.
 | Key | Source | Rows | Churn rate | Committed? |
 |---|---|---|---|---|
 | `netflix-churn` | [Kaggle `zeyadmohamed26/netflix-customer-churn-and-engagement-analytics`](https://www.kaggle.com/datasets/zeyadmohamed26/netflix-customer-churn-and-engagement-analytics), CC0 1.0 | 5,000 | 50% | yes, `data/open/` (probably synthetic) |
-| `kkbox-churn` | KKBox churn prediction (Kaggle competition data) | 49,863 | 8.9% | no, fetch only |
+| `kkbox-churn` | [KKBox churn prediction challenge](https://www.kaggle.com/competitions/kkbox-churn-prediction-challenge/data) (Kaggle competition; accept its rules once) | 49,863 | 8.9% | no, fetch only |
 | `telecom-bigml` | [`mnassrib/telecom-churn-datasets`](https://www.kaggle.com/datasets/mnassrib/telecom-churn-datasets) | 3,333 | 14.5% | no, fetch only |
 | `bank-churn` | [`radheshyamkollipara/bank-customer-churn`](https://www.kaggle.com/datasets/radheshyamkollipara/bank-customer-churn) | 10,000 | 20.4% | no, fetch only |
-| `ibm-telco` | IBM Telco customer churn | 7,043 | 26.5% | no, fetch only |
+| `ibm-telco` | [`blastchar/telco-customer-churn`](https://www.kaggle.com/datasets/blastchar/telco-customer-churn) (IBM sample data) | 7,043 | 26.5% | no, fetch only |
 
 None is subscription-app data except the Netflix file, which is synthetic as far as we can
 tell, so read results on it as pipeline demonstration. In `bank-churn` the `Complain` column
