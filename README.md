@@ -41,9 +41,9 @@ Same 200 labelled KKBox subscribers, same 100 held-out test rows, three seeds
 
 | Arm | AUC (mean of 3 seeds) | Revenue captured in top 10% |
 |---|---|---|
-| qwen3:8b alone, shown the table | **0.535** | 0.109 |
-| TabPFN-3.5 | **0.842** | 0.807 |
-| qwen3:8b given TabPFN's score | 0.772 | 0.807 |
+| qwen3:8b alone, shown the table | **0.535** | 0.101 |
+| TabPFN-3.5 | **0.842** | 0.477 |
+| qwen3:8b given TabPFN's score | 0.772 | 0.477 |
 
 ![LLM vs TabPFN on KKBox](docs/evidence/llm_vs_tabpfn.png)
 
@@ -56,7 +56,10 @@ What this does and does not show:
   seed. We claim "the LLM cannot rank churn from the table and TabPFN can", not "the LLM
   plus TabPFN is as good as TabPFN".
 - Caveats: **KKBox only, 3 seeds, 100 test rows.** Revenue is observed (what the subscriber
-  last paid, NTD), never predicted.
+  last paid, annualised by the length of the plan it bought, in NTD), never predicted. The
+  revenue column was corrected during this work (it was last payment x 12, about 2.5x too
+  high) and every revenue figure here was re-run on the corrected basis. In two of three
+  seeds the LLM alone captured no churned revenue in its top 10%.
 
 ### Why TabPFN: the cold-start curve
 
@@ -86,7 +89,7 @@ TabPFN claim on Netflix**.
 qwen3:8b and replays recorded TabPFN scores. Every line below comes from Postgres:
 
 1. TabPFN's scores froze a cohort of 4,987 subscribers (risk threshold 0.24, median risk
-   0.54, 21.6M NTD of annual value at risk).
+   0.54, 7.6M NTD of annual value at risk).
 2. The drafting turn was told that profile and nothing about the customers' reasons for
    leaving.
 3. qwen3:8b wrote the hypothesis and variant, grounded in that profile. The draft landed in

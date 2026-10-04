@@ -32,7 +32,7 @@ On screen text: **LLM alone 0.535 · TabPFN 0.842 · same 200 rows, KKBox, 3 see
 | Screen | Narration |
 |---|---|
 | README architecture diagram. Then terminal: run (or replay) `checkpoint_b.py`. Highlight the trigger line. | "RevAgent is an experiment operator. A data trigger starts a durable Temporal run." |
-| Highlight the frozen cohort JSON: size 4,987, median risk 0.54, value at risk. | "TabPFN scores the customers and freezes a cohort: 4,987 subscribers, and 21.6 million NTD of annual value at risk. Revenue is observed, never predicted." |
+| Highlight the frozen cohort JSON: size 4,987, median risk 0.54, value at risk. | "TabPFN scores the customers and freezes a cohort: 4,987 subscribers, and 7.6 million NTD of annual value at risk. Revenue is observed, never predicted." |
 | Highlight the instruction, then the draft in the registry. | "The local LLM then drafts the experiment, grounded in that risk profile: here, a 20 percent discount for high-risk subscribers." |
 | Cut to the mistyped-version diff (frozen `...cda1967` vs draft `...c7da1967`), side by side. | "Here's something honest. On my first real run the model mistyped the experiment version, and the run still said success. The draft was attached to a cohort nobody froze. I fixed it: a draft must now match the frozen record, or it's refused and audited." |
 | Temporal UI showing the run waiting. | "Nothing reaches a customer until a person approves that exact rollout. The run waits here." |
@@ -56,7 +56,7 @@ Do not show or say an approval happened: Checkpoint B stops at the parked approv
 | 0.535 vs 0.842 AUC | mean of 3 seeds, `llm_vs_tabpfn.csv` |
 | 0.77 for LLM given the score; seed 2 = 0.60 | same file |
 | Gaps of 0.11, 0.17, 0.12 at n=200 | `cold_start.csv`: KKBox 0.844 vs 0.733; telecom 0.876 vs 0.704; bank 0.814 vs 0.694 (the bank gap is 0.12 rounded) |
-| 4,987 customers, 21.6M NTD, median 0.54 | Checkpoint B frozen cohort |
+| 4,987 customers, 7.6M NTD, median 0.54 | Checkpoint B frozen cohort |
 | "Runs locally" | TabPFN-3.5 and qwen3:8b both run on the laptop; the Checkpoint B run used recorded TabPFN scores |
 
 If you cut for time, cut in this order: the cold-start section to one sentence, then the
