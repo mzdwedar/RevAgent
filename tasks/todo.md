@@ -787,8 +787,7 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
   `tests/infra` + `tests/durability` pass, `evals run --gates` 20/20, changed-line coverage
   93.1% (floor 80%). `stack_guard` flags only the deliberate hosted-scorer test removals.
 - [x] `/stack-audit` run and its findings addressed — run 2026-10-03/04; every finding
-  addressed (see "Stack audit, iteration 1" below). Important 2 awaits the owner's
-  confirmation of the NTD floor number.
+  addressed (see "Stack audit, iteration 1" below). The owner confirmed the NTD floor.
 - [x] The two named debts still named: PII in traces, secrets in environment variables —
   named in the audit entry below and in the 2026-09-30 state check; neither is fixed.
 
@@ -2231,9 +2230,8 @@ Mechanical gate passed before the auditor ran. Findings: 1 Critical, 3 Important
   currency with no stated floor is refused (`NoFloorForCurrency`) instead of judged by
   another's. USD fingerprints are byte-identical, so no USD `experiment_version` moved
   (pinned by `test_usd_is_the_default_...`); only an NTD cohort's version changes, since
-  its floor is a different number. **The NTD floor, 150,000,000 cents (NTD 1.5M), is my
-  conversion of $50,000 at about 30 NTD/USD. It is a business number: the owner should
-  confirm it.** Tests: `test_targeting.py` (floor held per currency, no floor refused, every
+  its floor is a different number. The NTD floor, 150,000,000 cents (NTD 1.5M), is
+  $50,000 at about 30 NTD/USD; **confirmed by the owner, 2026-10-04.** Tests: `test_targeting.py` (floor held per currency, no floor refused, every
   profile covers every registered currency, NTD floor = 30x USD floor).
 - [x] **Cheap Suggestions:** `.env` anchored to the repo root; duplicate `money` removed
   from the Slack ask; osv-scanner action pinned to a commit SHA; ADR wording corrected.
@@ -2247,5 +2245,5 @@ Mechanical gate passed before the auditor ran. Findings: 1 Critical, 3 Important
 **Not re-run:** `tests/infra`, `tests/durability`, `evals run --gates`, `tests/live`.
 
 **Still open, for a human:** every "Human review" box, the T21 per-run lease trade-off,
-the two named debts (PII in traces, secrets in environment variables), the NTD floor number,
+the two named debts (PII in traces, secrets in environment variables),
 Checkpoint D's live re-score (about 2.5 h), and K16.
