@@ -13,13 +13,13 @@ Plan: [`plan-hackathon.md`](plan-hackathon.md). Cut order if short: T4, then T1 
 - [x] Review the T1 numbers with the user
 
 ## Phase 2 — The agent uses TabPFN through tools
-- [ ] T3. `get_cohort_risk` read tool returning `Cohort.description()`; no inference inside the tool
+- [~] T3 (cut by decision). `get_cohort_risk` read tool returning `Cohort.description()`; no inference inside the tool. Redundant: the draft turn is already told the cohort profile (0ca9238)
   - [ ] Listed by `build_registry()`; fitness tests unchanged and passing; unit test; `check_fast.sh` green
-- [ ] T4. TabPFN uncertainty (spread over k seeds) in the cohort payload + abstention threshold in `experiments/targeting.toml`
+- [~] T4 (cut, first cut in the plan). TabPFN uncertainty (spread over k seeds) in the cohort payload + abstention threshold in `experiments/targeting.toml`
   - [ ] Threshold in rule fingerprint; forced high-uncertainty run abstains; normal run unchanged; `check_task.sh` green
 
 ### Checkpoint B
-- [ ] Local end-to-end run: trace shows LLM → `get_cohort_risk` → draft or abstain
+- [x] Local end-to-end run on KKBox with real qwen3:8b: trigger → frozen cohort → grounded draft in the registry (`scripts/checkpoint_b.py`). First run exposed a mistyped experiment version, fixed by draft admission (ab31d35); re-run after the fix landed the exact frozen version, 1 receipt, 0 refusals
 
 ## Phase 3 — Story and submission
 - [ ] T5. Judge-first README section (pitch, thesis, both plots + numbers, diagram, video + revbench links)
