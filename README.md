@@ -204,7 +204,7 @@ tabular tasks, and that changes the picture:
 
 **The churn model at the centre of this system is licensed for non-commercial use.**
 
-This repository is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): free for non-commercial use, and commercial use needs a separate licence from the author. That matches the constraint below.
+The code in this repository is licensed under the [Apache License 2.0](LICENSE). The TabPFN-3.5 weights it calls are a separate asset under Prior Labs' own non-commercial licence, which the code does not relicense. That constraint is below.
 
 The dependency's terms are settled:
 `agentstack.prediction` scores churn with PriorLabs' **TabPFN-3.5**, whose weights are
@@ -295,7 +295,7 @@ is dropped: it correlates with the target at r=0.996 because the complaint is lo
 of the churn event. Specs, dropped columns and revenue columns are in
 `src/agentstack/context/datasets.py`.
 
-**Licences.** The code is under the [PolyForm Noncommercial License](LICENSE). Data keeps
+**Licences.** The code is under the [Apache License 2.0](LICENSE). Data keeps
 its own licence: the committed Netflix file is CC0 ([`data/open/NOTICE.md`](data/open/NOTICE.md)),
 and everything else is licensed for use but not redistribution, so it is gitignored. Fetch it
 with `uv run python scripts/fetch_datasets.py` (needs `~/.kaggle/kaggle.json`). The committed

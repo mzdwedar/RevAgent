@@ -1,6 +1,6 @@
 # Datasets committed with this repository
 
-The code in this repository is under the PolyForm Noncommercial License (see `LICENSE`). Data keeps the licence it was published under.
+The code in this repository is under the Apache License 2.0 (see `LICENSE`). Data keeps the licence it was published under.
 Everything else under `data/` is third-party, licensed for use but not redistribution, and
 gitignored: fetch it with `scripts/fetch_datasets.py`.
 
