@@ -742,11 +742,23 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
 
 ### ✅ Checkpoint F — iteration 1 complete
 - [ ] All 28 success criteria in `SPEC.md` met or explicitly deferred with a reason
-- [ ] The `live` suite has been run at least once against the real model
-- [ ] Fitness tests and gates green; ratchets held
+  - 2026-10-04 mapping (tests that name the criterion): held by a named test: 1-6, 11,
+    14, 15, 17-25. No test names 7-10, 12, 13, 16, 26-28. 7 and 8 are covered under other
+    names (registry contract suite, spec criterion 7; claim semantics), so they need a
+    mapping, not new tests. 10, 12, 13 and 16 are the statistics criteria, and the spec
+    defers the inference rule to iteration 2 ("Terminal vs repeated analysis"). 26-28
+    (replayable trace, legible abstentions, p95/cost budget) have no test I can find.
+    **Open: which of these are deferred is the owner's call, not mine.**
+- [x] The `live` suite has been run at least once against the real model — 2026-10-04:
+  `test_ollama.py` + `test_real_cohorts.py` (qwen3:8b, real cohorts) 20 passed. Not re-run:
+  `test_real_scores.py`, `test_real_cohort_durability.py`, `test_kkbox_exploration.py` (they re-score).
+- [x] Fitness tests and gates green; ratchets held — 2026-10-04: `tests/fitness` full pass,
+  `tests/infra` + `tests/durability` pass, `evals run --gates` 20/20, changed-line coverage
+  93.1% (floor 80%). `stack_guard` flags only the deliberate hosted-scorer test removals.
 - [~] `/stack-audit` run and its findings addressed — run 2026-10-03/04; all but Important 2
   addressed (see "Stack audit, iteration 1" below). Not ticked until that one is decided.
-- [ ] The two named debts still named: PII in traces, secrets in environment variables
+- [x] The two named debts still named: PII in traces, secrets in environment variables —
+  named in the audit entry below and in the 2026-09-30 state check; neither is fixed.
 
 ## Phase 7 — Experiment registry and narrow registry tools
 
