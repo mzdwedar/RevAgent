@@ -786,8 +786,9 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
 - [x] Fitness tests and gates green; ratchets held — 2026-10-04: `tests/fitness` full pass,
   `tests/infra` + `tests/durability` pass, `evals run --gates` 20/20, changed-line coverage
   93.1% (floor 80%). `stack_guard` flags only the deliberate hosted-scorer test removals.
-- [~] `/stack-audit` run and its findings addressed — run 2026-10-03/04; all but Important 2
-  addressed (see "Stack audit, iteration 1" below). Not ticked until that one is decided.
+- [x] `/stack-audit` run and its findings addressed — run 2026-10-03/04; every finding
+  addressed (see "Stack audit, iteration 1" below). Important 2 awaits the owner's
+  confirmation of the NTD floor number.
 - [x] The two named debts still named: PII in traces, secrets in environment variables —
   named in the audit entry below and in the 2026-09-30 state check; neither is fixed.
 
@@ -2223,9 +2224,17 @@ Mechanical gate passed before the auditor ran. Findings: 1 Critical, 3 Important
   moot. The owner withdrew the hosted scorer, so `HostedTabPFNScorer`, `TracedScorer`,
   `tabpfn-client` and the contract-3 exception are gone and no row leaves the machine.
   ADR-0012 records the withdrawal. The `STACK.md` row 7 amendment is no longer needed.
-- [ ] **Important 2: the value-at-risk floor has no currency**, so the gate is about 30x
-  weaker for KKBox (NTD) than for a USD cohort. **Open, deliberately.** Fixing it changes
-  the rule fingerprint and every `experiment_version`. Needs the owner's call.
+- [x] **Important 2: the value-at-risk floor had no currency**, so the gate was about 30x
+  weaker for KKBox (NTD) than for a USD cohort. Fixed 2026-10-04. A floor is now stated
+  per currency (`TargetingRule.floors_cents`, `[profiles.*.floors_cents]` in
+  `experiments/targeting.toml`); a cohort is held to the floor in its own currency, and a
+  currency with no stated floor is refused (`NoFloorForCurrency`) instead of judged by
+  another's. USD fingerprints are byte-identical, so no USD `experiment_version` moved
+  (pinned by `test_usd_is_the_default_...`); only an NTD cohort's version changes, since
+  its floor is a different number. **The NTD floor, 150,000,000 cents (NTD 1.5M), is my
+  conversion of $50,000 at about 30 NTD/USD. It is a business number: the owner should
+  confirm it.** Tests: `test_targeting.py` (floor held per currency, no floor refused, every
+  profile covers every registered currency, NTD floor = 30x USD floor).
 - [x] **Cheap Suggestions:** `.env` anchored to the repo root; duplicate `money` removed
   from the Slack ask; osv-scanner action pinned to a commit SHA; ADR wording corrected.
   Not done: the `check_egress` watermark recompute (the code it applied to is deleted).
@@ -2238,5 +2247,5 @@ Mechanical gate passed before the auditor ran. Findings: 1 Critical, 3 Important
 **Not re-run:** `tests/infra`, `tests/durability`, `evals run --gates`, `tests/live`.
 
 **Still open, for a human:** every "Human review" box, the T21 per-run lease trade-off,
-the two named debts (PII in traces, secrets in environment variables), Important 2,
+the two named debts (PII in traces, secrets in environment variables), the NTD floor number,
 Checkpoint D's live re-score (about 2.5 h), and K16.

@@ -50,6 +50,15 @@ class NotEnoughAtRisk(TargetingRefused):
     """The eligible cohort is not worth the offers it would take to retain it."""
 
 
+class NoFloorForCurrency(TargetingRefused):
+    """The rule states no value-at-risk floor in this cohort's currency.
+
+    A floor is an amount of money. Comparing NTD against a number written in dollars
+    is a gate about thirty times too weak, so a currency with no stated floor is
+    refused rather than judged against another currency's.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class TargetingRule:
     """One named set of thresholds.
@@ -62,7 +71,10 @@ class TargetingRule:
     profile: str
     risk_quantile: float
     minimum_cohort: int
+    # The floor in USD cents. A cohort billed in another currency is held to the floor the
+    # rule states for that currency in `floors_cents`, never to this number.
     minimum_annual_value_at_risk_cents: int
+    floors_cents: tuple[tuple[str, int], ...] = ()
 
     @staticmethod
     def load(profile: str = "default", path: Path = DEFAULTS) -> TargetingRule:
@@ -77,6 +89,9 @@ class TargetingRule:
             risk_quantile=float(rule["risk_quantile"]),
             minimum_cohort=int(rule["minimum_cohort"]),
             minimum_annual_value_at_risk_cents=int(rule["minimum_annual_value_at_risk_cents"]),
+            floors_cents=tuple(
+                sorted((str(c), int(v)) for c, v in rule.get("floors_cents", {}).items())
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -85,13 +100,29 @@ class TargetingRule:
         if self.minimum_cohort < 1:
             raise TargetingRefused("a cohort of zero is not an experiment")
 
-    def fingerprint(self) -> str:
-        return (
-            f"{self.profile}"
-            f":q{self.risk_quantile}"
-            f":n{self.minimum_cohort}"
-            f":v{self.minimum_annual_value_at_risk_cents}"
-        )
+    def floor_cents(self, currency: str) -> int:
+        """The value-at-risk floor for a cohort billed in `currency`, or a refusal."""
+        if currency == "USD":
+            return self.minimum_annual_value_at_risk_cents
+        floors = dict(self.floors_cents)
+        if currency not in floors:
+            raise NoFloorForCurrency(
+                f"profile {self.profile!r} states no value-at-risk floor in {currency}; "
+                f"it has {['USD', *sorted(floors)]}. Add one to experiments/targeting.toml "
+                "rather than judging this cohort against another currency's floor."
+            )
+        return floors[currency]
+
+    def fingerprint(self, currency: str = "USD") -> str:
+        """Every frozen number, for a cohort in `currency`.
+
+        USD keeps the form it had before currency existed, so every USD experiment keeps
+        its version. Another currency names itself, because its floor is a different
+        number and a different rule.
+        """
+        floor = self.floor_cents(currency)
+        suffix = "" if currency == "USD" else f":{currency}"
+        return f"{self.profile}:q{self.risk_quantile}:n{self.minimum_cohort}:v{floor}{suffix}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +168,7 @@ class Cohort:
             "targeting_model_version": self.model_version,
             "risk_threshold": round(self.risk_threshold, 6),
             "targeting_profile": self.rule.profile,
-            "rule": self.rule.fingerprint(),
+            "rule": self.rule.fingerprint(self.currency),
             "size": self.size,
             "annual_value_at_risk_cents": self.annual_value_at_risk_cents,
             "risk_quantiles": {
@@ -226,11 +257,12 @@ def select(
             "qualify would make the targeting mean something else."
         )
 
+    floor = rule.floor_cents(currency)
     at_risk = int(revenue.take(members).sum())
-    if at_risk < rule.minimum_annual_value_at_risk_cents:
+    if at_risk < floor:
         raise NotEnoughAtRisk(
             f"{money(at_risk, currency)} of annualised revenue at risk across {len(members)} "
-            f"customers; the rule needs {money(rule.minimum_annual_value_at_risk_cents, currency)}"
+            f"customers; the rule needs {money(floor, currency)}"
         )
 
     member_risk = sorted(scores.probabilities[i] for i in members)
@@ -275,7 +307,7 @@ def _experiment_version(
         scores.model_version,
         f"seed:{scores.seed}",
         f"folds:{scores.folds}",
-        rule.fingerprint(),
+        rule.fingerprint(REGISTRY[snapshot.dataset].currency),
         f"threshold:{threshold:.9f}",
     ):
         digest.update(part.encode())

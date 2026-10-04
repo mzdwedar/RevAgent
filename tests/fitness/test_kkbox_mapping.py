@@ -514,6 +514,7 @@ def test_kkbox_is_targetable_and_its_value_at_risk_is_in_ntd() -> None:
         risk_quantile=0.9,
         minimum_cohort=2,
         minimum_annual_value_at_risk_cents=1_000,
+        floors_cents=(("NTD", 1_000),),
     )
     cohort = targeting.select(snapshot, scored, rule=rule)
 

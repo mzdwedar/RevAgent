@@ -39,6 +39,7 @@ RULE = TargetingRule(
     risk_quantile=0.9,
     minimum_cohort=10,
     minimum_annual_value_at_risk_cents=1_000,
+    floors_cents=(("NTD", 1_000),),
 )
 
 

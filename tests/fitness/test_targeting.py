@@ -35,6 +35,7 @@ DEV = TargetingRule(
     risk_quantile=0.9,
     minimum_cohort=10,
     minimum_annual_value_at_risk_cents=1_000,
+    floors_cents=(("NTD", 1_000),),
 )
 
 
@@ -198,9 +199,48 @@ def test_a_refusal_names_the_cohorts_own_currency() -> None:
         targeting.select(
             snapshot(),
             scores(),
-            rule=replace(DEV, minimum_annual_value_at_risk_cents=5_000_000),
+            rule=replace(DEV, floors_cents=(("NTD", 5_000_000),)),
         )
     assert "$" not in str(refused.value)
+
+
+def test_a_cohort_is_held_to_the_floor_stated_in_its_own_currency() -> None:
+    """The audit's Important 2: one number in cents was compared against every cohort, so
+    NTD 1.5M (about $50,000) was judged against a floor written as $50,000 - a gate about
+    thirty times too weak. Here the USD floor would pass and the NTD floor must refuse."""
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+    usd_floor_would_pass = replace(DEV, minimum_annual_value_at_risk_cents=1_000)
+
+    with pytest.raises(NotEnoughAtRisk, match="NTD"):
+        targeting.select(
+            snapshot(),
+            scores(),
+            rule=replace(usd_floor_would_pass, floors_cents=(("NTD", 10_000_000_000),)),
+        )
+
+
+def test_a_currency_with_no_stated_floor_is_refused_not_judged_by_another() -> None:
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+
+    with pytest.raises(targeting.NoFloorForCurrency, match="NTD"):
+        targeting.select(snapshot(), scores(), rule=replace(DEV, floors_cents=()))
+
+
+def test_every_profile_states_a_floor_for_every_currency_a_cohort_is_billed_in() -> None:
+    """A dataset registered in a new currency must not reach a rule that cannot judge it."""
+    currencies = {spec.currency for key, spec in REGISTRY.items() if key != "fixture"}
+    for profile in ("default", "dev"):
+        rule = TargetingRule.load(profile)
+        for currency in currencies:
+            assert rule.floor_cents(currency) > 0, f"{profile} has no floor for {currency}"
+
+
+def test_the_stated_ntd_floor_is_the_dollar_floor_at_the_exchange_rate_it_names() -> None:
+    """experiments/targeting.toml says $50,000 is NTD 1,500,000 at about 30. If either
+    moves on its own, the two floors no longer describe the same bar."""
+    rule = TargetingRule.load("default")
+
+    assert rule.floor_cents("NTD") == 30 * rule.floor_cents("USD")
 
 
 def test_usd_is_the_default_and_leaves_the_cohort_byte_identical() -> None:
@@ -222,8 +262,10 @@ def test_a_non_usd_cohort_records_its_currency() -> None:
 
     assert cohort.currency == "NTD"
     assert cohort.description()["currency"] == "NTD"
-    # The dataset is already in the version; the currency must not change a USD name.
-    assert cohort.experiment_version == "exp:9c93736ad3fe0a25"
+    # Its floor is a different number, so it is a different rule and a different version.
+    # A USD cohort's name must not move (above).
+    assert cohort.experiment_version != "exp:9c93736ad3fe0a25"
+    assert cohort.description()["rule"].endswith(":NTD")
 
 
 def test_a_frozen_cohort_reads_its_currency_from_what_was_recorded() -> None:
