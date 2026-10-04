@@ -13,4 +13,5 @@ htmlcov/
 .tmp/
 data/*
 !data/manifest.json
+!data/open/
 !.env.example

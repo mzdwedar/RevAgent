@@ -15,6 +15,15 @@ from agentstack.context import datasets
 
 KEYS = sorted(datasets.REGISTRY)
 
+# Declared rather than silently skipped: a dataset that fails the base-rate bar says why,
+# so the bar keeps its meaning for every other cohort.
+BASE_RATE_EXEMPT = {
+    "netflix-churn": (
+        "5,000 rows at a 50.3% churn rate, almost certainly synthetic. Committed as a "
+        "redistributable schema fixture (data/open/NOTICE.md), not as a cohort to target."
+    ),
+}
+
 
 @pytest.fixture(scope="module")
 def manifest() -> dict[str, dict[str, object]]:
@@ -69,6 +78,8 @@ def test_the_cohort_is_large_enough_to_target_from(key: str) -> None:
     snapshot = datasets.load(key)
 
     assert snapshot.rows >= 1000
+    if key in BASE_RATE_EXEMPT:
+        return
     assert 0.05 < snapshot.churn_rate < 0.5, "an extreme base rate makes uplift unmeasurable"
 
 

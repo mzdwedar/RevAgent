@@ -81,6 +81,11 @@ class DatasetSpec:
     # that builds it, so an absent file points at the build and not at a downloader that
     # has nothing by this name. Empty for a cohort Kaggle ships as is.
     derived_by: str = ""
+    # Terms for a dataset committed under `data/open/`. Everything else is third-party and
+    # gitignored because its licence forbids redistribution; a committed file says what it
+    # is committed under and who to credit (tests/fitness/test_open_dataset.py).
+    licence: str = ""
+    attribution: str = ""
 
 
 REGISTRY: dict[str, DatasetSpec] = {
@@ -159,6 +164,57 @@ REGISTRY: dict[str, DatasetSpec] = {
         ),
         currency="NTD",
         derived_by="scripts/build_kkbox_cohort.py",
+    ),
+    "ibm-telco": DatasetSpec(
+        key="ibm-telco",
+        kaggle="blastchar/telco-customer-churn",
+        files=("WA_Fn-UseC_-Telco-Customer-Churn.csv",),
+        target="Churn",
+        churned="Yes",
+        drops={
+            "customerID": (
+                "an identifier: it names the row rather than describing it, so a model "
+                "that keys on it has memorised the training set"
+            ),
+        },
+        # 11 customers have a blank TotalCharges: they are in their first month, tenure 0,
+        # and have been billed nothing yet. Zero is what the file means by blank.
+        fills={"TotalCharges": 0},
+        revenue_columns=("MonthlyCharges",),
+        revenue_periods_per_year=12,
+        revenue_note=(
+            "The billed monthly charge, annualised x12. Observed per customer and "
+            "continuous. IBM describes the data as a fictional telco; it is a sample "
+            "dataset, not a company's records."
+        ),
+        # Not committed: IBM states no data licence, the Kaggle copy is listed as
+        # "copyright-authors", and the CC BY tags on Hugging Face and Mendeley were set by
+        # the uploaders. Fetched, never redistributed.
+    ),
+    "netflix-churn": DatasetSpec(
+        key="netflix-churn",
+        kaggle="zeyadmohamed26/netflix-customer-churn-and-engagement-analytics",
+        files=("open/netflix_customer_churn.csv",),
+        target="churned",
+        churned="1",
+        drops={
+            "customer_id": (
+                "an identifier: it names the row rather than describing it, so a model "
+                "that keys on it has memorised the training set"
+            ),
+        },
+        revenue_columns=("monthly_fee",),
+        revenue_periods_per_year=12,
+        revenue_note=(
+            "The billed monthly fee, annualised x12. It is the price of the subscriber's "
+            "tier (Basic 8.99, Standard 13.99, Premium 17.99), so it is observed per "
+            "subscriber but takes three values. The dataset does not say whether it is "
+            "synthetic; its 50% churn rate and clean behavioural signal suggest it is."
+        ),
+        licence="CC0-1.0",
+        attribution=(
+            "Netflix Customer Churn & Engagement Analytics, Kaggle, zeyadmohamed26, CC0 1.0"
+        ),
     ),
 }
 

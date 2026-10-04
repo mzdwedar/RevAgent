@@ -21,6 +21,34 @@
     "dataset": "bank-churn",
     "rows": 10000
   },
+  "ibm-telco": {
+    "churn_rate": 0.26537,
+    "columns": [
+      "Churn",
+      "Contract",
+      "Dependents",
+      "DeviceProtection",
+      "InternetService",
+      "MonthlyCharges",
+      "MultipleLines",
+      "OnlineBackup",
+      "OnlineSecurity",
+      "PaperlessBilling",
+      "Partner",
+      "PaymentMethod",
+      "PhoneService",
+      "SeniorCitizen",
+      "StreamingMovies",
+      "StreamingTV",
+      "TechSupport",
+      "TotalCharges",
+      "gender",
+      "tenure"
+    ],
+    "data_as_of": "ibm-telco:354006486c71340d",
+    "dataset": "ibm-telco",
+    "rows": 7043
+  },
   "kkbox-churn": {
     "churn_rate": 0.088723,
     "columns": [
@@ -53,6 +81,27 @@
     "data_as_of": "kkbox-churn:7b2787de78c817e3",
     "dataset": "kkbox-churn",
     "rows": 49863
+  },
+  "netflix-churn": {
+    "churn_rate": 0.503,
+    "columns": [
+      "age",
+      "avg_watch_time_per_day",
+      "churned",
+      "device",
+      "favorite_genre",
+      "gender",
+      "last_login_days",
+      "monthly_fee",
+      "number_of_profiles",
+      "payment_method",
+      "region",
+      "subscription_type",
+      "watch_hours"
+    ],
+    "data_as_of": "netflix-churn:b53d396f773a376a",
+    "dataset": "netflix-churn",
+    "rows": 5000
   },
   "telecom-bigml": {
     "churn_rate": 0.144914,
