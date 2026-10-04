@@ -1,0 +1,42 @@
+code     : /Users/mohamedzeyad/Desktop/revenuecat-agent-hackathon/src/agentstack/__init__.py
+trigger  : {'kind': 'data_arrival', 'experiment_id': 'exp-aa79b3', 'data_as_of': 'netflix-churn:b53d396f773a376a', 'tenant': 'acme'}
+waited   : 13s; cycles=1 turns=1
+
+== the cohort TabPFN's scores froze ==
+{
+  "rule": "dev:q0.9:n300:v5000000",
+  "size": 500,
+  "dataset": "netflix-churn",
+  "data_as_of": "netflix-churn:b53d396f773a376a",
+  "revenue_basis": "The billed monthly fee, annualised x12. It is the price of the subscriber's tier (Basic 8.99, Standard 13.99, Premium 17.99), so it is observed per subscriber but takes three values. The dataset does not say whether it is synthetic; its 50% churn rate and clean behavioural signal suggest it is.",
+  "risk_quantiles": {
+    "0.0": 0.99996,
+    "0.5": 0.99996,
+    "1.0": 0.99996,
+    "0.25": 0.99996,
+    "0.75": 0.99996
+  },
+  "risk_threshold": 0.99996,
+  "targeting_profile": "dev",
+  "experiment_version": "exp:7878ef71f419abbb",
+  "targeting_model_version": "tabpfn-3.5",
+  "annual_value_at_risk_cents": 7870800
+}
+
+== what the drafting turn was told ==
+A cohort was frozen for a retention experiment. Draft it by calling create_experiment_draft with tenant=acme experiment_id=exp-aa79b3 experiment_version=exp:7878ef71f419abbb exactly as given. Write the hypothesis and the variant yourself: what offer to test, and why it should retain these customers, grounded in the risk profile below. The cohort was scored on the batch netflix-churn:b53d396f773a376a. Churn model tabpfn-3.5 scored this cohort: 500 customers, every one at churn probability 1.00 or above (risk quantiles within the cohort: 0% 1.00, 50% 1.00, 100% 1.00, 25% 1.00, 75% 1.00). $78,708 of annualised revenue is at risk (The billed monthly fee, annualised x12. It is the price of the subscriber's tier (Basic 8.99, Standard 13.99, Premium 17.99), so it is observed per subscriber but takes three values. The dataset does not say whether it is synthetic; its 50% churn rate and clean behavioural signal suggest it is.).
+
+== what it replied ==
+
+
+== the draft in the registry ==
+{
+  "experiment_id": "exp-aa79b3",
+  "status": "draft",
+  "experiment_version": "exp:7878ef71f419abbb",
+  "hypothesis": "Offering a free month of Premium tier will retain high-risk customers by providing a tangible incentive to stay, given their 100% churn probability. This offer targets customers with the highest risk of churn, leveraging their demonstrated likelihood to churn to prevent revenue loss.",
+  "variant": "free_month_premium",
+  "revision_no": 1
+}
+
+turn outcome: TurnOutcome(status='complete', receipts=1, refusals=0, refusal=None, wait_id=None)

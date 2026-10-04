@@ -191,3 +191,29 @@ def test_an_absent_manifest_reads_as_empty_rather_than_raising() -> None:
     from pathlib import Path
 
     assert datasets.read_manifest(Path("/nonexistent/manifest.json")) == {}
+
+
+def test_a_committed_score_file_matches_the_dataset_it_names() -> None:
+    """Scores are only evidence about the rows they were computed on.
+
+    The replay scorer refuses a moved snapshot at run time; this refuses it at commit
+    time, so a score file cannot sit in the repo describing data that has since changed.
+    Only committed files are checked: the others are local by design (see .gitignore).
+    """
+    import subprocess
+    from pathlib import Path
+
+    root = Path(datasets.DATA_ROOT).parent
+    tracked = subprocess.run(
+        ["git", "ls-files", "data/scores"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.split()
+
+    for name in tracked:
+        recorded = json.loads((root / name).read_text())
+        snap = datasets.load(recorded["dataset"])
+
+        assert recorded["data_as_of"] == snap.data_as_of, name
+        assert len(recorded["probabilities"]) == snap.rows, name
+        assert recorded["positives"] == int(
+            snap.frame[datasets.REGISTRY[snap.dataset].target].sum()
+        ), name

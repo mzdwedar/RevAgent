@@ -104,14 +104,26 @@ as `proposal.deviates`, and ends the run (`tests/durability/test_proposal_admiss
 re-run after the fix landed the exact version. That is one run; the mistake was
 intermittent, and the guarantee comes from the refusal tests, not from that run.
 
+**A second run, on Netflix, shows the pipeline and not the targeting.** The same checkpoint
+on the committed Netflix file (`dev` profile, because the default profile wants a cohort of
+1,000 and Netflix's top decile is 500) froze 500 customers with $78,708 of annualised revenue
+at risk, and the draft landed with the exact frozen version, one receipt and no refusals
+(`docs/evidence/checkpoint_b_netflix.txt`). But TabPFN's scores on this file are saturated:
+2,248 of 5,000 customers score 0.9999 or higher, and all 500 targeted customers sit at exactly
+0.99996. The "top decile" is a tie, so which 500 were picked is arbitrary, and the model's
+hypothesis leans on "100% churn probability", which is rounding, not evidence. That fits a
+synthetic file with an AUC near 0.97. Read it as proof the plumbing works on a second
+dataset. The evidence that targeting is meaningful is KKBox, where scores are spread out
+(median risk 0.54).
+
 ### What is not claimed
 
 - Not shown: that the agent beats a human analyst, or that an offer retains anyone. No offer
   was ever sent.
 - Not built: the planned `get_cohort_risk` tool and uncertainty abstention were cut. TabPFN
   reaches the agent as the cohort profile in its instruction, not as a callable tool.
-- Netflix is a demo and schema fixture; the real-data evidence is KKBox, telecom, bank and
-  IBM Telco. The Telecom set was not part of Proof 1.
+- Netflix is a demo and schema fixture, and its Checkpoint B cohort is a tie among saturated
+  scores (see Proof 2); the real-data evidence is KKBox, telecom, bank and IBM Telco. The Telecom set was not part of Proof 1.
 - A second entry, **revbench**, measures the same idea as a benchmark:
   `~/Desktop/revagent-tabpfn` (link to be added on publishing).
 - Demo video: _link to be added_.
@@ -425,8 +437,9 @@ contributor rules are `CLAUDE.md` and `AGENTS.md`, and every change must pass
   3, 7, 8 and 9 are on Postgres; layer 5's memory never got a durability task. Found by
   auditing the stores at Checkpoint A rather than by trusting the task list, and
   recorded in `tasks/todo.md` instead of quietly left.
-- **Recorded TabPFN scores exist only on the machine that made them.** `data/scores/`
-  holds `telecom-bigml.json`, `bank-churn.json` (`tabpfn-3.5`, 5 folds, seed
+- **Most recorded TabPFN scores exist only on the machine that made them.** The Netflix file
+  (CC0 data) is committed, and a fitness test checks it still matches its dataset hash.
+  `data/scores/` also holds `telecom-bigml.json`, `bank-churn.json` (`tabpfn-3.5`, 5 folds, seed
   20260922), written by `scripts/record_scores.py`, and `kkbox-churn.json` (`tabpfn-3.5`,
   recorded 2026-10-02, not yet re-scored by `tests/live`). The gate, the fold assignment, the
   cross-fitting and the replay guards run against them. But `data/` is gitignored and

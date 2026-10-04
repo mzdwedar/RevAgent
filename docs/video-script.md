@@ -57,6 +57,7 @@ Do not show or say an approval happened: Checkpoint B stops at the parked approv
 | 0.77 for LLM given the score; seed 2 = 0.60 | same file |
 | Gaps of 0.11, 0.17, 0.12 at n=200 | `cold_start.csv`: KKBox 0.844 vs 0.733; telecom 0.876 vs 0.704; bank 0.814 vs 0.694 (the bank gap is 0.12 rounded) |
 | 4,987 customers, 7.6M NTD, median 0.54 | Checkpoint B frozen cohort |
+| Netflix run: 500 customers, all at 0.99996, so the cohort is a tie | `docs/evidence/checkpoint_b_netflix.txt`; say it shows the pipeline, never good targeting |
 | "Runs locally" | TabPFN-3.5 and qwen3:8b both run on the laptop; the Checkpoint B run used recorded TabPFN scores |
 
 If you cut for time, cut in this order: the cold-start section to one sentence, then the
