@@ -23,5 +23,5 @@ Plan: [`plan-hackathon.md`](plan-hackathon.md). Cut order if short: T4, then T1 
 
 ## Phase 3 — Story and submission
 - [x] T5. Judge-first README section (pitch, thesis, both plots + numbers, diagram, video + revbench links)
-- [ ] T6. 3-minute video (script + shot list from me; headline number in the first 30 s)
+- [x] T6. 3-minute video (script + shot list from me; headline number in the first 30 s)
 - [ ] T7. Push, make the repo public, submit RevAgent; submit revbench as a second entry
