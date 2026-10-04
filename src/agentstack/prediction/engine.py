@@ -165,9 +165,6 @@ class TabPFNScorer:
 def encode(features: pd.DataFrame) -> pd.DataFrame:
     """Ordinal-encode non-numeric columns, by sorted category.
 
-    Public because the hosted scorer (layer 7) reuses it: encoding stays ours, so a score
-    from either scorer is a function of the same inputs.
-
     Sorted, not by order of appearance: encoding that depends on row order would make
     the same snapshot produce different inputs after a re-sort, and `data_as_of` would
     no longer imply the same scores.

@@ -46,6 +46,7 @@ from agentstack.policy.triggers import (
     TenantClaimRefused,
     TriggerKind,
 )
+from agentstack.prediction import licence
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.drafting import draft_instruction, rollout_instruction
 from agentstack.runtime.run import RunStore
@@ -254,7 +255,7 @@ def test_the_worker_runs_the_real_preflight_by_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
-    monkeypatch.chdir(tmp_path)  # no .env here: the repo's own must not rescue the test
+    monkeypatch.setattr(licence, "ENV_FILE", tmp_path / ".env")  # the repo's own must not rescue it
 
     assert worker_cli.main([]) == 1
 

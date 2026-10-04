@@ -24,6 +24,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from agentstack.context.targeting import money
+
 TOKEN_VARIABLE = "SLACK_BOT_TOKEN"
 
 # Slack truncates hard. The summary is the part a person actually reads, so it is what
@@ -92,8 +94,7 @@ class ApprovalAsk:
         )
 
     def money(self) -> str:
-        amount = f"{self.annual_value_at_risk_cents / 100:,.0f}"
-        return f"${amount}" if self.currency == "USD" else f"{self.currency} {amount}"
+        return money(self.annual_value_at_risk_cents, self.currency)
 
 
 def render_blocks(ask: ApprovalAsk) -> list[dict[str, Any]]:

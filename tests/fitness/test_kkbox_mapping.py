@@ -468,8 +468,9 @@ def test_kkbox_is_registered_in_its_own_currency_with_observed_revenue() -> None
     assert spec.target == kkbox.TARGET
     assert spec.currency == "NTD"
     assert spec.revenue_columns == ("last_actual_amount_paid",)
-    assert spec.revenue_periods_per_year == 12
-    assert "30" in spec.revenue_note and "annualised" in spec.revenue_note
+    assert spec.revenue_period_days_column == "last_payment_plan_days"
+    assert spec.revenue_unpaid_flag_column == "last_is_cancel"
+    assert "plan days" in spec.revenue_note and "annualised" in spec.revenue_note
 
 
 def test_the_cohort_file_loads_with_msno_dropped_for_its_stated_reason() -> None:
@@ -516,10 +517,43 @@ def test_kkbox_is_targetable_and_its_value_at_risk_is_in_ntd() -> None:
     )
     cohort = targeting.select(snapshot, scored, rule=rule)
 
-    # the riskiest decile of 20 is the last two users, paying 118 and 119 a month
-    assert cohort.annual_value_at_risk_cents == (118 + 119) * 100 * 12
+    # the riskiest decile of 20 is the last two users, paying 118 and 119 for a 30-day plan
+    assert cohort.annual_value_at_risk_cents == (118 + 119) * 100 * 365 // 30
     assert cohort.currency == "NTD"
     assert "NTD" in cohort.description()["currency"]
+
+
+def revenue_of(rows: list[dict[str, object]]) -> list[int]:
+    snapshot = datasets.snapshot(
+        datasets.REGISTRY["kkbox-churn"], build(pd.DataFrame(rows)).reset_index()
+    )
+    return [int(v) for v in targeting.annual_revenue_cents(snapshot)]
+
+
+def test_annual_revenue_follows_the_length_of_the_plan_that_was_paid_for() -> None:
+    thirty = tx("a", 20170115, 20170215, paid=149, days=30)
+    long_plan = tx("b", 20170115, 20180225, paid=1788, days=410)
+    seven = tx("c", 20170115, 20170122, paid=35, days=7)
+
+    month, plan410, week = revenue_of([thirty, long_plan, seven])
+
+    assert month == round(149 * 365 / 30 * 100)
+    # one payment for 410 days is about 1,592 a year, not 1,788 x 12
+    assert plan410 == round(1788 * 365 / 410 * 100)
+    assert plan410 < 1788 * 100 * 1.01
+    assert week == round(35 * 365 / 7 * 100)
+
+
+def test_a_last_event_that_is_a_cancellation_is_not_an_observed_payment() -> None:
+    paid = tx("a", 20170115, 20170215, paid=149)
+    cancelled = [tx("b", 20170115, 20170215, paid=149), tx("b", 20170201, 20170201, cancel=1)]
+
+    assert revenue_of([paid])[0] > 0
+    assert revenue_of([*cancelled])[0] == 0
+
+
+def test_a_plan_with_no_length_is_worth_nothing_not_a_guess() -> None:
+    assert revenue_of([tx("a", 20170115, 20170215, paid=149, days=0)]) == [0]
 
 
 def test_bank_churn_is_still_loadable_and_still_not_targetable() -> None:

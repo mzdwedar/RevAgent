@@ -41,13 +41,18 @@ HOW_TO_GET_ONE = (
 MINIMUM_TOKEN_LENGTH = 16
 
 
-def load_env(path: Path = Path(".env")) -> None:
-    """Read KEY=VALUE lines from `.env` into the environment, without overriding it.
+ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
-    The token lives in `.env` (gitignored); this saves exporting it by hand. Whatever the
-    shell already set wins, and a missing file is not an error: `check_token` says what is
-    missing and how to get it.
+
+def load_env(path: Path | None = None) -> None:
+    """Read KEY=VALUE lines from the repo-root `.env` into the environment, without overriding.
+
+    The token lives in `.env` (gitignored), found from the repo root and not from wherever
+    the process started; this saves exporting it by hand. Whatever the shell already set
+    wins, and a missing file is not an error: `check_token` says what is missing and how to
+    get it.
     """
+    path = path or ENV_FILE
     if not path.is_file():
         return
     for line in path.read_text().splitlines():

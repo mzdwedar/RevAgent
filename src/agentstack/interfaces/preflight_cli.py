@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import sys
 
-from agentstack.execution.hosted_scorer import HostedTabPFNScorer
 from agentstack.prediction.churn import ScoringError
 from agentstack.prediction.engine import TabPFNScorer
 from agentstack.prediction.licence import LicenceRefused, check_token, load_env
@@ -25,12 +24,6 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="check the environment variable and stop; does not load the weights",
     )
-    parser.add_argument(
-        "--scorer",
-        choices=("local", "hosted"),
-        default="local",
-        help="`hosted` proves PriorLabs' service answers, with four synthetic rows",
-    )
     args = parser.parse_args(argv)
 
     load_env()
@@ -41,12 +34,8 @@ def main(argv: list[str] | None = None) -> int:
             print("\nnot checked: whether the licence is accepted. Only loading the model")
             print("answers that, and --token-only skips it deliberately.")
             return 0
-        if args.scorer == "hosted":
-            version = HostedTabPFNScorer().preflight()
-            print(f"ok    {version} answered; hosted scoring is available")
-        else:
-            version = TabPFNScorer().preflight()
-            print(f"ok    {version} loaded its weights; scoring is available")
+        version = TabPFNScorer().preflight()
+        print(f"ok    {version} loaded its weights; scoring is available")
     except (LicenceRefused, ScoringError) as exc:
         print(f"FAIL  {exc}", file=sys.stderr)
         return 1

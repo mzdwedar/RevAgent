@@ -4,6 +4,11 @@
   decided in `SPEC-kkbox-cohort.md` and become "accepted" as their tasks land; each says what
   would change it.
 - Date: 2026-10-01
+- **Withdrawn 2026-10-03: the hosted scorer.** `HostedTabPFNScorer`, its egress allowlist,
+  `TracedScorer`, the `--scorer hosted` / `--scores hosted` switches, the `tabpfn-client`
+  dependency and the contract-3 exception for it were removed. Scoring is local TabPFN or
+  recorded scores only, so no cohort row leaves the machine. Sections 4-4a and 6 are kept as
+  the record of a design that was built and then withdrawn; they no longer describe the code.
 - Layers: 5 (context), 4b (prediction), 7 (execution), 1 (wiring), 9 (evidence)
 
 ## Context

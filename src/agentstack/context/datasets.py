@@ -65,6 +65,14 @@ class DatasetSpec:
     # which is the one thing that number is not allowed to be.
     revenue_columns: tuple[str, ...] = ()
     revenue_periods_per_year: int = 0
+    # For a file whose one payment covers plans of different lengths, a fixed periods-per-year
+    # reads a 410-day payment as a month. Naming the column that holds the plan's length in
+    # days annualises each row by its own plan (amount x 365 / days) instead, and a row with
+    # no positive length has no observed period, so it is worth nothing rather than a guess.
+    revenue_period_days_column: str = ""
+    # A row where this 0/1 column is 1 had no payment as its last event, so its amount is not
+    # an observed payment and is worth nothing here.
+    revenue_unpaid_flag_column: str = ""
     revenue_note: str = ""
     # The currency the revenue columns are in. A figure shown to an approver without
     # its currency is a number the reader supplies a unit for.
@@ -139,12 +147,15 @@ REGISTRY: dict[str, DatasetSpec] = {
         # candidates `to_features` omits until a declared comparison keeps them (K13).
         drops={"msno": kkbox.EXCLUDED["msno"]},
         revenue_columns=("last_actual_amount_paid",),
-        revenue_periods_per_year=12,
+        revenue_period_days_column="last_payment_plan_days",
+        revenue_unpaid_flag_column="last_is_cancel",
         revenue_note=(
-            "The last amount the subscriber paid before the 2017-02-28 cutoff, annualised "
-            "x12. Most KKBox plans are 30 days, so this reads one payment as one month; a "
-            "longer plan is under-counted and a 7-day plan is over-counted by the same "
-            "rule. Observed, never predicted: it is what they paid, not what they will."
+            "The last amount the subscriber paid before the 2017-02-28 cutoff, annualised by "
+            "the length of the plan it bought (amount x 365 / plan days), so a 410-day plan's "
+            "one payment is worth about a year and a 30-day plan's about twelve months of it. "
+            "A subscriber whose last event was a cancellation, or whose plan has no length, "
+            "has no observed payment and counts as zero. Observed, never predicted: it is "
+            "what they paid, not what they will."
         ),
         currency="NTD",
         derived_by="scripts/build_kkbox_cohort.py",

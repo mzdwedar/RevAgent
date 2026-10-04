@@ -167,18 +167,32 @@ def annual_revenue_cents(snapshot: CohortSnapshot) -> pd.Series:
     one that happens to be zero, and it does not get a modelled substitute.
     """
     spec = REGISTRY[snapshot.dataset]
-    if not spec.revenue_columns or spec.revenue_periods_per_year <= 0:
+    annualised = spec.revenue_periods_per_year > 0 or spec.revenue_period_days_column
+    if not spec.revenue_columns or not annualised:
         raise RevenueNotObserved(
             f"{snapshot.dataset} has no observed revenue column, so annualised value at "
             f"risk cannot be computed: {spec.revenue_note}. This cohort can be loaded "
             "and scored; it cannot be targeted against a dollar floor."
         )
-    missing = [c for c in spec.revenue_columns if c not in snapshot.frame.columns]
+    named = (
+        *spec.revenue_columns,
+        spec.revenue_period_days_column,
+        spec.revenue_unpaid_flag_column,
+    )
+    missing = [c for c in named if c and c not in snapshot.frame.columns]
     if missing:
         raise RevenueNotObserved(f"{snapshot.dataset}: revenue columns {missing} are not present")
 
-    per_period = snapshot.frame[list(spec.revenue_columns)].sum(axis=1)
-    return (per_period * spec.revenue_periods_per_year * 100).round().astype("int64")
+    frame = snapshot.frame
+    per_period = frame[list(spec.revenue_columns)].sum(axis=1)
+    if spec.revenue_period_days_column:
+        days = frame[spec.revenue_period_days_column].fillna(0)
+        yearly = (per_period * 365 / days.where(days > 0)).fillna(0)
+    else:
+        yearly = per_period * spec.revenue_periods_per_year
+    if spec.revenue_unpaid_flag_column:
+        yearly = yearly.where(frame[spec.revenue_unpaid_flag_column] == 0, 0)
+    return (yearly * 100).round().astype("int64")
 
 
 def select(

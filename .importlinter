@@ -55,12 +55,6 @@ forbidden_modules =
     sqlite3
     smtplib
     kaggle
-    tabpfn_client
-# The two startup entry points construct the hosted scorer and nothing else may (ADR-0012 §4,
-# approved with K9). Narrow on purpose: an edge, not a module or a layer.
-ignore_imports =
-    agentstack.interfaces.worker_cli -> agentstack.execution.hosted_scorer
-    agentstack.interfaces.preflight_cli -> agentstack.execution.hosted_scorer
 
 [importlinter:contract:4]
 name = Nothing imports the inbound channel layer (Part 1)
