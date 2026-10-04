@@ -3,14 +3,14 @@
 Plan: [`plan-hackathon.md`](plan-hackathon.md). Cut order if short: T4, then T1 arm (c), then the abstention scene.
 
 ## Phase 1 — Go/no-go evidence
-- [ ] T1. `scripts/llm_vs_tabpfn.py`: qwen3:8b alone vs TabPFN-3.5 vs LLM shown TabPFN, KKBox + telecom, n=200, 100 test rows, 3 seeds
-  - [ ] AUC and revenue captured in the top 10%, mean ± sd per arm; malformed LLM output counted, not dropped; resumes from CSV
-  - [ ] Smoke run (1 seed, 20 rows); ruff clean; TabPFN arm ≈ cold-start CSV at n=200
-  - [ ] Go/no-go: LLM-alone more than 0.05 AUC below TabPFN, else stop and reframe
-- [ ] T2. Commit `scripts/cold_start_curve.py`, `docs/evidence/cold_start.*`, T1 outputs (no raw rows)
+- [x] T1. `scripts/llm_vs_tabpfn.py`: qwen3:8b alone vs TabPFN-3.5 vs LLM shown TabPFN, KKBox only (telecom not run, by choice), n=200, 100 test rows, 3 seeds
+  - [x] AUC and revenue captured in the top 10%, mean ± sd per arm; malformed LLM output counted, not dropped; resumes from CSV
+  - [x] Smoke run (1 seed, 20 rows); ruff clean; TabPFN arm ≈ cold-start CSV at n=200
+  - [x] Go/no-go: LLM-alone more than 0.05 AUC below TabPFN, else stop and reframe
+- [x] T2. Commit `scripts/cold_start_curve.py`, `docs/evidence/cold_start.*`, T1 outputs (no raw rows)
 
 ### Checkpoint A
-- [ ] Review the T1 numbers with the user
+- [x] Review the T1 numbers with the user
 
 ## Phase 2 — The agent uses TabPFN through tools
 - [ ] T3. `get_cohort_risk` read tool returning `Cohort.description()`; no inference inside the tool
