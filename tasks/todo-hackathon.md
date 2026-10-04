@@ -22,6 +22,6 @@ Plan: [`plan-hackathon.md`](plan-hackathon.md). Cut order if short: T4, then T1 
 - [x] Local end-to-end run on KKBox with real qwen3:8b: trigger → frozen cohort → grounded draft in the registry (`scripts/checkpoint_b.py`). First run exposed a mistyped experiment version, fixed by draft admission (ab31d35); re-run after the fix landed the exact frozen version, 1 receipt, 0 refusals
 
 ## Phase 3 — Story and submission
-- [ ] T5. Judge-first README section (pitch, thesis, both plots + numbers, diagram, video + revbench links)
+- [x] T5. Judge-first README section (pitch, thesis, both plots + numbers, diagram, video + revbench links)
 - [ ] T6. 3-minute video (script + shot list from me; headline number in the first 30 s)
 - [ ] T7. Push, make the repo public, submit RevAgent; submit revbench as a second entry

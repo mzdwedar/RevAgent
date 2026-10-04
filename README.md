@@ -5,6 +5,7 @@ retention is slipping, picks the subscribers worth acting on, drafts an experime
 rolls it out only after a person approves it.
 
 ## Contents
+- [The result, in one page](#the-result-in-one-page)
 - [What it does](#what-it-does)
 - [The business problem](#the-business-problem)
 - [Why PriorLabs' TabPFN fits this use case](#why-priorlabs-tabpfn-fits-this-use-case)
@@ -22,6 +23,95 @@ rolls it out only after a person approves it.
 - [Contributing and security](#contributing-and-security)
 - [What is deliberately unfinished](#what-is-deliberately-unfinished)
 - [References](#references)
+
+## The result, in one page
+
+**Thesis: LLM agents are bad with tables. TabPFN-3.5 is their tabular brain.**
+
+RevAgent is built for an indie developer with 200 subscribers: too few rows to train a
+churn model, too many to eyeball. It uses a local LLM (qwen3:8b) to run the workflow and
+TabPFN-3.5, run locally, to read the table. Nothing reaches a customer until a person
+approves that exact rollout.
+
+### Proof 1: the LLM cannot rank churn from the table, TabPFN can
+
+Same 200 labelled KKBox subscribers, same 100 held-out test rows, three seeds
+([`scripts/llm_vs_tabpfn.py`](scripts/llm_vs_tabpfn.py), data in
+[`docs/evidence/llm_vs_tabpfn.csv`](docs/evidence/llm_vs_tabpfn.csv)).
+
+| Arm | AUC (mean of 3 seeds) | Revenue captured in top 10% |
+|---|---|---|
+| qwen3:8b alone, shown the table | **0.535** | 0.109 |
+| TabPFN-3.5 | **0.842** | 0.807 |
+| qwen3:8b given TabPFN's score | 0.772 | 0.807 |
+
+![LLM vs TabPFN on KKBox](docs/evidence/llm_vs_tabpfn.png)
+
+What this does and does not show:
+
+- The LLM alone is close to a coin flip (AUC 0.45 to 0.61 by seed). TabPFN is 0.79 to 0.88.
+- The third arm is weaker than we hoped. Handing the LLM the TabPFN score did **not** restore
+  TabPFN's AUC: it is 0.87, 0.85 and 0.60 across the seeds, and seed 2 is a real failure of
+  the LLM to use the score. The revenue captured in the top 10% does match TabPFN's on every
+  seed. We claim "the LLM cannot rank churn from the table and TabPFN can", not "the LLM
+  plus TabPFN is as good as TabPFN".
+- Caveats: **KKBox only, 3 seeds, 100 test rows.** Revenue is observed (what the subscriber
+  last paid, NTD), never predicted.
+
+### Why TabPFN: the cold-start curve
+
+AUC by number of labelled training rows, mean of 5 seeds
+([`scripts/cold_start_curve.py`](scripts/cold_start_curve.py),
+[`docs/evidence/cold_start.csv`](docs/evidence/cold_start.csv)). Rows below are n=200, the
+indie-developer case; the full curve runs 50 to 2,000.
+
+| Dataset | TabPFN-3.5 | Boosted trees | Logistic |
+|---|---|---|---|
+| KKBox | **0.844** | 0.733 | 0.746 |
+| telecom-bigml | **0.876** | 0.704 | 0.747 |
+| bank-churn | **0.814** | 0.694 | 0.684 |
+| IBM Telco | **0.822** | 0.784 | 0.809 |
+| Netflix (synthetic) | 0.972 | 0.974 | 0.950 |
+
+![Cold-start curve](docs/evidence/cold_start.png)
+
+TabPFN leads at every size on KKBox, telecom and bank, and the gap closes as rows grow (on
+telecom, boosted trees catch up by about 1,000 rows). On IBM Telco the lead is small. On
+Netflix there is no lead: the data is easy (AUC 0.97 to 1.0 for every model), so we make **no
+TabPFN claim on Netflix**.
+
+### Proof 2: the agent uses it inside a governed run
+
+`scripts/checkpoint_b.py` sends one real KKBox trigger through the whole stack with
+qwen3:8b and replays recorded TabPFN scores. Every line below comes from Postgres:
+
+1. TabPFN's scores froze a cohort of 4,987 subscribers (risk threshold 0.24, median risk
+   0.54, 21.6M NTD of annual value at risk).
+2. The drafting turn was told that profile and nothing about the customers' reasons for
+   leaving.
+3. qwen3:8b wrote the hypothesis and variant, grounded in that profile. The draft landed in
+   the registry with the frozen experiment version, one receipt, no refusals, and the run
+   parked on a human approval.
+
+**A bug this found, and the fix.** On the first real run the model mistyped the experiment
+version in its draft (`exp:d39ddbec7cda1967` became `exp:d39ddbec7c7da1967`) and the turn
+still reported success: the draft was attached to a cohort nobody froze. Drafts are now held
+to the frozen record the same way rollouts are: a draft that deviates is refused, audited
+as `proposal.deviates`, and ends the run (`tests/durability/test_proposal_admission.py`). The
+re-run after the fix landed the exact version. That is one run; the mistake was
+intermittent, and the guarantee comes from the refusal tests, not from that run.
+
+### What is not claimed
+
+- Not shown: that the agent beats a human analyst, or that an offer retains anyone. No offer
+  was ever sent.
+- Not built: the planned `get_cohort_risk` tool and uncertainty abstention were cut. TabPFN
+  reaches the agent as the cohort profile in its instruction, not as a callable tool.
+- Netflix is a demo and schema fixture; the real-data evidence is KKBox, telecom, bank and
+  IBM Telco. The Telecom set was not part of Proof 1.
+- A second entry, **revbench**, measures the same idea as a benchmark:
+  `~/Desktop/revagent-tabpfn` (link to be added on publishing).
+- Demo video: _link to be added_.
 
 ## What it does
 
@@ -185,24 +275,29 @@ uv run --env-file .env agentstack-slack
 
 ## Datasets
 
-Two public churn datasets from Kaggle stand in for a subscription business's customer
-base. Neither is subscription-app data; they are used because they are public, labelled
-and small enough to run locally.
+Churn datasets stand in for a subscription business's customer base. Only one is committed;
+the rest are third-party and fetch-only.
 
-| Key | Source | Rows | Churn rate | Target |
+| Key | Source | Rows | Churn rate | Committed? |
 |---|---|---|---|---|
-| `telecom-bigml` | [`mnassrib/telecom-churn-datasets`](https://www.kaggle.com/datasets/mnassrib/telecom-churn-datasets) (BigML telecom churn, 80/20 split files) | 3,333 | 14.5% | `Churn` |
-| `bank-churn` | [`radheshyamkollipara/bank-customer-churn`](https://www.kaggle.com/datasets/radheshyamkollipara/bank-customer-churn) | 10,000 | 20.4% | `Exited` |
+| `netflix-churn` | [Kaggle `zeyadmohamed26/netflix-customer-churn-and-engagement-analytics`](https://www.kaggle.com/datasets/zeyadmohamed26/netflix-customer-churn-and-engagement-analytics), CC0 1.0 | 5,000 | 50% | yes, `data/open/` (probably synthetic) |
+| `kkbox-churn` | KKBox churn prediction (Kaggle competition data) | 49,863 | 8.9% | no, fetch only |
+| `telecom-bigml` | [`mnassrib/telecom-churn-datasets`](https://www.kaggle.com/datasets/mnassrib/telecom-churn-datasets) | 3,333 | 14.5% | no, fetch only |
+| `bank-churn` | [`radheshyamkollipara/bank-customer-churn`](https://www.kaggle.com/datasets/radheshyamkollipara/bank-customer-churn) | 10,000 | 20.4% | no, fetch only |
+| `ibm-telco` | IBM Telco customer churn | 7,043 | 26.5% | no, fetch only |
 
-In `bank-churn` the `Complain` column is dropped: it correlates with the target at
-r=0.996 because the complaint is logged as part of the churn event, so keeping it would
-make every model look near-perfect. Specs, dropped columns and revenue columns are in
+None is subscription-app data except the Netflix file, which is synthetic as far as we can
+tell, so read results on it as pipeline demonstration. In `bank-churn` the `Complain` column
+is dropped: it correlates with the target at r=0.996 because the complaint is logged as part
+of the churn event. Specs, dropped columns and revenue columns are in
 `src/agentstack/context/datasets.py`.
 
-The datasets are third-party and licensed, so `data/` is gitignored. Fetch them with
-`uv run python scripts/fetch_datasets.py` (needs `~/.kaggle/kaggle.json`). The committed
-`data/manifest.json` records row counts, columns and a `data_as_of` hash, so an upstream
-change shows up as a diff. Check each dataset's Kaggle licence before reuse.
+**Licences.** The code is under the [PolyForm Noncommercial License](LICENSE). Data keeps
+its own licence: the committed Netflix file is CC0 ([`data/open/NOTICE.md`](data/open/NOTICE.md)),
+and everything else is licensed for use but not redistribution, so it is gitignored. Fetch it
+with `uv run python scripts/fetch_datasets.py` (needs `~/.kaggle/kaggle.json`). The committed
+`data/manifest.json` records row counts, columns and a `data_as_of` hash, so an upstream change
+shows up as a diff. Check each dataset's licence before reuse.
 
 ## Configuration
 
