@@ -8,3 +8,12 @@ kkbox-churn,llm+tabpfn,qwen3:8b,200,100,1,1,,0.850427,0.512335,179.4
 kkbox-churn,llm,qwen3:8b,200,100,2,1,,0.448107,0.0,176.2
 kkbox-churn,tabpfn,tabpfn-3.5,200,100,2,1,,0.786325,0.337253,0.0
 kkbox-churn,llm+tabpfn,qwen3:8b,200,100,2,1,,0.595849,0.337253,179.2
+netflix-churn,llm,qwen3:8b,200,100,0,1,,0.5884,0.175787,135.4
+netflix-churn,tabpfn,tabpfn-3.5,200,100,0,1,,0.986,0.147672,0.0
+netflix-churn,llm+tabpfn,qwen3:8b,200,100,0,1,,0.9664,0.147672,132.7
+netflix-churn,llm,qwen3:8b,200,100,1,1,,0.6448,0.184981,130.8
+netflix-churn,tabpfn,tabpfn-3.5,200,100,1,1,,0.958,0.165388,0.0
+netflix-churn,llm+tabpfn,qwen3:8b,200,100,1,1,,0.9576,0.178932,132.4
+netflix-churn,llm,qwen3:8b,200,100,2,1,,0.5928,0.162004,134.2
+netflix-churn,tabpfn,tabpfn-3.5,200,100,2,1,,0.9776,0.192926,0.0
+netflix-churn,llm+tabpfn,qwen3:8b,200,100,2,1,,0.9708,0.192926,135.1

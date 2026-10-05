@@ -1,43 +1,84 @@
 # RevAgent
 
-RevAgent runs churn-prevention experiments for a subscription business. It spots when
-retention is slipping, picks the subscribers worth acting on, drafts an experiment, and
-rolls it out only after a person approves it.
+**An AI agent that runs churn-prevention experiments for subscription apps.** The LLM runs
+the workflow, TabPFN-3.5 reads the subscriber table, and nothing reaches a customer until a
+person approves that exact rollout.
+
+> The TabPFN-3.5 weights at its centre are licensed for **non-commercial** use only. See
+> [Licensing](#licensing).
 
 ## Contents
-- [The result, in one page](#the-result-in-one-page)
-- [Reproducibility](#reproducibility)
-- [What it does](#what-it-does)
-- [The business problem](#the-business-problem)
-- [Why PriorLabs' TabPFN fits this use case](#why-priorlabs-tabpfn-fits-this-use-case)
-- [Licensing, before anything else](#licensing-before-anything-else)
+- [At a glance](#at-a-glance)
+- [The result](#the-result)
+- [How a run works](#how-a-run-works)
+- [Agent design decisions](#agent-design-decisions)
+- [Evals that judge the path, not the answer](#evals-that-judge-the-path-not-the-answer)
+- [How it is built](#how-it-is-built)
+- [Licensing](#licensing)
 - [Quickstart](#quickstart)
-- [Datasets](#datasets)
-- [Configuration](#configuration)
-- [Commands](#commands)
-- [The gates](#the-gates)
-  - [CI](#ci)
-- [Layout](#layout)
-- [Workflow](#workflow)
-- [Documentation](#documentation)
-- [Local vs production](#local-vs-production)
-- [Gaps before production](#gaps-before-production)
-- [Contributing and security](#contributing-and-security)
-- [What is deliberately unfinished](#what-is-deliberately-unfinished)
-- [References](#references)
+- [Reproduce the results](#reproduce-the-results)
+- [Path to production](#path-to-production)
+- [Reference](#reference)
 
-## The result, in one page
+## At a glance
 
-**Thesis: LLM agents are bad with tables. TabPFN-3.5 is their tabular brain.**
+- **The problem.** An indie developer with 200 subscribers has too few rows to train a churn
+  model and too many to eyeball. Retention offers cost margin, so a discount sent to someone
+  who would have renewed anyway is pure loss.
+- **The approach.** An LLM agent (qwen3:8b, local) drives the workflow: detect, target, draft
+  an experiment, ask for approval, roll out. It never ranks subscribers itself. TabPFN-3.5, a
+  tabular foundation model that predicts in context with no per-app training, does the ranking.
+- **The result.** On the same 200 labelled subscribers, the LLM ranks churn at **0.535 AUC**
+  (a coin flip is 0.5) and TabPFN at **0.842**.
 
-RevAgent is built for an indie developer with 200 subscribers: too few rows to train a
-churn model, too many to eyeball. It uses a local LLM (qwen3:8b) to run the workflow and
-TabPFN-3.5, run locally, to read the table. Nothing reaches a customer until a person
-approves that exact rollout.
+```mermaid
+flowchart TD
+  subgraph IT1["Iteration 1: current scope (built)"]
+    direction TB
+    A["1. Trigger<br/>subscription events arrive"]
+    B["2. Score<br/>TabPFN-3.5 rates churn risk"]
+    C["3. Target<br/>policy freezes the cohort"]
+    D["4. Draft<br/>LLM writes the experiment"]
+    E{"5. Approve<br/>a person, in Slack"}
+    F["6. Roll out<br/>offering or paywall variant,<br/>committed exactly once"]
+    G["Nothing moves"]
+    A --> B --> C --> D --> E
+    E -->|approved| F
+    E -->|no answer| G
+  end
+  subgraph IT2["Iteration 2: designed, not built"]
+    direction TB
+    H["7. Measure<br/>ANCOVA, with a TabPFN regressor<br/>as the covariate"]
+    I["8. Decide<br/>Incremental Net Saved Value:<br/>did it save more than it cost?"]
+    J["Promote or stop"]
+    H --> I --> J
+  end
+  F -.-> H
+  classDef model fill:#dbeafe,stroke:#2563eb,color:#111
+  classDef human fill:#fef3c7,stroke:#d97706,color:#111
+  classDef code fill:#f3f4f6,stroke:#6b7280,color:#111
+  classDef later fill:#fff,stroke:#9ca3af,stroke-dasharray:4 3,color:#555
+  class B,D model
+  class E human
+  class A,C,F,G code
+  class H,I,J later
+  style IT1 fill:none,stroke:#2563eb,stroke-width:3px
+  style IT2 fill:none,stroke:#9ca3af,stroke-dasharray:6 4
+```
+
+Blue steps are models, amber is a person, grey is plain code. The solid rectangle is what
+this project builds today. The dashed one is designed in [`SPEC.md`](SPEC.md) and not built.
+
+Every step runs inside a durable Temporal workflow with a Postgres record. A run survives a
+worker being killed, and a retried rollout is deduplicated instead of sent twice.
+
+## The result
+
+**LLM agents are bad with tables. TabPFN-3.5 is their tabular brain.**
 
 ### Proof 1: the LLM cannot rank churn from the table, TabPFN can
 
-Same 200 labelled KKBox subscribers, same 100 held-out test rows, three seeds
+Same 200 labelled subscribers, same 100 held-out test rows, three seeds
 ([`scripts/llm_vs_tabpfn.py`](scripts/llm_vs_tabpfn.py), data in
 [`docs/evidence/llm_vs_tabpfn.csv`](docs/evidence/llm_vs_tabpfn.csv)).
 
@@ -47,23 +88,22 @@ Same 200 labelled KKBox subscribers, same 100 held-out test rows, three seeds
 | TabPFN-3.5 | **0.842** | 0.477 |
 | qwen3:8b given TabPFN's score | 0.772 | 0.477 |
 
-![LLM vs TabPFN on KKBox](docs/evidence/llm_vs_tabpfn.png)
+The same protocol on the committed Netflix file (synthetic as far as we can tell):
 
-What this does and does not show:
+| Arm | AUC (mean of 3 seeds) | Revenue captured in top 10% |
+|---|---|---|
+| qwen3:8b alone, shown the table | **0.609** | 0.174 |
+| TabPFN-3.5 | **0.974** | 0.169 |
+| qwen3:8b given TabPFN's score | 0.965 | 0.173 |
 
-- The LLM alone is close to a coin flip (AUC 0.45 to 0.61 by seed). TabPFN is 0.79 to 0.88.
-- The third arm is weaker than we hoped. Handing the LLM the TabPFN score did **not** restore
-  TabPFN's AUC: it is 0.87, 0.85 and 0.60 across the seeds, and seed 2 is a real failure of
-  the LLM to use the score. The revenue captured in the top 10% does match TabPFN's on every
-  seed. We claim "the LLM cannot rank churn from the table and TabPFN can", not "the LLM
-  plus TabPFN is as good as TabPFN".
-- Caveats: **KKBox only, 3 seeds, 100 test rows.** Revenue is observed (what the subscriber
-  last paid, annualised by the length of the plan it bought, in NTD), never predicted. The
-  revenue column was corrected during this work (it was last payment x 12, about 2.5x too
-  high) and every revenue figure here was re-run on the corrected basis. In two of three
-  seeds the LLM alone captured no churned revenue in its top 10%.
+![LLM vs TabPFN on KKBox and Netflix](docs/evidence/llm_vs_tabpfn.png)
 
-### Why TabPFN: the cold-start curve
+On KKBox the LLM alone is close to a coin flip (AUC 0.45 to 0.61 by seed) and TabPFN scores
+0.79 to 0.88. On Netflix the LLM reaches 0.59 to 0.64 and TabPFN 0.96 to 0.99, and the LLM
+keeps TabPFN's ranking on every seed (0.96 to 0.97).
+That is why the agent passes the table to TabPFN instead of reasoning over it.
+
+### Why a foundation model: the cold-start curve
 
 AUC by number of labelled training rows, mean of 5 seeds
 ([`scripts/cold_start_curve.py`](scripts/cold_start_curve.py),
@@ -81,78 +121,95 @@ indie-developer case; the full curve runs 50 to 2,000.
 ![Cold-start curve](docs/evidence/cold_start.png)
 
 TabPFN leads at every size on KKBox, telecom and bank, and the gap closes as rows grow (on
-telecom, boosted trees catch up by about 1,000 rows). On IBM Telco the lead is small. On
-Netflix there is no lead: the data is easy (AUC 0.97 to 1.0 for every model), so we make **no
-TabPFN claim on Netflix**.
+telecom, boosted trees catch up by about 1,000 rows). A new app has a few hundred subscribers
+and a few weeks of churn labels. Small data is where it most needs an answer, and that is
+where TabPFN's lead is largest.
 
-## Reproducibility
+### What is not claimed
 
-Both results above come from scripts in `scripts/`. They run locally: TabPFN-3.5 on this
-machine, the LLM through Ollama. No row leaves the machine.
+- **Not "the LLM plus TabPFN is as good as TabPFN".** Given TabPFN's score, the LLM's AUC
+  is 0.87, 0.85 and 0.60 across seeds. Seed 2 is a real failure to use the score. The revenue
+  captured in the top 10% does match TabPFN on every seed. So TabPFN does the ranking, and
+  the LLM is not trusted to relay it.
+- **Not a broad benchmark.** Proof 1 covers KKBox and Netflix only, 3 seeds, 100 test rows.
+  On KKBox, in two of three seeds the LLM alone captured no churned revenue in its top 10%.
+- **No TabPFN-over-classical claim on Netflix.** The data is easy and probably synthetic:
+  boosted trees match TabPFN (0.974 vs 0.972 at n=200). Netflix only shows that the LLM
+  cannot rank from the table. Its revenue column holds three values (the plan tiers), so
+  revenue captured in the top 10% is about 0.17 for every arm and separates nothing there.
+  On IBM Telco the lead is small.
+- **Revenue is observed, never predicted.** It is what the subscriber last paid, annualised by
+  the length of the plan they bought, in NTD. The column was corrected during this work (it
+  had been last payment × 12, about 2.5× too high), and every figure here was re-run on the
+  corrected basis.
 
-**Once:**
+## How a run works
 
-```bash
-uv sync --extra prediction                      # TabPFN (pulls torch)
-export TABPFN_TOKEN="<your-api-key>"            # see Licensing below
-brew install ollama && brew services start ollama
-ollama pull qwen3:8b
-```
+The agent is an **Experiment Operator**. The subscriber data arrives in the shape a
+subscription backend's webhooks deliver: KKBox's transaction table is re-expressed as
+`INITIAL_PURCHASE`, `RENEWAL`, `CANCELLATION` and `EXPIRATION` events, with `period_type`
+marking trials ([`context/kkbox.py`](src/agentstack/context/kkbox.py),
+[ADR-0012](docs/adr/0012-kkbox-cohort-and-hosted-scorer.md)), and collapsed to one row per
+subscriber at a cutoff that nothing after it can leak past.
 
-**Data** (needs `~/.kaggle/kaggle.json`, and the KKBox competition rules accepted once):
+1. **Trigger.** A metric movement or a data arrival starts a run, carrying a `data_as_of`
+   watermark.
+2. **Score and target.** TabPFN scores churn risk, and the targeting thresholds in
+   `experiments/targeting.toml` freeze a cohort with its observed annual value at risk.
+3. **Draft.** The LLM writes the hypothesis and variant (for example, a free month on the
+   higher tier) into the experiment registry. The draft is held to the frozen cohort's
+   `experiment_version`.
+4. **Approve.** A person approves in Slack. The approval is bound to that run id and that
+   action's fingerprint, so approving one draft cannot approve a different send.
+5. **Roll out.** The rollout (for example, 10% of the cohort to a variant offering) commits
+   exactly once.
 
-```bash
-uv run python scripts/fetch_datasets.py          # every fetch-only dataset
-uv run python scripts/fetch_datasets.py --kkbox  # KKBox raw files
-uv run python scripts/build_kkbox_cohort.py      # derive data/kkbox-cohort.csv
-```
+The rollout is the only act a customer can see. The primary metric is **Incremental Net
+Saved Value**, with conversion and churn as guardrails. The point is to reach subscribers an
+offer can *persuade*, not everyone at risk. Full spec: [`SPEC.md`](SPEC.md).
 
-**Proof 1, LLM vs TabPFN, on all three datasets:**
+A real run on the committed Netflix data, from trigger to registered draft, is recorded in
+[`docs/evidence/checkpoint_b_netflix.txt`](docs/evidence/checkpoint_b_netflix.txt).
 
-```bash
-uv run python scripts/llm_vs_tabpfn.py --datasets kkbox-churn telecom-bigml bank-churn
-```
+## Agent design decisions
 
-With no `--datasets` it runs `kkbox-churn` and `telecom-bigml`. The committed
-[`docs/evidence/llm_vs_tabpfn.csv`](docs/evidence/llm_vs_tabpfn.csv) holds KKBox only.
-The script appends to that CSV and skips any (dataset, arm, seed) already in it, so a run
-fills in the missing datasets and keeps the KKBox rows. Delete the CSV to re-run
-everything from scratch. `--seeds` and `--test-rows` change the protocol (defaults: seeds
-0 1 2, 100 test rows), and `--plot-only` redraws the figure from the CSV.
+Most agent failures come from a boundary nobody owns, not from the model. Each decision
+below has a reason and a check that fails when it breaks.
 
-**The cold-start curve:**
+| Decision | Why | Enforced by |
+|---|---|---|
+| The LLM never ranks subscribers; TabPFN returns a probability and policy decides who is offered | Proof 1: the LLM is a coin flip on tables | [`CONSTRAINTS.md`](CONSTRAINTS.md): "No scorer decides who gets an offer" |
+| Approval sits immediately before the irreversible act and is bound to run id + action fingerprint | Approving at the start of a task approves whatever it turns into | `policy/approval.py`, [ADR-0008](docs/adr/0008-enforcing-idempotency-and-approvals.md), eval `rollout-requires-approval` |
+| Every side effect goes through one gateway with an identity envelope and an idempotency key | Temporal activities are at-least-once; a retry must not send a second offer | `execution/gateway.py`, [ADR-0007](docs/adr/0007-temporal-spike-findings.md), eval `rollout-commits-exactly-once` |
+| Runs are durable workflows, not loops | A run waits days for a human; it must survive restarts without repeating committed work | [ADR-0002](docs/adr/0002-durable-execution-backend.md), `tests/durability/` kills workers with SIGKILL and resumes |
+| The cohort is frozen with a versioned `experiment_version` | A draft must describe the population that was scored, not one that drifted since | `tests/durability/test_frozen_cohorts.py` |
+| Untrusted text (a hypothesis, a document) never widens what the agent may do | Prompt injection should fail at the authority check, not depend on the model resisting it | evals `injection-does-not-widen-the-menu`, `injection-in-a-hypothesis-does-not-reach-halt` |
+| Value at risk comes from observed revenue, never a modelled quantity | A predicted LTV that feeds targeting cannot be checked | [`CONSTRAINTS.md`](CONSTRAINTS.md), `context/targeting.py` |
+| The model checkpoint is pinned, not inherited | It travels in every experiment's provenance; a silent upgrade would make the record wrong | `CHECKPOINT` in `prediction/engine.py`, `tests/fitness/test_prediction_gate.py` |
 
-```bash
-uv run python scripts/cold_start_curve.py              # score, then plot
-uv run python scripts/cold_start_curve.py --plot-only  # redraw from the committed CSV
-```
+## Evals that judge the path, not the answer
 
-Its default is `telecom-bigml`, `bank-churn` and `kkbox-churn`. For the IBM Telco and
-Netflix rows of the table, add them:
-`--datasets telecom-bigml bank-churn kkbox-churn ibm-telco netflix-churn`.
+A correct-looking final answer can hide a rollout that fired twice or skipped approval. The
+20 release gates in [`evals/cases/`](evals/cases/) run against the real stack and check what
+happened along the way. Their names read as the spec:
 
-## What it does
+- `rollout-commits-exactly-once`
+- `rollout-requires-approval`
+- `a-trigger-delivered-twice-evaluates-once`
+- `a-wake-nobody-answered-moves-nothing`
+- `an-unresolved-effect-is-never-retried-blind`
+- `cross-tenant-rollout-refused`
+- `injection-does-not-widen-the-menu`
+- `a-deviating-rollout-never-reaches-a-person`
 
-The agent is an **Experiment Operator** for a subscription business. It
-runs churn-prevention experiments:
+`uv run python -m evals run --gates` runs them, and CI blocks on them. Every failure that
+reaches production becomes a new case here.
 
-1. A trigger (a metric movement) starts a run.
-2. TabPFN scores churn risk and a targeting step picks the cohort.
-3. A policy check produces an experiment draft in the registry.
-4. A human approves it in Slack, bound to that exact action.
-5. The rollout (for example 10% to a variant) commits exactly once.
+## How it is built
 
-The rollout is the only externally visible act. The primary metric is Incremental Net
-Saved Value, with conversion and churn as guardrails. Full spec: [`SPEC.md`](SPEC.md).
-
-```
-trigger -> run (Temporal) -> context -> churn score -> policy -> approval (Slack) -> gateway -> rollout
-              |                |            |             |            |               |
-           Postgres      scoped, fresh   TabPFN      decision +    bound to run id   idempotent,
-           record        provenance                  envelope      + fingerprint     one commit
-```
-
-The eleven packages under `src/agentstack/` are organised into ten layers:
+The architecture is a ten-layer agent stack, and every rule in it is a test. The 11 packages
+under `src/agentstack/` map onto ten layers, with dependency direction enforced
+by six `.importlinter` contracts.
 
 | # | Layer | Owner module |
 |---|---|---|
@@ -168,83 +225,42 @@ The eleven packages under `src/agentstack/` are organised into ten layers:
 | 9 | Observability, evaluation, feedback | `agentstack.observability` |
 | 10 | Infrastructure substrate | `agentstack.storage` |
 
-The rules each layer must keep live in [`STACK.md`](STACK.md).
+- **The bar is written down and guarded.** [`CONSTRAINTS.md`](CONSTRAINTS.md) holds every
+  threshold and the command that produces its verdict. `tests/fitness/` has 52 tests, one
+  per collapsed-boundary failure mode, out of more than 950 tests in the suite.
+  `scripts/stack_guard.py` fails a change that weakens the bar itself, for example a skipped
+  test, a new suppression or a lowered threshold.
+- **Decisions are recorded.** 13 ADRs in [`docs/adr/`](docs/adr/) cover the durable backend,
+  model contract, egress, migrations, idempotency, hosting and secrets. Several are spike
+  findings with measured results in `docs/evidence/`.
+- **AI-assisted, with gates that fail closed.** The repo was built with coding agents in a
+  `/spec → /plan → /build → /review → /stack-audit → /ship` loop. Hooks run `check_fast.sh`
+  after every edit and `check_task.sh` at the end of every turn, and block on failure, so
+  the bar holds whether or not anyone remembers to run it. The rules an agent must read are
+  in [`CLAUDE.md`](CLAUDE.md) and [`STACK.md`](STACK.md).
 
-## The business problem
-
-Subscription revenue leaks through churn, and the usual fixes (a discount, an extended
-trial, a win-back offer) cost money. Three things go wrong when teams run them by hand:
-
-- **Offers go to the wrong people.** A discount given to someone who would have stayed
-  anyway is pure margin loss. The question is who is *persuadable*, which is why the
-  primary metric is Incremental Net Saved Value rather than raw retention.
-- **Experiments are slow and noisy.** Picking cohorts, drafting variants and reading
-  results is manual work, and noisy metrics hide real effects.
-- **A mistake is expensive and visible.** A rollout that fires twice, fires without sign-off,
-  or acts on stale data hits real customers and real revenue.
-
-RevAgent takes the repetitive work (detect, score, target, draft) and leaves the
-consequential decision to a person: nothing reaches customers until someone approves
-that exact rollout in Slack, and it then commits exactly once. Every run leaves an audit
-trail, and every failure that reaches production becomes a regression case in `evals/`.
-
-How the code is organised to deliver that is in the table above and in
-[`STACK.md`](STACK.md).
-
-## Why PriorLabs' TabPFN fits this use case
-
-RevAgent serves many apps, and most of them are small or new. A new app has a few
-hundred subscribers and only a few weeks of churn labels; a mature one has years. A
-churn model that has to be trained per app fails exactly where the agent is asked to act
-first. TabPFN is a tabular foundation model, pretrained on a large number of synthetic
-tabular tasks, and that changes the picture:
-
-- **It works with very little data.** Prediction is in-context: the app's labelled
-  subscribers are passed alongside the ones to score, and there is no per-app training
-  run. Small datasets are the case it was built for, where gradient-boosted trees
-  tend to overfit or need tuning.
-- **No cold-start pipeline per app.** There is no feature-selection pass, hyperparameter
-  search or retraining schedule to onboard a new app. The same checkpoint scores a
-  telecom, bank or KKBox-shaped cohort, which is what the datasets in this repo exercise.
-- **It copes with messy subscription tables.** Mixed numeric and categorical columns and
-  missing values go in as they are, so the feature mapping stays thin.
-- **It returns probabilities.** The targeting step needs a churn probability to rank and
-  threshold on, and the Incremental Net Saved Value maths needs that probability to be
-  usable, not just a class label.
-- **Provenance is simple.** One named checkpoint scores every run, and it is recorded
-  in each experiment's `experiment_version` (see [Licensing](#licensing-before-anything-else)).
-  There is no per-app model artefact to version, store or go stale.
-
-## Licensing, before anything else
+## Licensing
 
 **The churn model at the centre of this system is licensed for non-commercial use.**
 
-The code in this repository is licensed under the [Apache License 2.0](LICENSE). The TabPFN-3.5 weights it calls are a separate asset under Prior Labs' own non-commercial licence, which the code does not relicense. That constraint is below.
-
-The dependency's terms are settled:
-`agentstack.prediction` scores churn with PriorLabs' **TabPFN-3.5**, whose weights are
-open for **non-commercial use only**. Using them means accepting that licence once per
-machine, through a gated Hugging Face repository:
+The code is under the [Apache License 2.0](LICENSE). `agentstack.prediction` scores churn
+with PriorLabs' **TabPFN-3.5**, whose weights are a separate asset, open for
+**non-commercial use only**. The code does not relicense them. Accept the licence once per
+machine:
 
 1. Register at <https://ux.priorlabs.ai> and accept the licence on the **Licenses** tab
 2. Copy the API key from <https://ux.priorlabs.ai/account>
 3. `export TABPFN_TOKEN="<your-api-key>"`
 
-**What this means in practice.** Everything here is shaped like a production system —
-durable runtime, multi-tenant, side-effecting, approval-gated — and the model at the
-centre of it cannot be shipped in a commercial product under this licence. That is a
-real constraint, not a setup step, and it is stated here rather than discovered during
-a launch review.
+Everything here is shaped like a production system: a durable runtime that is multi-tenant,
+side-effecting and approval-gated. The model at its centre
+**cannot be shipped in a commercial product** under this licence. That is a real constraint, stated here rather than
+discovered in a launch review.
 
-If you need a commercial path, the checkpoint is one constant:
-`CHECKPOINT` in `src/agentstack/prediction/engine.py`. `tabpfn` 9.x gates v2.5, v2.6,
-v3, v3.5 and v3.5-fast; **v2 is ungated** and needs no acceptance step at all. Whether
-v2's own terms suit your use is a question for its licence — this note records only
-that it does not require the gate above.
-
-The checkpoint is named explicitly rather than inherited from the package default,
-because the model version travels in every experiment's `experiment_version` and a
-silent upgrade would make recorded provenance wrong.
+For a commercial path, the checkpoint is one constant: `CHECKPOINT` in
+`src/agentstack/prediction/engine.py`. `tabpfn` 9.x gates v2.5, v2.6, v3, v3.5 and
+v3.5-fast. **v2 is ungated**, though whether its terms suit your use is a question for its
+own licence.
 
 ## Quickstart
 
@@ -253,180 +269,62 @@ full workflow) Ollama and Kaggle credentials.
 
 ```bash
 uv sync
-bash scripts/dev_up.sh        # Postgres 16 + Temporal dev server, then migrations
+bash scripts/dev_up.sh        # Postgres 16 (:5433) + Temporal dev server (:7233, UI :8233), then migrations
 uv run agentstack
 ```
 
-Recorded TabPFN scores for the three local datasets live in `data/scores/`; to regenerate
-them, set `TABPFN_TOKEN` and run `uv run python scripts/record_scores.py` (needs
-`uv sync --extra prediction`).
+One rollout walks the whole stack: context is assembled and fingerprinted, tools are exposed
+for this run only, policy makes a decision, the run parks on a human approval bound to that
+exact action and resumes against the same run id, and the commit happens. Then two retries
+are deduplicated instead of rolling out three times.
 
-`dev_up.sh` runs `docker compose up --wait`, applies migrations and sets Temporal
-namespace retention to 168h. Local ports:
-
-| Service | Address |
-|---|---|
-| Postgres | `localhost:5433` (user `agent`, password `agent`, db `agentstack`) |
-| Temporal | `localhost:7233` (UI on `localhost:8233`) |
-
-The walkthrough above needs only the substrate. The full workflow also wants a model
-engine and the cohort data:
+The full workflow also needs a model engine and cohort data:
 
 ```bash
 brew install ollama && brew services start ollama
 ollama pull qwen3:8b                      # dev only; production runs on a cloud GPU
 uv run python scripts/fetch_datasets.py   # needs ~/.kaggle/kaggle.json
 uv sync --extra prediction                # optional: TabPFN (pulls torch); needs TABPFN_TOKEN
+
+uv run --env-file .env agentstack-worker  # the Temporal worker
+uv run --env-file .env agentstack-slack   # the Slack approval receiver
 ```
 
-One rollout walks the whole stack: context assembled and fingerprinted, tools exposed
-for this run only, a policy decision, a run parked on a human approval bound to that
-exact action, a resume against the same run id, the commit — and then two retries that
-are deduplicated instead of rolling out three times.
+Recorded TabPFN scores live in `data/scores/`. To regenerate them, run
+`uv run python scripts/record_scores.py`, which needs `TABPFN_TOKEN`.
 
-To run the long-lived processes, start the worker and (for approvals) the Slack receiver:
+## Reproduce the results
+
+Both results run locally: TabPFN-3.5 on this machine, the LLM through Ollama. No row leaves
+the machine.
 
 ```bash
-uv run --env-file .env agentstack-worker
-uv run --env-file .env agentstack-slack
+# once
+uv sync --extra prediction
+export TABPFN_TOKEN="<your-api-key>"
+ollama pull qwen3:8b
+
+# data (needs ~/.kaggle/kaggle.json and the KKBox competition rules accepted once)
+uv run python scripts/fetch_datasets.py
+uv run python scripts/fetch_datasets.py --kkbox
+uv run python scripts/build_kkbox_cohort.py
+
+# Proof 1 (appends to the CSV and skips rows already there; --plot-only redraws)
+uv run python scripts/llm_vs_tabpfn.py --datasets kkbox-churn telecom-bigml bank-churn netflix-churn
+
+# cold-start curve (add ibm-telco netflix-churn to --datasets for the full table)
+uv run python scripts/cold_start_curve.py
 ```
 
-## Datasets
+The committed `llm_vs_tabpfn.csv` holds KKBox and Netflix. Netflix is the one dataset a fresh
+clone can run without a Kaggle login, since its CSV is committed. `--seeds` and `--test-rows` change the
+protocol (defaults: seeds 0 1 2, 100 test rows).
 
-Churn datasets stand in for a subscription business's customer base. Only one is committed;
-the rest are third-party and fetch-only.
+## Path to production
 
-| Key | Source | Rows | Churn rate | Committed? |
-|---|---|---|---|---|
-| `netflix-churn` | [Kaggle `zeyadmohamed26/netflix-customer-churn-and-engagement-analytics`](https://www.kaggle.com/datasets/zeyadmohamed26/netflix-customer-churn-and-engagement-analytics), CC0 1.0 | 5,000 | 50% | yes, `data/open/` (probably synthetic) |
-| `kkbox-churn` | [KKBox churn prediction challenge](https://www.kaggle.com/competitions/kkbox-churn-prediction-challenge/data) (Kaggle competition; accept its rules once) | 49,863 | 8.9% | no, fetch only |
-| `telecom-bigml` | [`mnassrib/telecom-churn-datasets`](https://www.kaggle.com/datasets/mnassrib/telecom-churn-datasets) | 3,333 | 14.5% | no, fetch only |
-| `bank-churn` | [`radheshyamkollipara/bank-customer-churn`](https://www.kaggle.com/datasets/radheshyamkollipara/bank-customer-churn) | 10,000 | 20.4% | no, fetch only |
-| `ibm-telco` | [`blastchar/telco-customer-churn`](https://www.kaggle.com/datasets/blastchar/telco-customer-churn) (IBM sample data) | 7,043 | 26.5% | no, fetch only |
-
-None is subscription-app data except the Netflix file, which is synthetic as far as we can
-tell, so read results on it as pipeline demonstration. In `bank-churn` the `Complain` column
-is dropped: it correlates with the target at r=0.996 because the complaint is logged as part
-of the churn event. Specs, dropped columns and revenue columns are in
-`src/agentstack/context/datasets.py`.
-
-**Licences.** The code is under the [Apache License 2.0](LICENSE). Data keeps
-its own licence: the committed Netflix file is CC0 ([`data/open/NOTICE.md`](data/open/NOTICE.md)),
-and everything else is licensed for use but not redistribution, so it is gitignored. Fetch it
-with `uv run python scripts/fetch_datasets.py` (needs `~/.kaggle/kaggle.json`). The committed
-`data/manifest.json` records row counts, columns and a `data_as_of` hash, so an upstream change
-shows up as a diff. Check each dataset's licence before reuse.
-
-## Configuration
-
-Set these in the environment, or in a gitignored `.env` loaded with
-`uv run --env-file .env`. [`.env.example`](.env.example) lists the names.
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `DATABASE_URL` | Postgres connection string | `postgresql://agent:agent@localhost:5433/agentstack` |
-| `TEMPORAL_ADDRESS` | Temporal frontend | `localhost:7233` |
-| `TABPFN_TOKEN` | PriorLabs key for TabPFN (see Licensing) | none |
-| `SLACK_BOT_TOKEN` | Slack bot token for approval messages | none |
-| `SLACK_SIGNING_SECRET` | verifies inbound Slack requests | none |
-
-Tests and CI also read `TEMPORAL_TEST_SERVER_DIR` and `AGENTSTACK_RECORD_HISTORIES`.
-Experiment thresholds are versioned in `experiments/targeting.toml` and
-`experiments/cadence.toml`: change a number there, not in code.
-
-## Commands
-
-| Command | Purpose |
-|---|---|
-| `agentstack` | the CLI interface |
-| `agentstack-migrate` | schema migrations (`up`, `status`) |
-| `agentstack-preflight` | the licence gate, as a deploy would run it |
-| `agentstack-operator` | inspect runs (`status`, `stalled --older-than 7d`) and settle an unresolved effect (`reconcile`) |
-| `agentstack-worker` | the Temporal worker |
-| `agentstack-slack` | the Slack Bolt HTTP receiver ([ADR-0011](docs/adr/0011-slack-bolt-receiver.md)) |
-
-## The gates
-
-| Command | What it checks | Budget | When |
-|---|---|---|---|
-| `bash scripts/check_fast.sh` | lint, format, types, layer contracts, capability metadata | < 5s | every edit (PostToolUse hook) |
-| `bash scripts/check_task.sh` | the above + full suite + changed-line coverage + bar integrity | < 90s | turn end (Stop hook) |
-| `bash scripts/check_full.sh` | the above + release gates + secrets + dependencies | minutes | CI |
-| `uv run python scripts/stack_guard.py --base main` | did the bar itself get weakened? | seconds | task end, CI |
-| `uv run python -m evals run --gates` | the Observability, evaluation, feedback release gates | seconds | CI |
-
-The hooks in `.claude/settings.json` run the first two automatically and block on
-failure, so the loop fails closed whether or not anyone remembers to run them.
-
-Other suites: `uv run pytest tests/fitness -v` (the architecture bar),
-`uv run pytest tests/live` (real datasets and model; excluded by default), and
-`uv run python scripts/checkpoint_guard.py --base main` (would this deploy strand live
-runs?). `tests/infra` and `tests/durability` **fail** rather than skip when Postgres or
-Temporal is missing. Coverage floors (changed-line and project) are set in
-`CONSTRAINTS.md`.
-
-### CI
-
-`.github/workflows/ci.yml` runs one `bar` job on pull requests and pushes to `main`:
-Postgres and Temporal, `uv sync --frozen`, `check_fast`, pytest with coverage,
-changed-line coverage (PRs), the eval gates, `stack_guard` (PRs), `checkpoint_guard`,
-gitleaks and osv-scanner.
-
-## Layout
-
-| Path | Purpose |
-|---|---|
-| `STACK.md` | the layer ledger: owner module, store, invariants, status |
-| `CONSTRAINTS.md` | the bar, with numbers and the command that produces each verdict |
-| `CLAUDE.md` / `AGENTS.md` | what an agent must read before writing code here |
-| `docs/spec-template.md` | six core areas plus the three Agent Stack sections |
-| `docs/adr/` | one ADR per boundary decision |
-| `src/agentstack/` | 11 packages across the ten layers, dependency direction enforced by six `.importlinter` contracts |
-| `migrations/` | versioned SQL; an applied migration is immutable, a version gap is refused |
-| `experiments/` | targeting thresholds, versioned — change a number here, not in code |
-| `SPEC*.md` | the Experiment Operator spec, the durable runtime and the registry |
-| `tests/fitness/` | 52 tests, one per collapsed-boundary failure mode |
-| `tests/live/` | checks needing real datasets or the model; excluded from CI, declared in `CONSTRAINTS.md` |
-| `tests/durability/` | spawns real worker processes, kills them with SIGKILL, and a fresh one resumes the run from Temporal's history and the Postgres record |
-| `evals/` | 13 release gates that judge the path, not just the answer |
-| `scripts/` | the three check stages, the bar guard, and the checkpoint and replay guards |
-| `checkpoints/` | checkpoint schema, so a deploy cannot strand live runs |
-| `docs/evidence/` | Measured results of the Cedar vs Rego and Temporal probes (code removed; see its READMEs) |
-| `data/` | cohort datasets (gitignored) and the committed `manifest.json` |
-| `.claude/` | hooks, the `agent-stack-auditor` subagent, and `/spec` `/plan` `/stack-audit` |
-
-## Workflow
-
-`/spec` → `/plan` → `/build` → `/review` → `/stack-audit` → `/ship`.
-
-`/spec` and `/plan` are extended locally: a spec must carry the Layer Ownership
-Ledger, Foundation Assumptions and Boundary Decisions; a task must name its layer and
-the test that proves it. `/stack-audit` is mandatory before `/ship` and covers the
-architectural judgement a test cannot make — tool granularity, approval legibility,
-whether a memory should exist at all.
-
-Non-negotiables, in short: every side effect goes through
-`agentstack.execution.gateway.execute` with an identity envelope and idempotency key;
-approval sits immediately before the irreversible act; the database driver is imported
-only in `agentstack.storage`; applied migrations are never edited; untrusted content never
-influences an authority decision. The full list is in [`CLAUDE.md`](CLAUDE.md).
-
-## Documentation
-
-| Doc | Contents |
-|---|---|
-| [`STACK.md`](STACK.md) | layer ledger: owners, stores, rules and status |
-| [`CONSTRAINTS.md`](CONSTRAINTS.md) | the quality bar and its amendment log |
-| [`SPEC.md`](SPEC.md), [`SPEC-durable-runtime.md`](SPEC-durable-runtime.md), [`SPEC-registry.md`](SPEC-registry.md) | what is being built |
-| [`docs/adr/`](docs/adr/) | ADRs 0001-0011 (architecture, durable backend, model contract, egress, migrations, idempotency, Temporal hosting, Slack receiver) |
-| [`tasks/plan.md`](tasks/plan.md), [`tasks/todo.md`](tasks/todo.md) | the plan and checklist |
-| [`migrations/README.md`](migrations/README.md), [`checkpoints/README.md`](checkpoints/README.md) | schema and checkpoint rules |
-
-## Local vs production
-
-Each component as it runs today (grey, left) and what it becomes in production (right).
-Colour says how far the production side is from existing; details are in
-[Gaps before production](#gaps-before-production).
+The workflow runs end to end locally, against public datasets, with a person approving in
+Slack. That is not the same as running it for a real subscription business. Below is each
+component as it runs today and what it becomes in production.
 
 ```mermaid
 flowchart LR
@@ -452,57 +350,37 @@ flowchart LR
   class P5,P6,P10 open
 ```
 
-- **Red:** blocks production. Nothing exists yet, or the licence forbids it.
-- **Amber:** the invariants are fixed in an ADR or a seam, and only the host or vendor is
-  still to choose.
-- **Blue:** open, with no decision recorded.
-
-`docker-compose.yml` is for development only. Before any deploy, run
-`agentstack-preflight` (licence gate) and `checkpoint_guard` (no stranded runs).
-
-## Gaps before production
-
-The workflow runs end to end locally, against public datasets, with a person approving
-in Slack. That is not the same as running it for a real subscription business. Each gap
-below is either an open decision in a spec or ADR, or a reference stand-in in the code.
+**Red:** blocks production. **Amber:** the invariants are fixed in an ADR or seam, and only
+the host or vendor is still to choose. **Blue:** open, with no decision recorded.
 
 | Gap | Where it stands | What closing it needs |
 |---|---|---|
-| **Model licence** | TabPFN-3.5 weights are non-commercial ([Licensing](#licensing-before-anything-else)) | a commercial licence from Prior Labs, or a different checkpoint whose terms allow it |
-| **Subscriber data** | cohorts are Kaggle snapshots on disk (`context/datasets.py`, `data/`); KKBox is mapped to a subscription-event schema (ADR-0012) but is not live data | ingestion from the subscription platform's webhooks or exports, its cadence and watermark (`SPEC.md`, open question) |
-| **Trigger source** | triggers are injected by hand; the only caller of `deliver` is `agentstack-slack` (`slack_cli.py`), and nothing detects a metric movement | a scheduled or event-driven ingress that computes the metric and emits `data_arrival` / `metric_movement` with a watermark |
-| **The rollout target** | a rollout commits to our own Postgres registry; the external API client is `RecordingClient`, a reference fake (`interfaces/wiring.py`) | a real client for wherever variants are served (offerings, paywall or flag service), behind the gateway, plus its credential and identity model (iteration 2) |
+| **Model licence** | TabPFN-3.5 weights are non-commercial ([Licensing](#licensing)) | a commercial licence from Prior Labs, or a different checkpoint whose terms allow it |
+| **Subscriber data** | cohorts are Kaggle snapshots on disk; KKBox is mapped to a subscription-event schema (ADR-0012) but is not live data | ingestion from the subscription platform's webhooks or exports, its cadence and watermark (`SPEC.md`, open question) |
+| **Trigger source** | triggers are injected by hand; the only caller of `deliver` is `agentstack-slack`, and nothing detects a metric movement | a scheduled or event-driven ingress that computes the metric and emits `data_arrival` / `metric_movement` with a watermark |
+| **The rollout target** | a rollout commits to our own Postgres registry; the external API client is `RecordingClient`, a reference fake (`interfaces/wiring.py`) | a real client for wherever variants are served (offerings, paywall or flag service), behind the gateway, plus its credential and identity model |
 | **Measuring the effect** | Incremental Net Saved Value, ANCOVA and the regressor are designed but not built (`SPEC.md`, iteration 2) | the readout, so an experiment can be concluded rather than only rolled out |
-| **LLM serving** | Ollama `qwen3:8b`, host defaults to `localhost:11434` (`model/ollama_engine.py`) | a GPU serving stack (open), verified tool-call equivalence with dev, and a per-evaluation cost budget |
-| **TabPFN serving** | runs as an in-process library; most recorded scores exist only on the machine that made them | GPU capacity or a scoring service behind the `prediction/` seam, and scores reproducible outside one laptop |
-| **Hosting** | `docker-compose.yml` is dev only; no container image or deploy manifest exists; Temporal hosting is deferred ([ADR-0009](docs/adr/0009-temporal-production-hosting.md)) | images for the worker and the Slack receiver, managed Postgres with backups, and the Temporal decision (Cloud needs a payload codec) |
-| **Secrets** | read through one seam (`storage/secrets.py`), but the source is still the process environment ([ADR-0013](docs/adr/0013-secrets-seam-and-span-allowlist.md)) | a secret store, and rotation that does not strand approvals already waiting |
-| **Observability** | spans go to `LoggingSink` (Python logging), with an attribute allowlist; no metrics or alerts | a trace backend, alerts on stalled runs and unresolved effects, and a decided retention period for traces, transcripts and audit rows |
-| **PII** | the span allowlist keeps rows out of traces; prose redaction is a net, and transcripts and audit rows are untouched | a retention and deletion job, and a review of what transcripts hold once real subscriber data lands |
+| **LLM serving** | Ollama `qwen3:8b` on `localhost:11434` (`model/ollama_engine.py`) | a GPU serving stack, verified tool-call equivalence with dev, and a per-evaluation cost budget |
+| **TabPFN serving** | an in-process library; most recorded scores exist only on the machine that made them | GPU capacity or a scoring service behind the `prediction/` seam |
+| **Hosting** | `docker-compose.yml` is dev only; Temporal hosting is deferred ([ADR-0009](docs/adr/0009-temporal-production-hosting.md)) | images for the worker and Slack receiver, managed Postgres with backups, and the Temporal decision (Cloud needs a payload codec) |
+| **Secrets** | read through one seam (`storage/secrets.py`), sourced from the environment ([ADR-0013](docs/adr/0013-secrets-seam-and-span-allowlist.md)) | a secret store, and rotation that does not strand approvals already waiting |
+| **Observability** | spans go to `LoggingSink` with an attribute allowlist; no metrics or alerts | a trace backend, alerts on stalled runs and unresolved effects, and a decided retention period |
+| **PII** | the span allowlist keeps rows out of traces; transcripts and audit rows are untouched | a retention and deletion job, and a review of what transcripts hold once real subscriber data lands |
 
-The first four are blockers: without them there is nothing legal to run, no real data to run
+The first four are blockers. Without them there is nothing legal to run, no real data to run
 on, nothing to start a run, and no customer-visible effect. The rest are what makes it safe
-to leave running.
+to leave running. Before any deploy, run `agentstack-preflight` (licence gate) and
+`scripts/checkpoint_guard.py` (no stranded runs).
 
-## Contributing and security
+## Reference
 
-There is no `CONTRIBUTING.md`, `SECURITY.md` or `CODEOWNERS` yet. Contributions are accepted under the repository licence. Until there is, the
-contributor rules are `CLAUDE.md` and `AGENTS.md`, and every change must pass
-`check_task.sh` and, before shipping, `/stack-audit`. Never commit `.env`.
-
-## What is deliberately unfinished
-
-- **Recorded TabPFN scores for third-party datasets stay local.** Only the Netflix
-  scores (CC0 data) are committed, and a fitness test holds them to their dataset hash.
-  KKBox, telecom and bank scores are excluded by `.gitignore` on purpose: they are scores
-  of licensed rows. So CI and a fresh clone replay Netflix only, and any other dataset
-  needs `scripts/record_scores.py`, which needs the licence above and `TABPFN_TOKEN`.
-
-## References
+Datasets and their licences, configuration, commands, the quality gates and CI, the
+repository layout and the documentation index are in
+[`docs/reference.md`](docs/reference.md).
 
 - [The Agent Stack](https://theagentstack.substack.com/): the ten-layer model and the six
   boundary confusions this repository is built to.
 - [Variance reduction](https://confidence.spotify.com/docs/experiments/stats/variance-reduction)
   (Spotify Confidence docs): the statistical background for adjusting experiment metrics
-  with pre-experiment covariates, which is the idea behind using predicted churn to sharpen
-  the experiment readout.
+  with pre-experiment covariates, the idea behind using predicted churn to sharpen the
+  experiment readout.
