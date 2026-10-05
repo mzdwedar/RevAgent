@@ -19,6 +19,7 @@ import pytest
 
 from agentstack.context import targeting
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
+from agentstack.context.frozen_cohorts import FrozenCohort
 from agentstack.context.targeting import (
     CohortTooSmall,
     NotEnoughAtRisk,
@@ -34,6 +35,7 @@ DEV = TargetingRule(
     risk_quantile=0.9,
     minimum_cohort=10,
     minimum_annual_value_at_risk_cents=1_000,
+    floors_cents=(("NTD", 1_000),),
 )
 
 
@@ -186,6 +188,146 @@ def test_a_cohort_worth_too_little_is_refused() -> None:
             scores(),
             rule=replace(DEV, minimum_annual_value_at_risk_cents=5_000_000),
         )
+
+
+def test_a_refusal_names_the_cohorts_own_currency() -> None:
+    """A KKBox cohort is billed in NTD. A refusal that says `$50,000` about NTD is a
+    wrong number said confidently."""
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+
+    with pytest.raises(NotEnoughAtRisk, match=r"NTD 50,000") as refused:
+        targeting.select(
+            snapshot(),
+            scores(),
+            rule=replace(DEV, floors_cents=(("NTD", 5_000_000),)),
+        )
+    assert "$" not in str(refused.value)
+
+
+def test_a_cohort_is_held_to_the_floor_stated_in_its_own_currency() -> None:
+    """The audit's Important 2: one number in cents was compared against every cohort, so
+    NTD 1.5M (about $50,000) was judged against a floor written as $50,000 - a gate about
+    thirty times too weak. Here the USD floor would pass and the NTD floor must refuse."""
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+    usd_floor_would_pass = replace(DEV, minimum_annual_value_at_risk_cents=1_000)
+
+    with pytest.raises(NotEnoughAtRisk, match="NTD"):
+        targeting.select(
+            snapshot(),
+            scores(),
+            rule=replace(usd_floor_would_pass, floors_cents=(("NTD", 10_000_000_000),)),
+        )
+
+
+def test_a_currency_with_no_stated_floor_is_refused_not_judged_by_another() -> None:
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+
+    with pytest.raises(targeting.NoFloorForCurrency, match="NTD"):
+        targeting.select(snapshot(), scores(), rule=replace(DEV, floors_cents=()))
+
+
+def test_every_profile_states_a_floor_for_every_currency_a_cohort_is_billed_in() -> None:
+    """A dataset registered in a new currency must not reach a rule that cannot judge it."""
+    currencies = {spec.currency for key, spec in REGISTRY.items() if key != "fixture"}
+    for profile in ("default", "dev"):
+        rule = TargetingRule.load(profile)
+        for currency in currencies:
+            assert rule.floor_cents(currency) > 0, f"{profile} has no floor for {currency}"
+
+
+def test_the_stated_ntd_floor_is_the_dollar_floor_at_the_exchange_rate_it_names() -> None:
+    """experiments/targeting.toml says $50,000 is NTD 1,500,000 at about 30. If either
+    moves on its own, the two floors no longer describe the same bar."""
+    rule = TargetingRule.load("default")
+
+    assert rule.floor_cents("NTD") == 30 * rule.floor_cents("USD")
+
+
+def test_usd_is_the_default_and_leaves_the_cohort_byte_identical() -> None:
+    """`experiment_version` names a population in recorded histories and in live runs.
+    The literal below was computed before `currency` existed; if it moves, every USD
+    cohort already frozen has been renamed."""
+    cohort = targeting.select(snapshot(), scores(), rule=DEV)
+
+    assert REGISTRY["fixture"].currency == "USD"
+    assert cohort.experiment_version == "exp:9c93736ad3fe0a25"
+    assert "currency" not in cohort.description()
+    assert cohort.currency == "USD"
+
+
+def test_a_non_usd_cohort_records_its_currency() -> None:
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+
+    cohort = targeting.select(snapshot(), scores(), rule=DEV)
+
+    assert cohort.currency == "NTD"
+    assert cohort.description()["currency"] == "NTD"
+    # Its floor is a different number, so it is a different rule and a different version.
+    # A USD cohort's name must not move (above).
+    assert cohort.experiment_version != "exp:9c93736ad3fe0a25"
+    assert cohort.description()["rule"].endswith(":NTD")
+
+
+def test_a_frozen_cohort_reads_its_currency_from_what_was_recorded() -> None:
+    """Rows frozen before `currency` existed have no such key; they were all USD."""
+    usd = targeting.select(snapshot(), scores(), rule=DEV)
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+    ntd = targeting.select(snapshot(), scores(), rule=DEV)
+
+    def frozen(cohort: targeting.Cohort) -> FrozenCohort:
+        return FrozenCohort(
+            tenant="t",
+            experiment_id="e",
+            experiment_version=cohort.experiment_version,
+            data_as_of=cohort.data_as_of,
+            targeting_model_version=cohort.model_version,
+            risk_threshold=cohort.risk_threshold,
+            size=cohort.size,
+            annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
+            description=cohort.description(),
+        )
+
+    assert frozen(usd).currency == "USD"
+    assert frozen(ntd).currency == "NTD"
+
+
+def test_the_draft_turn_is_told_what_the_churn_model_found() -> None:
+    """The drafting model writes why an offer should retain these customers. It is given
+    the frozen cohort's TabPFN profile to reason from, not just the cohort's name."""
+    from datetime import UTC, datetime
+
+    from agentstack.policy.triggers import Outcome, TriggerKind
+    from agentstack.runtime.cycles import Cycle
+    from agentstack.runtime.drafting import draft_instruction
+
+    cohort = targeting.select(snapshot(charge=10.0), scores(), rule=DEV)
+    frozen = FrozenCohort(
+        tenant="t",
+        experiment_id="e",
+        experiment_version=cohort.experiment_version,
+        data_as_of=cohort.data_as_of,
+        targeting_model_version=cohort.model_version,
+        risk_threshold=cohort.risk_threshold,
+        size=cohort.size,
+        annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
+        description=cohort.description(),
+    )
+    cycle = Cycle(
+        experiment_id="e",
+        data_as_of=cohort.data_as_of,
+        kind=TriggerKind.DATA_ARRIVAL,
+        outcome=Outcome.PROPOSE,
+        run_id=cohort.experiment_version,
+        claimed_at=datetime.now(UTC),
+        settled_at=None,
+    )
+
+    told = draft_instruction(tenant="t", cycle=cycle, cohort=frozen)
+
+    assert f"Churn model {cohort.model_version}" in told
+    assert f"{cohort.size} customers" in told
+    assert f"{cohort.risk_threshold:.2f} or above" in told
+    assert targeting.money(cohort.annual_value_at_risk_cents) in told
 
 
 def test_value_at_risk_uses_observed_revenue_annualised() -> None:

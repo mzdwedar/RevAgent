@@ -17,6 +17,15 @@ minimum_cohort = 1000
 # more attention than the outcome can repay.
 minimum_annual_value_at_risk_cents = 5_000_000
 
+# The same floor for a cohort billed in another currency. A floor is an amount of money, so
+# a currency with no line here is refused (`NoFloorForCurrency`), never judged against the
+# dollar figure above: NTD 50,000 is about USD 1,600, a gate roughly thirty times too weak.
+# NTD 1,500,000 is $50,000 at about 30 NTD to the dollar; it is a business number, so
+# change it here when the exchange rate or the bar moves. It is folded into
+# `experiment_version` for a cohort in that currency.
+[profiles.default.floors_cents]
+NTD = 150_000_000
+
 # The dev base is a 3,333-row benchmark dataset, not a tenant's active base. Its top
 # decile is 334 customers, so `default` refuses - correctly. This profile exists so the
 # end-to-end workflow can run on the data that is actually here.
@@ -32,3 +41,6 @@ minimum_annual_value_at_risk_cents = 5_000_000
 risk_quantile = 0.9
 minimum_cohort = 300
 minimum_annual_value_at_risk_cents = 5_000_000
+
+[profiles.dev.floors_cents]
+NTD = 150_000_000

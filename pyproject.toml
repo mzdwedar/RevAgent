@@ -1,5 +1,6 @@
 [project]
-name = "revenuecat-agent"
+license = { text = "Apache-2.0" }
+name = "revagent"
 version = "0.1.0"
 description = "A layered, production agent built to The Agent Stack invariants"
 requires-python = ">=3.12"

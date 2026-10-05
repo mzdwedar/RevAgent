@@ -155,9 +155,9 @@ Why these numbers:
 - **High and above** for dependencies: below that is mostly noise.
 
 **A few lines reaching a real serving system cannot be covered in CI.** Three in `prediction/engine.py` construct and
-call `TabPFNClassifier`; two in `model/ollama_engine.py` construct the Ollama client.
-None executes where the extra, the licence or a running model is absent — which is CI,
-by design. All five are exercised by `tests/live`, which is why that lane exists.
+call `TabPFNClassifier`; two in `model/ollama_engine.py` construct the Ollama client. None
+executes where the extra, the licence or a running model is absent — which is
+CI, by design. All five are exercised by `tests/live`, which is why that lane exists.
 
 The alternatives were a `pragma` (banned by the floor), installing torch and running a
 model in CI to raise a percentage, or pretending. The ratchet says what is true today,
@@ -198,9 +198,12 @@ It does not prove the data upstream is unchanged, and it does not prove TabPFN s
 returns what we recorded. That is what the live lane is for, and it has to actually
 be run.
 
-**Not yet recorded.** `data/scores/` is empty: producing it needs a `TABPFN_TOKEN`,
-and none is configured on this machine. Until it exists, `tests/live` fails with the
-command that fixes it rather than skipping — the same posture as a missing database.
+**Recorded locally, not yet re-run.** `data/scores/` holds `telecom-bigml.json`, `bank-churn.json`
+and `kkbox-churn.json` on the machine that made them; `data/` is gitignored, so CI and a fresh
+clone get none of them and `tests/live` fails with the command that fixes it rather than
+skipping — the same posture as a missing database. `kkbox-churn.json` (`tabpfn-3.5`, recorded
+2026-10-02) has not been re-scored by `tests/live/test_real_scores.py` (~2.5 h), so Checkpoint D
+of `tasks/todo-kkbox-cohort.md` is open and the real cohort has not been used in an experiment.
 
 ## Where checks run (cost decides placement)
 
@@ -228,6 +231,7 @@ exception says "not here, for now"; an amendment says "this rule was wrong".
 | Date | Rule removed | Replaced by | Why | Recorded in |
 |---|---|---|---|---|
 | 2026-09-22 | No module outside `agentstack.execution` imports an HTTP client, DB driver, shell, socket or mailer | the same rule minus "DB driver", plus a driver rule naming `agentstack.storage` | The rule conflated two things layer 7 keeps apart. An execution surface is a system the agent acts *upon*, gated by policy, approval and containment. The agent's own state store is substrate: recording that a step completed is not an effect anyone approves, and `agentstack.context` cannot reach layer 7 at all under contract 2, so it could never be persisted. Paired with a tightening — `lint-imports` contract 5 now enforces the driver rule, which no layer contract did before (only an AST scan in `tests/fitness/test_layer_boundaries.py` did), and that scan now names which layer may hold which client instead of exempting `execution` from all of them. | [ADR-0005](docs/adr/0005-state-substrate-and-migrations.md) |
+| 2026-10-04 | 32 tests and 46 assertions in `tests/fitness/test_prediction_gate.py` and `test_layer_boundaries.py` (plus all of `test_hosted_call_evidence.py`) that proved the hosted TabPFN scorer: out-of-fold folds, egress allowlist, host pin, version recording, hosted preflight, the `tabpfn_client` import probes and the contract-3 exception edges | nothing: the code they tested is gone | The owner withdrew the hosted scorer, so no cohort row can leave the machine. Each removed test covered only `HostedTabPFNScorer`, `TracedScorer` or `ScoringRefused`, all deleted in the same change. No remaining test was weakened; contract 3 now forbids the same modules with one fewer exception. | [ADR-0012](docs/adr/0012-kkbox-cohort-and-hosted-scorer.md) |
 
 ## Exceptions
 

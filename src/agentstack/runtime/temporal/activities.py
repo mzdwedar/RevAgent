@@ -39,6 +39,7 @@ from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
 from agentstack.runtime.drafting import (
     PROPOSAL_DEVIATES,
+    draft_admission,
     draft_instruction,
     rollout_admission,
     rollout_deviation,
@@ -366,20 +367,25 @@ class RunActivities:
         )
         message = self._instruction(intent, run, cycle, prior_rollout_event=prior_rollout_event)
         envelope = turns.envelope(run)
-        # A rollout turn is told the frozen cohort's rollout and admitted to propose that
-        # and nothing else: a proposal that differs is refused before it is parked, so
-        # nobody is ever asked about it (A1, C1).
-        admit = (
-            rollout_admission(
+        # Each turn is told its action from the record and admitted to propose that and
+        # nothing else. A rollout that differs is refused before it is parked, so nobody
+        # is ever asked about it (A1, C1); a draft is held to the frozen cohort's version.
+        admit = None
+        if intent.stage == ROLLOUT and prior_rollout_event is not None:
+            admit = rollout_admission(
                 cohort=self._frozen(run.tenant, cycle),
                 audit=self._audit,
                 run=run,
                 principal=envelope.principal,
                 prior_rollout_event=prior_rollout_event,
             )
-            if intent.stage == ROLLOUT and prior_rollout_event is not None
-            else None
-        )
+        elif intent.stage == DRAFT:
+            admit = draft_admission(
+                cohort=self._frozen(run.tenant, cycle),
+                audit=self._audit,
+                run=run,
+                principal=envelope.principal,
+            )
         tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=turns.deps.versions)
         try:
             with _heartbeating():
@@ -427,7 +433,9 @@ class RunActivities:
     ) -> str:
         """What this stage's turn is told, from the record. Never passed through history."""
         if intent.stage == DRAFT:
-            return draft_instruction(tenant=run.tenant, cycle=cycle)
+            return draft_instruction(
+                tenant=run.tenant, cycle=cycle, cohort=self._frozen(run.tenant, cycle)
+            )
         assert prior_rollout_event is not None  # every non-draft stage here is a rollout turn
         return rollout_instruction(
             experiment_id=intent.experiment_id,

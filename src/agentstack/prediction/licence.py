@@ -27,6 +27,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from pathlib import Path
+
+from agentstack.storage import secrets
 
 TOKEN_VARIABLE = "TABPFN_TOKEN"
 
@@ -40,18 +43,40 @@ HOW_TO_GET_ONE = (
 MINIMUM_TOKEN_LENGTH = 16
 
 
+ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+
+
+def load_env(path: Path | None = None) -> None:
+    """Read KEY=VALUE lines from the repo-root `.env` into the environment, without overriding.
+
+    The token lives in `.env` (gitignored), found from the repo root and not from wherever
+    the process started; this saves exporting it by hand. Whatever the shell already set
+    wins, and a missing file is not an error: `check_token` says what is missing and how to
+    get it.
+    """
+    path = path or ENV_FILE
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
 class LicenceRefused(RuntimeError):
     """The TabPFN licence is missing or not usable. Refused at startup, by design."""
 
 
 def check_token(env: Mapping[str, str] | None = None) -> str:
     """Cheap, local, and honest about what it does not know."""
-    source = os.environ if env is None else env
-    token = source.get(TOKEN_VARIABLE, "").strip()
-    if not token:
+    found = secrets.read(TOKEN_VARIABLE, env=env)
+    if found is None:
         raise LicenceRefused(
             f"{TOKEN_VARIABLE} is not set, so churn scoring cannot run. {HOW_TO_GET_ONE}"
         )
+    token = found.reveal()
     if len(token) < MINIMUM_TOKEN_LENGTH:
         raise LicenceRefused(
             f"{TOKEN_VARIABLE} is {len(token)} characters, which is too short to be a key. "

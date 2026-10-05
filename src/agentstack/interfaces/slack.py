@@ -20,9 +20,11 @@ indistinguishable from "waiting patiently" unless the failure says so, which is 
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+from agentstack.context.targeting import money
+from agentstack.storage import secrets
 
 TOKEN_VARIABLE = "SLACK_BOT_TOKEN"
 
@@ -67,6 +69,7 @@ class ApprovalAsk:
     estimated_customers: int
     annual_value_at_risk_cents: int
     tenant: str
+    currency: str = "USD"
 
     def __post_init__(self) -> None:
         if not self.summary.strip():
@@ -91,7 +94,7 @@ class ApprovalAsk:
         )
 
     def money(self) -> str:
-        return f"${self.annual_value_at_risk_cents / 100:,.0f}"
+        return money(self.annual_value_at_risk_cents, self.currency)
 
 
 def render_blocks(ask: ApprovalAsk) -> list[dict[str, Any]]:
@@ -227,15 +230,15 @@ class SlackNotifier:
     def _client(self) -> Any:
         if self.build_client is not None:
             return self.build_client()
-        token = os.environ.get(TOKEN_VARIABLE, "").strip()
-        if not token:
+        token = secrets.read(TOKEN_VARIABLE)
+        if token is None:
             raise NotificationFailed(
                 f"{TOKEN_VARIABLE} is not set, so no approval can be requested. A run "
                 "that parks on a wait nobody was asked about waits forever."
             )
         from slack_sdk import WebClient
 
-        return WebClient(token=token)
+        return WebClient(token=token.reveal())
 
     def post_approval(self, ask: ApprovalAsk, *, channel: str = "") -> str:
         blocks = render_blocks(ask)

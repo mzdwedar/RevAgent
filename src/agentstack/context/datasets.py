@@ -27,6 +27,8 @@ from typing import Any
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
 
+from agentstack.context import kkbox
+
 DATA_ROOT = Path(__file__).resolve().parents[3] / "data"
 MANIFEST = Path(__file__).resolve().parents[3] / "data" / "manifest.json"
 
@@ -63,7 +65,27 @@ class DatasetSpec:
     # which is the one thing that number is not allowed to be.
     revenue_columns: tuple[str, ...] = ()
     revenue_periods_per_year: int = 0
+    # For a file whose one payment covers plans of different lengths, a fixed periods-per-year
+    # reads a 410-day payment as a month. Naming the column that holds the plan's length in
+    # days annualises each row by its own plan (amount x 365 / days) instead, and a row with
+    # no positive length has no observed period, so it is worth nothing rather than a guess.
+    revenue_period_days_column: str = ""
+    # A row where this 0/1 column is 1 had no payment as its last event, so its amount is not
+    # an observed payment and is worth nothing here.
+    revenue_unpaid_flag_column: str = ""
     revenue_note: str = ""
+    # The currency the revenue columns are in. A figure shown to an approver without
+    # its currency is a number the reader supplies a unit for.
+    currency: str = "USD"
+    # A cohort that is built from raw tables rather than downloaded whole names the script
+    # that builds it, so an absent file points at the build and not at a downloader that
+    # has nothing by this name. Empty for a cohort Kaggle ships as is.
+    derived_by: str = ""
+    # Terms for a dataset committed under `data/open/`. Everything else is third-party and
+    # gitignored because its licence forbids redistribution; a committed file says what it
+    # is committed under and who to credit (tests/fitness/test_open_dataset.py).
+    licence: str = ""
+    attribution: str = ""
 
 
 REGISTRY: dict[str, DatasetSpec] = {
@@ -119,6 +141,80 @@ REGISTRY: dict[str, DatasetSpec] = {
         # interest margin, which is a modelling assumption, and the floor is specified
         # against observed ARPU. So this cohort loads and cannot be targeted.
         revenue_note="no observed revenue column; see the comment above",
+    ),
+    "kkbox-churn": DatasetSpec(
+        key="kkbox-churn",
+        kaggle="kkbox-churn-prediction-challenge",
+        files=("kkbox-cohort.csv",),
+        target=kkbox.TARGET,
+        churned="1",
+        # Only the identifier is in the file: the raw registration and expiry dates are
+        # candidates `to_features` omits until a declared comparison keeps them (K13).
+        drops={"msno": kkbox.EXCLUDED["msno"]},
+        revenue_columns=("last_actual_amount_paid",),
+        revenue_period_days_column="last_payment_plan_days",
+        revenue_unpaid_flag_column="last_is_cancel",
+        revenue_note=(
+            "The last amount the subscriber paid before the 2017-02-28 cutoff, annualised by "
+            "the length of the plan it bought (amount x 365 / plan days), so a 410-day plan's "
+            "one payment is worth about a year and a 30-day plan's about twelve months of it. "
+            "A subscriber whose last event was a cancellation, or whose plan has no length, "
+            "has no observed payment and counts as zero. Observed, never predicted: it is "
+            "what they paid, not what they will."
+        ),
+        currency="NTD",
+        derived_by="scripts/build_kkbox_cohort.py",
+    ),
+    "ibm-telco": DatasetSpec(
+        key="ibm-telco",
+        kaggle="blastchar/telco-customer-churn",
+        files=("WA_Fn-UseC_-Telco-Customer-Churn.csv",),
+        target="Churn",
+        churned="Yes",
+        drops={
+            "customerID": (
+                "an identifier: it names the row rather than describing it, so a model "
+                "that keys on it has memorised the training set"
+            ),
+        },
+        # 11 customers have a blank TotalCharges: they are in their first month, tenure 0,
+        # and have been billed nothing yet. Zero is what the file means by blank.
+        fills={"TotalCharges": 0},
+        revenue_columns=("MonthlyCharges",),
+        revenue_periods_per_year=12,
+        revenue_note=(
+            "The billed monthly charge, annualised x12. Observed per customer and "
+            "continuous. IBM describes the data as a fictional telco; it is a sample "
+            "dataset, not a company's records."
+        ),
+        # Not committed: IBM states no data licence, the Kaggle copy is listed as
+        # "copyright-authors", and the CC BY tags on Hugging Face and Mendeley were set by
+        # the uploaders. Fetched, never redistributed.
+    ),
+    "netflix-churn": DatasetSpec(
+        key="netflix-churn",
+        kaggle="zeyadmohamed26/netflix-customer-churn-and-engagement-analytics",
+        files=("open/netflix_customer_churn.csv",),
+        target="churned",
+        churned="1",
+        drops={
+            "customer_id": (
+                "an identifier: it names the row rather than describing it, so a model "
+                "that keys on it has memorised the training set"
+            ),
+        },
+        revenue_columns=("monthly_fee",),
+        revenue_periods_per_year=12,
+        revenue_note=(
+            "The billed monthly fee, annualised x12. It is the price of the subscriber's "
+            "tier (Basic 8.99, Standard 13.99, Premium 17.99), so it is observed per "
+            "subscriber but takes three values. The dataset does not say whether it is "
+            "synthetic; its 50% churn rate and clean behavioural signal suggest it is."
+        ),
+        licence="CC0-1.0",
+        attribution=(
+            "Netflix Customer Churn & Engagement Analytics, Kaggle, zeyadmohamed26, CC0 1.0"
+        ),
     ),
 }
 
@@ -204,10 +300,12 @@ def load(key: str, *, root: Path = DATA_ROOT) -> CohortSnapshot:
     paths = [root / name for name in spec.files]
     absent = [p.name for p in paths if not p.exists()]
     if absent:
-        raise DatasetError(
-            f"{key}: {absent} not found under {root}. Fetch them: uv run python "
-            f"scripts/fetch_datasets.py"
+        how = (
+            f"Build it: uv run python {spec.derived_by}"
+            if spec.derived_by
+            else "Fetch them: uv run python scripts/fetch_datasets.py"
         )
+        raise DatasetError(f"{key}: {absent} not found under {root}. {how}")
 
     frame = pd.concat([pd.read_csv(path) for path in paths], ignore_index=True)
     return snapshot(spec, frame)

@@ -18,11 +18,12 @@ from collections.abc import Callable
 from typing import Any
 
 from agentstack.context.frozen_cohorts import FrozenCohort
+from agentstack.context.targeting import money
 from agentstack.observability.audit import AuditSink
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.run import Run
 from agentstack.tools.action import ActionRequest
-from agentstack.tools.experiments import prepare_rollout
+from agentstack.tools.experiments import DRAFT, prepare_rollout
 
 # SPEC.md: "On approval, roll the winning variant out to ~10% of the targeted cohort."
 ROLLOUT_PERCENTAGE = 10
@@ -97,15 +98,45 @@ def rollout_deviation(
     )
 
 
-def rollout_admission(
-    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str, prior_rollout_event: int
+def draft_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | None:
+    """Why `request` is not a draft of the frozen cohort, or None if it is.
+
+    The hypothesis and the variant are the model's to write, and nothing here judges
+    them. Which cohort they are written about is not: the version is the key the rollout
+    is held to and the approver is shown, so a draft that carries a mistyped or invented
+    one lands in the registry beside a cohort it was never about. The model was told the
+    version "exactly as given" and copied it with one character added (Checkpoint B).
+    """
+    resource = f"{cohort.tenant}/experiments/{cohort.experiment_id}"
+    if request.tool != DRAFT.name:
+        return f"{request.tool} is not the draft of frozen cohort {cohort.experiment_version}"
+    if request.resource != resource:
+        return (
+            f"{request.resource} is not the experiment frozen cohort "
+            f"{cohort.experiment_version} belongs to ({resource})"
+        )
+    version = request.payload.get("experiment_version")
+    if version != cohort.experiment_version:
+        return (
+            f"the draft names experiment_version {version!r} and the frozen cohort is "
+            f"{cohort.experiment_version!r}. A draft is held to the record: one written "
+            "under another version is about a cohort nobody froze"
+        )
+    return None
+
+
+def _admitting(
+    reason_for: Callable[[ActionRequest], str | None],
+    *,
+    audit: AuditSink,
+    run: Run,
+    principal: str,
 ) -> Admission:
-    """An `Admission` for a rollout turn: the frozen cohort's rollout, or a refusal that is
-    written to the audit trail, because a proposal stopped before anyone saw it is exactly
-    what someone will later ask about."""
+    """An `Admission` that audits what it refuses: a proposal stopped before anyone saw
+    it is exactly what someone will later ask about."""
 
     def admit(request: ActionRequest) -> str | None:
-        reason = rollout_deviation(request, cohort, prior_rollout_event=prior_rollout_event)
+        reason = reason_for(request)
         if reason is not None:
             audit.write(
                 run_id=run.run_id,
@@ -121,6 +152,28 @@ def rollout_admission(
         return reason
 
     return admit
+
+
+def draft_admission(
+    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str
+) -> Admission:
+    """An `Admission` for a drafting turn: a draft of the frozen cohort, or an audited refusal."""
+    return _admitting(
+        lambda request: draft_deviation(request, cohort), audit=audit, run=run, principal=principal
+    )
+
+
+def rollout_admission(
+    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str, prior_rollout_event: int
+) -> Admission:
+    """An `Admission` for a rollout turn: the frozen cohort's rollout, or a refusal that is
+    written to the audit trail."""
+    return _admitting(
+        lambda request: rollout_deviation(request, cohort, prior_rollout_event=prior_rollout_event),
+        audit=audit,
+        run=run,
+        principal=principal,
+    )
 
 
 def rollout_instruction(
@@ -145,7 +198,27 @@ def rollout_instruction(
     )
 
 
-def draft_instruction(*, tenant: str, cycle: Cycle) -> str:
+def cohort_profile(cohort: FrozenCohort) -> str:
+    """What TabPFN found about this cohort, in words the drafting model can reason over.
+
+    Read from the frozen record, never re-scored: the draft is about the cohort that was
+    frozen, and a second scoring pass could describe a different one. Without this the
+    model is asked why an offer should retain "these customers" and told nothing about
+    them, so the hypothesis it writes is generic by construction.
+    """
+    described = cohort.description
+    quantiles = described.get("risk_quantiles", {})
+    spread = ", ".join(f"{float(q):.0%} {float(v):.2f}" for q, v in quantiles.items())
+    return (
+        f"Churn model {cohort.targeting_model_version} scored this cohort: {cohort.size} "
+        f"customers, every one at churn probability {cohort.risk_threshold:.2f} or above "
+        f"(risk quantiles within the cohort: {spread}). "
+        f"{money(cohort.annual_value_at_risk_cents, cohort.currency)} of annualised revenue "
+        f"is at risk ({described.get('revenue_basis', 'basis not recorded')})."
+    )
+
+
+def draft_instruction(*, tenant: str, cycle: Cycle, cohort: FrozenCohort) -> str:
     if cycle.outcome is None or cycle.outcome.value != "propose" or cycle.run_id is None:
         raise NothingToDraft(
             f"{cycle.experiment_id} @ {cycle.data_as_of} concluded {cycle.outcome}; only a "
@@ -155,6 +228,7 @@ def draft_instruction(*, tenant: str, cycle: Cycle) -> str:
         "A cohort was frozen for a retention experiment. Draft it by calling "
         f"create_experiment_draft with tenant={tenant} experiment_id={cycle.experiment_id} "
         f"experiment_version={cycle.run_id} exactly as given. Write the hypothesis and the "
-        "variant yourself: what offer to test, and why it should retain these customers. "
-        f"The cohort was scored on the batch {cycle.data_as_of}."
+        "variant yourself: what offer to test, and why it should retain these customers, "
+        "grounded in the risk profile below. "
+        f"The cohort was scored on the batch {cycle.data_as_of}. {cohort_profile(cohort)}"
     )

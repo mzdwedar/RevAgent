@@ -46,6 +46,7 @@ from agentstack.policy.triggers import (
     TenantClaimRefused,
     TriggerKind,
 )
+from agentstack.prediction import licence
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.drafting import draft_instruction, rollout_instruction
 from agentstack.runtime.run import RunStore
@@ -250,8 +251,11 @@ def test_the_worker_does_not_reach_for_work_when_preflight_refuses(
     assert worker_cli.main([], preflight=lambda _: 1) == 1
 
 
-def test_the_worker_runs_the_real_preflight_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_worker_runs_the_real_preflight_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.setattr(licence, "ENV_FILE", tmp_path / ".env")  # the repo's own must not rescue it
 
     assert worker_cli.main([]) == 1
 
@@ -460,9 +464,9 @@ def _instruction_openings() -> tuple[str, ...]:
         risk_threshold=0.5,
         size=1,
         annual_value_at_risk_cents=1,
-        description="",
+        description={},
     )
-    drafted = draft_instruction(tenant="t", cycle=cycle)
+    drafted = draft_instruction(tenant="t", cycle=cycle, cohort=cohort)
     rolled = rollout_instruction(experiment_id="e", cohort=cohort, prior_rollout_event=0)
     return (drafted.split(" by calling")[0], rolled.split(" by calling")[0])
 

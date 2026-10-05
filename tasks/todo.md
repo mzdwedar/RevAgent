@@ -133,7 +133,7 @@ criteria are met.
   - Verify: new `tests/fitness/test_data_snapshot.py` — the same snapshot yields the
     same watermark and the same row count; the documented leakage columns stay dropped.
   - Depends: none. Files: ~3.
-  - **Deviation:** `churn_tabpfn`'s source no longer exists. `~/Desktop/revenuecat` holds
+  - **Deviation:** `churn_tabpfn`'s source no longer exists. The benchmark checkout holds
     only `README.md`, `pyproject.toml` and a lockfile; the package is installed editable
     from a `src/` that is gone, and there is no git history there to recover it. The
     registry and cleaning were rebuilt in `agentstack/context/datasets.py` from the
@@ -328,11 +328,21 @@ criteria are met.
 - [x] **Checkpoint round-trips through Postgres, not memory.** Four tables in the
       `langgraph` schema; a SIGKILLed worker's turn resumes in another process without
       re-calling the model, and both sabotages (resume disabled, in-memory saver) fail it.
-- [ ] **A triggered run scores a real cohort, is killed mid-flight, and resumes** —
-      **mostly met.** The wiring landed in T13 (`runtime/operator.py`), real recorded
-      scores exist (T6), and kill-and-resume is proven on Postgres (T10) and on Temporal
-      (T44). No single test drives trigger → real scores → kill → resume; that is what
-      keeps this open.
+- [x] **A triggered run scores a real cohort, is killed mid-flight, and resumes** —
+      `tests/live/test_real_cohort_durability.py` (2026-10-03): the real `bank-churn` file,
+      its recorded TabPFN scores, a trigger through ingress, the worker SIGKILLed with
+      scoring in flight, a fresh worker resuming. Scored twice (the dead start and the
+      retry), settled once, and the cycle ends `abstain`.
+  - **What it does not prove.** `bank-churn` has no observed revenue by design, so the run
+    never reaches a proposal, approval or rollout (human decision, 2026-10-03: use it for
+    the durability of scoring and of an honest refusal, and leave the registry alone). The
+    approval boundary under a kill is `test_approve_after_death`.
+  - **Seen:** `evaluate_cycle` has no heartbeat, so a worker killed mid-scoring is
+    replaced after `CYCLE_TIMEOUT` (120s), not the ~15s a killed turn takes. Resumed
+    121s after the new worker started. Bounded, and inside a cycle that SPEC.md budgets at
+    60s p95, but a heartbeat would shorten it if that wait ever matters.
+  - Lives in `tests/live` (needs `data/`); the worker harness gained `--real-cohort`,
+    `--hang-in-scorer` and `--lifetime`.
 - [ ] **Human review before side effects are wired**
 
 **What is actually true.** Every piece exists and is tested on its own:
@@ -554,9 +564,16 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
     that authorises its claim. It carries no tenant — that comes from the run.
 
 ### ✅ Checkpoint E — the end-to-end path runs
-- [ ] Trigger → score → target → draft → registry → Slack → approve → rollout
-- [ ] Killed while parked, resumed, still correct
-- [ ] Stale approval refused; unresolved effect not retried blind
+- [x] Trigger → score → target → draft → registry → Slack → approve → rollout
+  (redone on Temporal as T44, `test_approve_after_death`; Checkpoint L)
+- [x] Killed while parked, resumed, still correct
+  (T44, resumed in 9.2s; and a worker killed mid-scoring on a real cohort, Checkpoint C)
+- [x] Stale approval refused; unresolved effect not retried blind
+  (T43, `test_commit`, mutation-checked)
+  - Ticked 2026-10-03: these were left open when the work moved to Temporal. What none of
+    them proves is the path with the real model, or a real cohort that reaches a proposal
+    (`bank-churn` abstains; `kkbox-churn` would need its deferred re-score). That is the
+    `live` suite item under Phase 8.
 - [ ] Human review
 
 ---
@@ -724,11 +741,55 @@ draft *from*. Checkpoint C's first line stays open until then, deliberately. (Up
     checkpoint) remain harmless by construction: both are idempotent in effect.
 
 ### ✅ Checkpoint F — iteration 1 complete
-- [ ] All 28 success criteria in `SPEC.md` met or explicitly deferred with a reason
-- [ ] The `live` suite has been run at least once against the real model
-- [ ] Fitness tests and gates green; ratchets held
-- [ ] `/stack-audit` run and its findings addressed
-- [ ] The two named debts still named: PII in traces, secrets in environment variables
+- [x] All 28 success criteria in `SPEC.md` met or explicitly deferred with a reason —
+  met: 1-9, 11, 14, 15, 17-25 (8 with the caveat below); deferred to iteration 2: 10, 12, 13, 16, 26, 27, 28.
+  - 2026-10-04 mapping (tests that name the criterion): held by a named test: 1-6, 11,
+    14, 15, 17-25. No test names 7-10, 12, 13, 16, 26-28. 7 and 8 are covered under other
+    names (registry contract suite, spec criterion 7; claim semantics), so they need a
+    mapping, not new tests. 10, 12, 13 and 16 are the statistics criteria, and the spec
+    defers the inference rule to iteration 2 ("Terminal vs repeated analysis"). 26-28
+    (replayable trace, legible abstentions, p95/cost budget) have no test I can find.
+    **Decided by the owner, 2026-10-04: 10, 12, 13 and 16 are deferred to iteration 2.**
+    They test the statistical readout (covariate window, observed-only primary metric,
+    degraded covariate, degraded targeting), and SPEC.md already defers the inference rule
+    ("Terminal vs repeated analysis"), so there is no readout in iteration 1 to test. They
+    are deferred, not met.
+    **7 and 8 mapped 2026-10-04 (I had wrongly pointed at "registry criterion 7", which is
+    `SPEC-registry.md`'s numbering, not this list's):**
+    - 7 (the evaluation account cannot roll out): the scope is absent from the envelope of
+      every stage but rollout (`test_stage_authority.py::test_only_a_run_in_the_rollout_stage_carries_the_rollout_scope`),
+      a run without it gets `PolicyDenied` at the gateway before approval is consulted
+      (`test_identity_envelope.py::test_a_run_without_the_scope_is_refused_at_the_gateway`),
+      and the release gate `insufficient-scope-refused`. Passed 2026-10-04.
+    - 8 (an unresolved rollout is never retried blind): `test_unresolved_effects.py`
+      (effect lands, answer lost; the claim survives the process; a restarted process
+      parks on the reconcile wait and the registry sees no second rollout),
+      `tests/durability/test_commit.py::test_an_unresolved_rollout_parks_until_reconciled_then_deduplicates`
+      (real Postgres), and the gate `an-unresolved-effect-is-never-retried-blind`.
+      Passed 2026-10-04. **Caveat:** the "API that times out" is `FlakyRegistry`, an
+      in-memory client that applies the effect and drops the answer, not a real HTTP
+      timeout; the criterion says "a real API".
+    **26, 27 and 28 deferred to iteration 2 (owner's decision, 2026-10-04).** I looked
+    before writing tests, and a test would have passed only if the behaviour existed:
+    - 26 (every cycle reconstructable from a run id): the records exist but are scattered
+      (`trigger_cycles`, `frozen_cohorts`, the audit sink, `waits`, spans). There is no
+      reader that takes a run id and returns the sequence, and the cycle row does not name
+      its experiment version, so a cycle links to its cohort only by `data_as_of`.
+    - 27 (abstentions legible in Slack): an abstention is a registry record with an
+      explanation. Nothing posts one to Slack; Slack carries approval asks and plain notices.
+    - 28 (p95 <= 60s, cost recorded): no per-evaluation latency or cost is measured or
+      recorded. The 60s figure appears only as a timeout budget in the workflow.
+    Each needs a feature built first, so none was given a vacuous test.
+- [x] The `live` suite has been run at least once against the real model — 2026-10-04:
+  `test_ollama.py` + `test_real_cohorts.py` (qwen3:8b, real cohorts) 20 passed. Not re-run:
+  `test_real_scores.py`, `test_real_cohort_durability.py`, `test_kkbox_exploration.py` (they re-score).
+- [x] Fitness tests and gates green; ratchets held — 2026-10-04: `tests/fitness` full pass,
+  `tests/infra` + `tests/durability` pass, `evals run --gates` 20/20, changed-line coverage
+  93.1% (floor 80%). `stack_guard` flags only the deliberate hosted-scorer test removals.
+- [x] `/stack-audit` run and its findings addressed — run 2026-10-03/04; every finding
+  addressed (see "Stack audit, iteration 1" below). The owner confirmed the NTD floor.
+- [x] The two named debts still named: PII in traces, secrets in environment variables —
+  named in the audit entry below and in the 2026-09-30 state check; neither is fixed.
 
 ## Phase 7 — Experiment registry and narrow registry tools
 
@@ -1035,7 +1096,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - The image runs as the unprivileged `temporal` user, so its volume mounts at
     `/home/temporal`, the one directory it owns. A fresh named volume elsewhere comes
     up root-owned, and the server dies with `unable to open database file`.
-  - `docker-compose.yml` now pins `name: revenuecat-agent`. From a second checkout,
+  - `docker-compose.yml` now pins `name: revagent`. From a second checkout,
     compose would otherwise start a second project whose fixed container names
     collide with the first.
   - CI starts Temporal with `docker compose up -d --wait temporal`. It isn't a
@@ -1838,7 +1899,8 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
       sabotage-verified (granting the draft stage the rollout scope fails two of them).
     - **Layer 5: "prior decisions are durable memory" was false.** `MemoryStore` is
       in-process and nothing writes it. Now stated as not built; decisions live in registry
-      events and the audit trail, which are records, not memory. (The gap itself is still open.)
+      events and the audit trail, which are records, not memory. (The gap closed 2026-10-01:
+      migration `0021_memory_is_durable`; see Checkpoint A.)
     - **Layer 7: "two surfaces, registry and rollout API" was false.** One surface; a rollout
       is a guarded move to `live` in the registry (ADR-0010).
     - **Layer 3:** four wait kinds, not two. **Layer 9:** spans are per turn stage and gateway
@@ -1852,7 +1914,8 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   M3 `CYCLE_SPANS` for evaluate/ask/answer, M4 a re-ask re-checks the world and withdraws a
   question that moved, M5 a cancelled run ended cancelled (the workflow was reading the
   cancel as a refusal; turn and heartbeat were already correct), M6 a stale approval ends
-  visibly (approver told, named in `operator status`). Open: L1–L7.
+  visibly (approver told, named in `operator status`). The seven Lows were never itemised in the repo and are
+  dropped by the owner (2026-10-03); the `/stack-audit` re-run will surface any that matter.
   Merging with `main` (C2, H1, H3 there; `test_concurrency`) is its own task after these.
 - [ ] Human review
 
@@ -2140,6 +2203,66 @@ Recorded here because the commit landed without a ledger entry. Read
 per-invocation test databases done. Verified by running: `evals run --gates` 20/20.
 **Not re-run in this pass:** the full suite, so the pass counts quoted in older entries
 are historical. Still open: A3 (partial), the `/stack-audit` re-run, every "Human review"
-box, Checkpoint F, the audit's M2–M6 and L1–L7 follow-ups, the merge with `main`, the
-per-run lease decision (T21), the `MemoryStore` durability gap (Checkpoint A), PII in
+box, Checkpoint F, the merge with `main`, the
+per-run lease decision (T21), PII in
 traces, and secrets in environment variables.
+
+## Stack audit, iteration 1 (run 2026-10-03, fixes in `cc3386a`, 2026-10-04)
+
+Mechanical gate passed before the auditor ran. Findings: 1 Critical, 3 Important,
+6 Suggestions. Layers touched: 1, 3, 4b, 5, 7.
+
+- [x] **Critical: KKBox value at risk was about 2.5x too high.** It annualised
+  `last_actual_amount_paid x 12` (about NTD 21.6M against about 8.6M by plan length).
+  Now `amount x 365 / plan days`; a cancel-as-last-event row or a plan with no length
+  counts as zero. **Zeroing cancel rows is my decision, not the spec's**: it is
+  conservative and lowers value at risk a little further. No cohort feature changed, so
+  `data_as_of` and the recorded scores are untouched. Tests: `test_kkbox_mapping.py`.
+  Not re-run on the real cohort, so the ~NTD 8M figure is the audit's estimate.
+- [x] **Important 1 (a hosted refusal was retried and re-uploaded the cohort)** and
+  **Important 3 (egress evidence, retention, `gateway.execute` as the only path)**:
+  moot. The owner withdrew the hosted scorer, so `HostedTabPFNScorer`, `TracedScorer`,
+  `tabpfn-client` and the contract-3 exception are gone and no row leaves the machine.
+  ADR-0012 records the withdrawal. The `STACK.md` row 7 amendment is no longer needed.
+- [x] **Important 2: the value-at-risk floor had no currency**, so the gate was about 30x
+  weaker for KKBox (NTD) than for a USD cohort. Fixed 2026-10-04. A floor is now stated
+  per currency (`TargetingRule.floors_cents`, `[profiles.*.floors_cents]` in
+  `experiments/targeting.toml`); a cohort is held to the floor in its own currency, and a
+  currency with no stated floor is refused (`NoFloorForCurrency`) instead of judged by
+  another's. USD fingerprints are byte-identical, so no USD `experiment_version` moved
+  (pinned by `test_usd_is_the_default_...`); only an NTD cohort's version changes, since
+  its floor is a different number. The NTD floor, 150,000,000 cents (NTD 1.5M), is
+  $50,000 at about 30 NTD/USD; **confirmed by the owner, 2026-10-04.** Tests: `test_targeting.py` (floor held per currency, no floor refused, every
+  profile covers every registered currency, NTD floor = 30x USD floor).
+- [x] **Cheap Suggestions:** `.env` anchored to the repo root; duplicate `money` removed
+  from the Slack ask; osv-scanner action pinned to a commit SHA; ADR wording corrected.
+  Not done: the `check_egress` watermark recompute (the code it applied to is deleted).
+- Floor amendment: 32 tests and 46 assertions removed with the hosted scorer, recorded
+  in the constraints file under "Amendments to the floor". `stack_guard` flags them
+  against the previous commit regardless; against `main` the bar is intact.
+
+**Verified:** full `tests/fitness` passes; changed-line coverage 93.1% (floor 80%);
+`ruff`, `mypy`, `checkpoint_guard` and `replay_guard` clean.
+**Not re-run:** `tests/infra`, `tests/durability`, `evals run --gates`, `tests/live`.
+
+**Still open, for a human:** every "Human review" box, the T21 per-run lease trade-off,
+the two named debts (PII in traces, secrets in environment variables),
+Checkpoint D's live re-score (about 2.5 h), and K16.
+
+## The two named debts, first half (2026-10-04, ADR-0013)
+
+Neither debt is closed. What is now enforced, and what is left:
+
+- [x] **Spans export an allowlist** · layer 9 · `observability/redaction.py`,
+  `LoggingSink`. Unlisted attributes are dropped (their names are reported); free text is
+  truncated and masked. `test_span_attributes.py` holds every `tracer.span(...)` call site
+  to the list and the list to what is used.
+- [x] **Secrets enter through one door** · layer 10 · `storage/secrets.py`. `DATABASE_URL`,
+  `TABPFN_TOKEN`, the Slack bot token and signing secret are read there; a `Secret` does not
+  print or pickle; a revealed value is masked in exported spans. `test_secrets.py` holds the
+  modules that read the environment to three named, non-credential ones.
+- [ ] **Retention** (traces, transcripts, audit): not decided. Owner's number and a job.
+- [ ] **A real secret store, and rotation** (including the signing secret with approvals
+  waiting): a deployment choice, open. The source is still the process environment.
+- [ ] **Prose redaction is a net, not a proof**; transcripts and the audit sink are untouched.
+- [ ] `STACK.md`'s layer-10 row does not mention secrets (hook-protected; the owner may want it).

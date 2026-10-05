@@ -9,8 +9,11 @@ refuse when they are absent, and that is exactly the condition CI is in.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -26,7 +29,7 @@ from agentstack.prediction.churn import (
     ScoringError,
     fold_assignment,
 )
-from agentstack.prediction.engine import MODEL_VERSION, TabPFNScorer, _encode
+from agentstack.prediction.engine import MODEL_VERSION, TabPFNScorer, encode
 from agentstack.prediction.licence import LicenceRefused
 
 GOOD_TOKEN = "test-prediction-token"
@@ -82,13 +85,26 @@ def test_preflight_refuses_without_a_token(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_the_startup_command_exits_nonzero_without_a_token(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     """What a deploy runs before shifting traffic."""
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.setattr(licence, "ENV_FILE", tmp_path / ".env")  # the repo's own must not rescue it
 
     assert preflight_cli.main([]) == 1
     assert "TABPFN_TOKEN" in capsys.readouterr().err
+
+
+def test_the_startup_command_reads_the_token_from_dot_env(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """The worker runs this first, so it is what makes `.env` reach the worker."""
+    (tmp_path / ".env").write_text(f"TABPFN_TOKEN={GOOD_TOKEN}\n")
+    monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.setattr(licence, "ENV_FILE", tmp_path / ".env")
+
+    assert preflight_cli.main(["--token-only"]) == 0
+    assert "TABPFN_TOKEN is set" in capsys.readouterr().out
 
 
 def test_the_token_only_check_says_what_it_did_not_verify(
@@ -155,8 +171,8 @@ def test_category_encoding_does_not_depend_on_row_order() -> None:
     different model inputs, and `data_as_of` would stop implying the same scores."""
     frame = pd.DataFrame({"plan": ["b", "a", "c", "a"], "n": [1.0, 2.0, 3.0, 4.0]})
 
-    forward = _encode(frame)
-    backward = _encode(frame.iloc[::-1]).iloc[::-1]
+    forward = encode(frame)
+    backward = encode(frame.iloc[::-1]).iloc[::-1]
 
     assert list(forward["plan"]) == list(backward["plan"])
 
@@ -611,3 +627,171 @@ def test_the_worker_chooses_recorded_scores_only_when_asked_to(
     monkeypatch.setattr(RecordedScorers, "load", staticmethod(lambda: RecordedScorers({})))
     assert isinstance(worker_cli._scorer("recorded"), RecordedScorers)
     assert isinstance(worker_cli._scorer("tabpfn"), TabPFNScorer)
+
+
+def test_the_scripts_that_need_the_token_read_it_from_dot_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "record_scores", ROOT / "scripts/record_scores.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "# a comment\nTABPFN_TOKEN='from-the-file'\nOTHER=\"x y\"\nBARE=1\n\nnot a pair\n"
+    )
+    monkeypatch.delenv("TABPFN_TOKEN", raising=False)
+    monkeypatch.delenv("OTHER", raising=False)
+    monkeypatch.setenv("BARE", "from-the-shell")
+
+    module.load_env(env)
+
+    assert os.environ["TABPFN_TOKEN"] == "from-the-file"
+    assert os.environ["OTHER"] == "x y"
+    assert os.environ["BARE"] == "from-the-shell", "the real environment wins"
+    module.load_env(tmp_path / "missing.env")  # absent file is not an error
+
+
+# --- K14: recording the KKBox scores, locally ---
+
+
+def record_scores_module() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "record_scores", ROOT / "scripts/record_scores.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_kkbox_scores_file_is_git_ignored() -> None:
+    """Scores are a function of third-party rows; a committed file is those rows' shadow."""
+    import subprocess
+
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "data/scores/kkbox-churn.json"],
+        cwd=ROOT,
+        check=False,
+    )
+
+    assert ignored.returncode == 0, "data/scores/kkbox-churn.json would be committed"
+
+
+def test_the_local_scorer_reports_each_fold_as_it_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TABPFN_TOKEN", GOOD_TOKEN)
+    reported: list[tuple[int, int]] = []
+
+    class Fake:
+        def fit(self, x: object, y: object) -> None: ...
+
+        def predict_proba(self, x: pd.DataFrame) -> list[list[float]]:
+            return [[0.5, 0.5] for _ in range(len(x))]
+
+    TabPFNScorer(
+        folds=3,
+        build_classifier=lambda _checkpoint: Fake(),
+        progress=lambda done, total: reported.append((done, total)),
+    ).score(
+        features=pd.DataFrame({"x": [float(i) for i in range(30)]}),
+        labels=pd.Series([i % 2 for i in range(30)]),
+        dataset="d",
+        data_as_of="d:1",
+    )
+
+    assert reported == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_record_scores_prints_progress_and_writes_one_complete_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    module = record_scores_module()
+    frame = pd.DataFrame({"x": [0.0, 1.0, 0.0, 1.0], "is_churn": [0, 1, 0, 1]})
+    monkeypatch.setattr(module, "load_env", lambda: None)
+    monkeypatch.setattr(module, "SCORES_ROOT", tmp_path / "scores")
+    monkeypatch.setattr(
+        module.datasets,
+        "load",
+        lambda _key: type("S", (), {"frame": frame, "rows": 4, "data_as_of": "k:1"}),
+    )
+
+    class Scorer:
+        def __init__(self, *, progress: Callable[[int, int], None]) -> None:
+            self.progress = progress
+
+        def preflight(self) -> str:
+            return MODEL_VERSION
+
+        def score(self, **_: object) -> ChurnScores:
+            for fold in range(1, 6):
+                self.progress(fold, 5)
+            return scores(dataset="kkbox-churn", data_as_of="k:1", probabilities=(0.1,) * 4)
+
+    monkeypatch.setattr(module, "TabPFNScorer", Scorer)
+
+    assert module.main(["--datasets", "kkbox-churn"]) == 0
+
+    assert "fold 3/5" in capsys.readouterr().out
+    assert (
+        json.loads((tmp_path / "scores/kkbox-churn.json").read_text())["dataset"] == "kkbox-churn"
+    )
+
+
+def test_record_scores_writes_no_partial_file_when_scoring_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = record_scores_module()
+    frame = pd.DataFrame({"x": [0.0, 1.0], "is_churn": [0, 1]})
+    monkeypatch.setattr(module, "load_env", lambda: None)
+    monkeypatch.setattr(module, "SCORES_ROOT", tmp_path / "scores")
+    monkeypatch.setattr(
+        module.datasets,
+        "load",
+        lambda _key: type("S", (), {"frame": frame, "rows": 2, "data_as_of": "k:1"}),
+    )
+
+    class Scorer:
+        def __init__(self, *, progress: Callable[[int, int], None]) -> None: ...
+
+        def preflight(self) -> str:
+            return MODEL_VERSION
+
+        def score(self, **_: object) -> ChurnScores:
+            raise ScoringError("fold 3 died")
+
+    monkeypatch.setattr(module, "TabPFNScorer", Scorer)
+
+    with pytest.raises(ScoringError):
+        module.main(["--datasets", "kkbox-churn"])
+
+    assert not list((tmp_path / "scores").glob("*"))
+
+
+def test_record_scores_is_local_only_and_says_so() -> None:
+    text = (ROOT / "scripts/record_scores.py").read_text()
+
+    assert "IS committed" not in text
+    assert "not committed" in text.lower()
+
+
+def test_dot_env_is_found_from_the_repo_root_not_from_wherever_the_process_started(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A worker started elsewhere must not silently miss, or find a stranger's, .env."""
+    (tmp_path / ".env").write_text(f"TABPFN_TOKEN={GOOD_TOKEN}\n")
+    monkeypatch.setenv("TABPFN_TOKEN", "x")  # so teardown removes whatever load_env sets
+    monkeypatch.delenv("TABPFN_TOKEN")
+    monkeypatch.chdir(tmp_path)
+
+    licence.load_env()
+
+    assert licence.ENV_FILE.is_absolute()
+    assert (licence.ENV_FILE.parent / "pyproject.toml").is_file()
+    assert os.environ.get("TABPFN_TOKEN") != GOOD_TOKEN

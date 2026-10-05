@@ -93,6 +93,27 @@ def test_the_money_is_shown_in_money() -> None:
     assert ask().money() == "$242,120"
 
 
+def test_the_money_names_the_cohorts_currency_and_the_prompt_still_names_a_headcount() -> None:
+    """KKBox is billed in NTD. `$242,120` for NTD is a wrong number said confidently,
+    and swapping the unit must not cost the prompt its headcount."""
+    ntd = ask(currency="NTD")
+    rendered = " ".join(
+        [ntd.headline()]
+        + [f["text"] for b in render_blocks(ntd) if b.get("fields") for f in b["fields"]]
+    )
+
+    assert ntd.money() == "NTD 242,120"
+    assert "NTD 242,120" in rendered
+    assert "$" not in rendered
+    assert "~33 customers" in ntd.headline()
+    assert "%" in ntd.headline() and "33 customers" in ntd.headline()
+
+
+def test_an_ask_with_no_currency_is_usd() -> None:
+    assert "currency" not in ASK
+    assert ask().money() == "$242,120"
+
+
 @pytest.mark.parametrize(
     ("size", "percentage", "expected"),
     [(334, 10, 33), (1000, 10, 100), (334, 100, 334), (334, 0, 0), (0, 10, 0)],

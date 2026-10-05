@@ -14,7 +14,7 @@ import sys
 
 from agentstack.prediction.churn import ScoringError
 from agentstack.prediction.engine import TabPFNScorer
-from agentstack.prediction.licence import LicenceRefused, check_token
+from agentstack.prediction.licence import LicenceRefused, check_token, load_env
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    load_env()
     try:
         check_token()
         print("ok    TABPFN_TOKEN is set and plausibly shaped")

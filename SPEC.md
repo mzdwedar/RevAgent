@@ -11,7 +11,7 @@ These are inferences, not decisions you made. Correct any of them and I will rev
 
 1. **The registry is ours.** Experiment drafts live in a store this system owns and versions, not in a third party's.
 2. **The rollout is not ours.** Promoting a variant to 10% changes what real customers see, through an external API under a credential we hold. It is the only externally visible act in the system.
-3. **TabPFN comes from the sibling benchmark** (`~/Desktop/revenuecat/src/churn_tabpfn`) as a library, not a service. The benchmark's protocol — 5-fold stratified CV, seed-pinned, ROC-AUC/PR-AUC headline, calibration via Brier — carries over as the prediction contract.
+3. **TabPFN comes from the sibling benchmark** (`churn_tabpfn`) as a library, not a service. The benchmark's protocol — 5-fold stratified CV, seed-pinned, ROC-AUC/PR-AUC headline, calibration via Brier — carries over as the prediction contract.
 4. **Dev data is the Kaggle datasets** already registered in that benchmark. Production subscriber data comes from somewhere else and is an open question.
 5. **One capability, not several** (Phase 0 scope check). The trigger, the prediction, the policy, the draft and the rollout are steps of one workflow with one consumer — the run itself. No capability map; if the registry later grows its own consumers, that is when it earns a module id.
 6. **Approvers are a named Slack group**, not whoever happens to see the message.
@@ -25,7 +25,7 @@ These are inferences, not decisions you made. Correct any of them and I will rev
 
 ## Objective
 
-Each RevenueCat experiment becomes a **durable run that lives for weeks**.
+Each experiment becomes a **durable run that lives for weeks**.
 
 The run is **trigger-based, not scheduled**, and it responds to two kinds of trigger:
 

@@ -6,7 +6,7 @@
 # One project name wherever this file is run from. A second checkout of the repo is a
 # separate directory, and compose would otherwise start a second project whose fixed
 # container names collide with the first.
-name: revenuecat-agent
+name: revagent
 
 services:
   postgres:

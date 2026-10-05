@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agentstack.context import datasets
-from agentstack.context.targeting import Cohort, TargetingRefused, TargetingRule, select
+from agentstack.context.targeting import Cohort, TargetingRefused, TargetingRule, money, select
 from agentstack.policy.triggers import Outcome, TriggerEvent
 from agentstack.prediction.churn import ChurnScorer, ScoringError
 
@@ -107,6 +107,6 @@ def evaluate_trigger(
         cohort=cohort,
         reason=(
             f"{cohort.size} customers above {cohort.risk_threshold:.3f}, "
-            f"${cohort.annual_value_at_risk_cents / 100:,.0f} at risk"
+            f"{money(cohort.annual_value_at_risk_cents, cohort.currency)} at risk"
         ),
     )

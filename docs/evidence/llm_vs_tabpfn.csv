@@ -1,0 +1,10 @@
+dataset,arm,model,n,test_rows,seed,ok,failure,auc,revenue_captured_top10,seconds
+kkbox-churn,llm,qwen3:8b,200,100,0,1,,0.547619,0.0,181.6
+kkbox-churn,tabpfn,tabpfn-3.5,200,100,0,1,,0.884005,0.582439,0.0
+kkbox-churn,llm+tabpfn,qwen3:8b,200,100,0,1,,0.870574,0.582439,175.9
+kkbox-churn,llm,qwen3:8b,200,100,1,1,,0.608669,0.303678,171.7
+kkbox-churn,tabpfn,tabpfn-3.5,200,100,1,1,,0.857143,0.512335,0.0
+kkbox-churn,llm+tabpfn,qwen3:8b,200,100,1,1,,0.850427,0.512335,179.4
+kkbox-churn,llm,qwen3:8b,200,100,2,1,,0.448107,0.0,176.2
+kkbox-churn,tabpfn,tabpfn-3.5,200,100,2,1,,0.786325,0.337253,0.0
+kkbox-churn,llm+tabpfn,qwen3:8b,200,100,2,1,,0.595849,0.337253,179.2

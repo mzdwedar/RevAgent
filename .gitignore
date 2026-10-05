@@ -13,4 +13,9 @@ htmlcov/
 .tmp/
 data/*
 !data/manifest.json
+!data/open/
+# Recorded scores of third-party rows stay local, except those of the CC0 Netflix file.
+!data/scores/
+data/scores/*
+!data/scores/netflix-churn.json
 !.env.example

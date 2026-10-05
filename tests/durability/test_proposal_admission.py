@@ -15,6 +15,7 @@ action the wait holds: the payload that commits if the answer is yes.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,8 +23,9 @@ import pytest
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
+from agentstack.context.datasets import REGISTRY
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
-from agentstack.interfaces.slack import RecordingNotifier
+from agentstack.interfaces.slack import RecordingNotifier, render_blocks
 from agentstack.interfaces.wiring import ChannelAsker, Stack, answer, deliver
 from agentstack.model.contract import ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.runtime.drafting import PROPOSAL_DEVIATES, estimated_customers, intended_rollout
@@ -31,7 +33,7 @@ from agentstack.runtime.run import new_run
 from agentstack.runtime.temporal.activities import DEVIATES
 from agentstack.runtime.temporal.contracts import AskIntent, RunProgress, workflow_id
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
-from agentstack.runtime.waits import ResumeEvent, Wait, resume
+from agentstack.runtime.waits import ResumeEvent, Wait, WaitStore, resume
 from agentstack.storage.database import Database
 from agentstack.tools.experiments import ROLLOUT, prepare_rollout
 from tests.durability.test_approval_wait import PAYLOAD, posted, propose_and_wait
@@ -40,6 +42,7 @@ from tests.durability.test_commit import acted, commit_again, held
 from tests.durability.test_slack_answer import APPROVER, slack_click
 from tests.fitness.test_trigger_to_candidate import RULE, StubScorer
 from tests.temporal_support import (
+    DRAFT_TOOL,
     DraftingEngine,
     activities_for,
     asker_for,
@@ -189,6 +192,76 @@ def test_the_question_is_sized_from_the_action_it_binds_not_from_a_constant() ->
     ((_, asked),) = notifier.posted
     assert (asked.percentage, asked.estimated_customers) == (25, 120)
     assert asked.experiment_version == "exp:v1"
+    assert asked.currency == "USD"
+
+
+def test_the_question_carries_the_frozen_cohorts_currency() -> None:
+    """The figure the approver weighs is in the cohort's currency, read from the record
+    the cohort was frozen as, not assumed."""
+    notifier = RecordingNotifier()
+    cohort = FrozenCohort(
+        tenant="acme",
+        experiment_id="exp-7",
+        experiment_version="exp:v1",
+        data_as_of="kkbox-churn:abc",
+        targeting_model_version="stub-1",
+        risk_threshold=0.6,
+        size=480,
+        annual_value_at_risk_cents=1_000_000,
+        description={"currency": "NTD"},
+    )
+    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0))
+    run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
+    wait = Wait(
+        wait_id="wait-1",
+        run_id=run.run_id,
+        kind="human_approval",
+        state_snapshot="s",
+        created_at=datetime.now(UTC),
+        action_fingerprint=action.fingerprint(),
+        approval_summary="roll_out_variant_to_percentage — IRREVERSIBLE",
+    )
+
+    ChannelAsker(notifier).ask(run=run, wait=wait, cohort=cohort, action=action)
+
+    ((_, asked),) = notifier.posted
+    assert asked.money() == "NTD 10,000"
+
+
+def test_a_non_usd_cohort_goes_from_trigger_to_a_bound_approval_and_one_rollout(
+    stack: Stack, app_database: Database
+) -> None:
+    """K15, the CI variant: the KKBox cohort's shape (NTD, revenue observed, no hosted
+    scorer) on a tiny fixture and a deterministic scorer. The question names a headcount
+    and an NTD figure, the rollout waits for the answer, and the approval is bound to the
+    run, the fingerprint and the snapshot the wait recorded. The local variant is the
+    worker with `RecordedScorers` on the real recording."""
+    REGISTRY["fixture"] = replace(REGISTRY["fixture"], currency="NTD")
+
+    async def approve(env: Any, handle: Any, parked: RunProgress) -> RunProgress:
+        assert stack.registry_client.rollouts == [], "the rollout went out before anyone answered"
+        await answer(stack, env.client, **slack_click(parked))
+        return await acted(handle)
+
+    run_id, parked, done = propose_and_wait(stack, app_database, then=approve)
+
+    (asked,) = posted(stack)
+    assert asked.currency == "NTD" and asked.money() == "NTD 24,000"
+    assert asked.estimated_customers == 4
+    rendered = str(render_blocks(asked))
+    assert "Roll out to ~4 customers" in rendered and "NTD 24,000" in rendered
+    assert "$" not in rendered
+
+    wait = WaitStore(db=app_database).get(parked.awaiting_approval or "")
+    assert wait is not None and wait.action_fingerprint
+    approval = stack.approvals.find(
+        run_id=run_id,
+        action_fingerprint=wait.action_fingerprint,
+        state_snapshot=wait.state_snapshot,
+    )
+    assert approval is not None and approval.by_a_human is True
+    assert done.commits[0].status == "committed"
+    assert len(stack.registry_client.rollouts) == 1
 
 
 def park_deviating(stack: Stack, parked: RunProgress, **changes: Any) -> Wait:
@@ -254,3 +327,62 @@ def test_a_wait_holding_another_rollout_is_never_committed_even_approved(
     assert stack.registry_client.rollouts == []
     (record,) = [r for r in stack.audit.for_run(parked.run_id) if r.wait_id == wait.wait_id]
     assert (record.policy_decision, record.outcome) == (PROPOSAL_DEVIATES, "refused")
+
+
+class MistypingDraftEngine(DraftingEngine):
+    """Drafts, but copies the version it was told with one character added: what a model
+    does when "exactly as given" is a thing it has to retype."""
+
+    def _answer(self, request: ModelRequest) -> ModelResponse:
+        told = super()._answer(request)
+        return ModelResponse(
+            text=told.text,
+            proposals=tuple(
+                ToolCallProposal(
+                    tool=p.tool,
+                    arguments={
+                        **p.arguments,
+                        "experiment_version": p.arguments["experiment_version"] + "7",
+                    },
+                )
+                if p.tool == DRAFT_TOOL
+                else p
+                for p in told.proposals
+            ),
+        )
+
+
+def test_a_draft_of_a_cohort_nobody_froze_never_lands_and_ends_the_run(
+    stack: Stack, app_database: Database
+) -> None:
+    async def go() -> tuple[str, RunProgress]:
+        async with (
+            time_skipping() as env,
+            worker_on(
+                env.client,
+                "draft-admission",
+                app_database,
+                scorer=StubScorer(),
+                rule=RULE,
+                turns=turns_for(stack, MistypingDraftEngine()),
+                asker=asker_for(stack),
+            ),
+        ):
+            run_id = await deliver(
+                stack, env.client, PAYLOAD, source="a1", task_queue="draft-admission"
+            )
+            handle = env.client.get_workflow_handle_for(ExperimentWorkflow.run, workflow_id(run_id))
+            done = await progress_until(
+                handle, lambda p: len(p.turns) == 1 and p.waiting_on is not None
+            )
+            return run_id, done
+
+    run_id, done = asyncio.run(go())
+
+    (draft,) = done.turns
+    assert (draft.status, draft.receipts, draft.refusals) == ("rejected", 0, 1)
+    assert stack.registry_client.drafts == {}, "nothing was written to the registry"
+    assert posted(stack) == [] and done.asks == 0, "and with no draft there is nothing to roll out"
+    (refused,) = [r for r in stack.audit.for_run(run_id) if r.policy_decision == PROPOSAL_DEVIATES]
+    assert refused.outcome == "refused" and refused.resource == "acme/experiments/exp-7"
+    assert refused.principal == "agent-operator"

@@ -70,6 +70,9 @@ class TabPFNScorer:
     # that applies outside CUDA. The benchmark set this too; it is a limit on the
     # advertised operating range, not a correctness switch.
     ignore_pretraining_limits: bool = True
+    # Called as (folds done, folds) after each fold, so a long local run can say where it
+    # is. It sees two integers and nothing of the data.
+    progress: Callable[[int, int], None] | None = None
 
     @property
     def model_version(self) -> str:
@@ -131,7 +134,7 @@ class TabPFNScorer:
         if len(features) != len(labels):
             raise ScoringError(f"{len(features)} rows of features, {len(labels)} labels")
 
-        encoded = _encode(features)
+        encoded = encode(features)
         assignment = fold_assignment([int(v) for v in labels], folds=self.folds, seed=self.seed)
         probabilities = [0.0] * len(encoded)
 
@@ -145,6 +148,8 @@ class TabPFNScorer:
             predicted = classifier.predict_proba(encoded.iloc[held_out])
             for position, row in enumerate(held_out):
                 probabilities[row] = float(predicted[position][1])
+            if self.progress is not None:
+                self.progress(fold + 1, self.folds)
 
         return ChurnScores(
             dataset=dataset,
@@ -157,7 +162,7 @@ class TabPFNScorer:
         )
 
 
-def _encode(features: pd.DataFrame) -> pd.DataFrame:
+def encode(features: pd.DataFrame) -> pd.DataFrame:
     """Ordinal-encode non-numeric columns, by sorted category.
 
     Sorted, not by order of appearance: encoding that depends on row order would make
