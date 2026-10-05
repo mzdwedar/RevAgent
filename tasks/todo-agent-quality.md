@@ -69,8 +69,8 @@ active.
   - Depends: E2. Files: `evals/behaviour.py`, test.
 
 #### Checkpoint E-A (the baseline)
-- [ ] qwen3:8b × 10 cases × k=5 run on the *narrow* agent. pass@1, pass^k and the refusal distribution recorded in `docs/evidence/behaviour_qwen3_8b_narrow.jsonl`
-- [ ] Gates 20/20, `check_task.sh` green, `stack_guard` clean
+- [x] qwen3:8b × 10 cases × k=5 run on the *narrow* agent (temperature 0.7). pass@1, pass^k and the refusal distribution recorded in `docs/evidence/behaviour_qwen3_8b_narrow.jsonl`
+- [x] Gates 20/20, `check_task.sh` green, `stack_guard` clean
 - [ ] Review the failure reasons with you before widening anything
 
 ---
