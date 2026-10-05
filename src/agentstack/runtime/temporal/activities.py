@@ -28,6 +28,7 @@ from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import SpanSink, Tracer, VersionStamp
 from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.policy.offers import Bounds
 from agentstack.policy.triggers import (
     Outcome,
     TenantClaimRefused,
@@ -173,7 +174,11 @@ class RunActivities:
         rule: TargetingRule | None = None,
         turns: TurnHost | None = None,
         asker: Asker | None = None,
+        bounds: Bounds | None = None,
     ) -> None:
+        # The policy bounds every proposal is held to. Loaded from config at wiring, never
+        # from context; a test passes its own for a fixture too small for the real floor.
+        self._bounds = bounds or Bounds.load()
         # Required: an activity's caller is the workflow, which never holds spans (they
         # would be history). Without a sink, every span a turn or a commit emits is lost.
         self._traces = traces
@@ -378,6 +383,7 @@ class RunActivities:
                 run=run,
                 principal=envelope.principal,
                 prior_rollout_event=prior_rollout_event,
+                bounds=self._bounds,
             )
         elif intent.stage == DRAFT:
             admit = draft_admission(
@@ -385,6 +391,7 @@ class RunActivities:
                 audit=self._audit,
                 run=run,
                 principal=envelope.principal,
+                bounds=self._bounds,
             )
         tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=turns.deps.versions)
         try:
@@ -434,13 +441,17 @@ class RunActivities:
         """What this stage's turn is told, from the record. Never passed through history."""
         if intent.stage == DRAFT:
             return draft_instruction(
-                tenant=run.tenant, cycle=cycle, cohort=self._frozen(run.tenant, cycle)
+                tenant=run.tenant,
+                cycle=cycle,
+                cohort=self._frozen(run.tenant, cycle),
+                bounds=self._bounds,
             )
         assert prior_rollout_event is not None  # every non-draft stage here is a rollout turn
         return rollout_instruction(
             experiment_id=intent.experiment_id,
             cohort=self._frozen(run.tenant, cycle),
             prior_rollout_event=prior_rollout_event,
+            bounds=self._bounds,
         )
 
     def _prior_rollout_event(self, tenant: str, experiment_id: str) -> int:
@@ -512,6 +523,7 @@ class RunActivities:
                 request,
                 cohort,
                 prior_rollout_event=self._prior_rollout_event(run.tenant, intent.experiment_id),
+                bounds=self._bounds,
             )
             if deviates is not None:
                 self._refuse(
@@ -750,6 +762,7 @@ class RunActivities:
             request,
             self._frozen(run.tenant, cycle),
             prior_rollout_event=int(request.payload["prior_rollout_event"]),
+            bounds=self._bounds,
         )
         if deviates is not None:
             self._refuse(

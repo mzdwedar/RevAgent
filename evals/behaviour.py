@@ -29,6 +29,7 @@ from agentstack.runtime import drafting
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.drafting import (
     PROPOSAL_DEVIATES,
+    PROPOSAL_OUT_OF_BOUNDS,
     draft_admission,
     draft_instruction,
     rollout_admission,
@@ -37,7 +38,7 @@ from agentstack.runtime.drafting import (
 from agentstack.runtime.loop import run_turn
 from agentstack.runtime.run import new_run
 from agentstack.storage.database import Database
-from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT_STAGE
+from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT, ROLLOUT_STAGE
 from agentstack.tools.spec import Surface
 from evals.runner import TENANT, USER, freeze, stack_with
 from evals.stats import pass_at_1, pass_hat_k, wilson
@@ -49,10 +50,11 @@ STAGES = (DRAFT_STAGE, ROLLOUT_STAGE)
 # What became of a trial's proposal, read from the system's record of it.
 ADMITTED = "admitted"
 DEVIATES = "deviates"  # audited as proposal.deviates: well-formed, but not the record
+OUT_OF_BOUNDS = "out_of_bounds"  # audited as proposal.out_of_bounds: a choice outside policy
 MALFORMED = "malformed"  # refused by validation or exposure, before admission
 WRONG_TOOL = "wrong_tool"
 NO_PROPOSAL = "no_proposal"
-OUTCOMES = (ADMITTED, DEVIATES, MALFORMED, WRONG_TOOL, NO_PROPOSAL)
+OUTCOMES = (ADMITTED, DEVIATES, OUT_OF_BOUNDS, MALFORMED, WRONG_TOOL, NO_PROPOSAL)
 EXPECTATIONS = {"tool", "admitted", "non_empty"}
 # The keys that would make a case a script. A proposal in the case is what a gate has.
 SCRIPTED = ("message", "proposal", "proposals")
@@ -207,6 +209,9 @@ def run_behaviour_case(
     deviated = [
         r for r in stack.audit.for_run(run.run_id) if r.policy_decision == PROPOSAL_DEVIATES
     ]
+    out_of_bounds = [
+        r for r in stack.audit.for_run(run.run_id) if r.policy_decision == PROPOSAL_OUT_OF_BOUNDS
+    ]
     fields: list[str] = []
     if proposal is None:
         outcome = NO_PROPOSAL
@@ -217,11 +222,14 @@ def run_behaviour_case(
     elif deviated:
         outcome = DEVIATES
         fields = deviating_fields(result.refusals)
+    elif out_of_bounds:
+        outcome = OUT_OF_BOUNDS
+        fields = ["percentage" if proposal.tool == ROLLOUT.name else "offer"]
     elif result.refusals:
         outcome = MALFORMED
     else:
         outcome = ADMITTED
-    if outcome in (DEVIATES, MALFORMED) and expect.get("admitted", True):
+    if outcome in (DEVIATES, OUT_OF_BOUNDS, MALFORMED) and expect.get("admitted", True):
         reasons = result.refusals or ["it differs from the record"]
         failures.append(f"not admitted: {'; '.join(reasons)}")
     if proposal is not None and proposal.tool == expect["tool"]:

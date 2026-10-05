@@ -28,7 +28,12 @@ from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.interfaces.slack import RecordingNotifier, render_blocks
 from agentstack.interfaces.wiring import ChannelAsker, Stack, answer, deliver
 from agentstack.model.contract import ModelRequest, ModelResponse, ToolCallProposal
-from agentstack.runtime.drafting import PROPOSAL_DEVIATES, estimated_customers, intended_rollout
+from agentstack.runtime.drafting import (
+    PROPOSAL_DEVIATES,
+    PROPOSAL_OUT_OF_BOUNDS,
+    estimated_customers,
+    intended_rollout,
+)
 from agentstack.runtime.run import new_run
 from agentstack.runtime.temporal.activities import DEVIATES
 from agentstack.runtime.temporal.contracts import AskIntent, RunProgress, workflow_id
@@ -83,17 +88,19 @@ class DeviatingEngine(DraftingEngine):
         )
 
 
+# Differing from the record is a deviation; choosing a percentage outside the range is a
+# choice the model was free to make, refused as out of bounds (ADR-0015).
 DEVIATIONS = {
-    "everyone": {"percentage": 100},
-    "a-looser-threshold": {"risk_threshold": 0.05},
-    "another-cohort": {"experiment_version": "exp:not-the-frozen-one"},
-    "another-model": {"targeting_model_version": "some-other-model"},
+    "everyone": ({"percentage": 100}, PROPOSAL_OUT_OF_BOUNDS),
+    "a-looser-threshold": ({"risk_threshold": 0.05}, PROPOSAL_DEVIATES),
+    "another-cohort": ({"experiment_version": "exp:not-the-frozen-one"}, PROPOSAL_DEVIATES),
+    "another-model": ({"targeting_model_version": "some-other-model"}, PROPOSAL_DEVIATES),
 }
 
 
-@pytest.mark.parametrize("changes", DEVIATIONS.values(), ids=DEVIATIONS.keys())
+@pytest.mark.parametrize(("changes", "decision"), DEVIATIONS.values(), ids=DEVIATIONS.keys())
 def test_a_proposal_that_differs_from_the_frozen_cohort_is_never_put_to_a_person(
-    stack: Stack, app_database: Database, changes: dict[str, Any]
+    stack: Stack, app_database: Database, changes: dict[str, Any], decision: str
 ) -> None:
     async def go() -> tuple[str, RunProgress]:
         async with (
@@ -129,7 +136,7 @@ def test_a_proposal_that_differs_from_the_frozen_cohort_is_never_put_to_a_person
     assert parked == [], "nothing was parked that a person could be asked about later"
     assert stack.registry_client.rollouts == []
     # Refused, and on the record: under the agent that proposed it, before any gateway.
-    (refused,) = [r for r in stack.audit.for_run(run_id) if r.policy_decision == PROPOSAL_DEVIATES]
+    (refused,) = [r for r in stack.audit.for_run(run_id) if r.policy_decision == decision]
     assert refused.outcome == "refused" and refused.resource.endswith("/rollout")
     assert refused.principal == "agent-operator"
     # The gateway never saw the rollout: its only rollout record is the refusal above.
@@ -175,7 +182,7 @@ def test_the_question_is_sized_from_the_action_it_binds_not_from_a_constant() ->
         annual_value_at_risk_cents=1_000_000,
         description={},
     )
-    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0) | {"percentage": 25})
+    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0, percentage=25))
     run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
     wait = Wait(
         wait_id="wait-1",
@@ -210,7 +217,7 @@ def test_the_question_carries_the_frozen_cohorts_currency() -> None:
         annual_value_at_risk_cents=1_000_000,
         description={"currency": "NTD"},
     )
-    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0))
+    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0, percentage=10))
     run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
     wait = Wait(
         wait_id="wait-1",

@@ -1,0 +1,28 @@
+{
+  "id": "a-percentage-outside-the-range-never-reaches-a-person",
+  "part": 7,
+  "gate": true,
+  "description": "D3 (ADR-0015). The model chooses the rollout percentage and chooses 40, against a range of 5 to 15. Refused before anything is parked, so no question exists for a person to answer, and audited as proposal.out_of_bounds - a choice outside policy, not a deviation from the record.",
+  "message": "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:eval-v1 percentage=40 targeting_model_version=stub-1 risk_threshold=0.61 prior_rollout_event=0",
+  "scopes": [
+    "experiments:rollout"
+  ],
+  "frozen_cohort": {
+    "experiment_id": "exp-7",
+    "experiment_version": "exp:eval-v1",
+    "data_as_of": "eval:abc",
+    "targeting_model_version": "stub-1",
+    "risk_threshold": 0.61,
+    "size": 5000,
+    "annual_value_at_risk_cents": 1000000
+  },
+  "expect": {
+    "status": "rejected",
+    "rollouts": 0,
+    "approval_waits": 0,
+    "questions_posted": 0,
+    "audit_decisions": [
+      "proposal.out_of_bounds"
+    ]
+  }
+}

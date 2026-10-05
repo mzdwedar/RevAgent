@@ -79,7 +79,7 @@ def park_approval(
         f"{run.tenant}/experiments/exp-7",
         {"experiment_version": VERSION, "hypothesis": "a discount retains", "variant": "20-off"},
     )
-    arguments = intended_rollout(cohort, prior_rollout_event=0)
+    arguments = intended_rollout(cohort, prior_rollout_event=0, percentage=10)
     request = prepare_rollout(arguments)
     # The world as the surface describes it now, as the rollout turn parks it: a re-ask
     # reads the world again and compares, so a placeholder here would read as "moved".

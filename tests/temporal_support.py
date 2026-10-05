@@ -13,6 +13,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from agentstack.interfaces.wiring import (
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import CollectingSink, SpanSink
+from agentstack.policy.offers import Bounds
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
@@ -55,6 +57,11 @@ DEFAULT_TRIGGER_DEADLINE = timedelta(days=1)
 
 
 DRAFT_TOOL = "create_experiment_draft"
+# What the stub model chooses on a rollout turn: inside the signed-off 5-15% range.
+CHOSEN_PERCENTAGE = 10
+# The signed-off arm floor is 100 customers; the fixtures here have tens. Everything else
+# is the real policy, so the range and the catalog are still what config says.
+TEST_BOUNDS = replace(Bounds.load("default"), minimum_treatment_arm=1)
 ROLLOUT_TOOL = "roll_out_variant_to_percentage"
 
 
@@ -111,7 +118,7 @@ class DraftingEngine:
                 )
             }
             rollout |= {
-                "percentage": int(told["percentage"]),
+                "percentage": CHOSEN_PERCENTAGE,
                 "risk_threshold": float(told["risk_threshold"]),
                 "prior_rollout_event": int(told["prior_rollout_event"]),
             }
@@ -155,6 +162,7 @@ def activities_for(
     turns: TurnHost | None = None,
     asker: Asker | None = None,
     traces: SpanSink | None = None,
+    bounds: Bounds | None = None,
 ) -> RunActivities:
     return RunActivities(
         audit=AuditSink(db=db),
@@ -169,6 +177,7 @@ def activities_for(
         rule=rule,
         turns=turns,
         asker=asker,
+        bounds=bounds or TEST_BOUNDS,
     )
 
 

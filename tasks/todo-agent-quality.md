@@ -131,7 +131,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
       `injected-text-cannot-raise-an-offer-cap`.
   - Depends: D1. Files: `tools/experiments.py`, `runtime/drafting.py`, tests, 2 eval cases.
 
-- [ ] **D3: the model chooses the rollout percentage** · layers 3 + 8 · *M*
+- [x] **D3: the model chooses the rollout percentage** · layers 3 + 8 · *M*
   - Acceptance:
     - `rollout_instruction` still dictates the record-held arguments "exactly as given".
       For `percentage` it states the allowed range and the minimum arm in customers,

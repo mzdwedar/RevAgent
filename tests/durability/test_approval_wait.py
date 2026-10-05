@@ -22,7 +22,7 @@ from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.interfaces.slack import RecordingNotifier
 from agentstack.interfaces.wiring import Stack, build_stack, deliver
 from agentstack.policy.approvers import ApprovalReply
-from agentstack.runtime.drafting import ROLLOUT_PERCENTAGE, estimated_customers
+from agentstack.runtime.drafting import estimated_customers
 from agentstack.runtime.temporal.contracts import (
     REASK_EVERY,
     ROLLOUT,
@@ -35,6 +35,7 @@ from agentstack.storage.database import Database
 from agentstack.tools.experiments import ROLLOUT_STAGE
 from tests.fitness.test_trigger_to_candidate import RULE, WATERMARK, StubScorer
 from tests.temporal_support import (
+    CHOSEN_PERCENTAGE,
     DraftingEngine,
     asker_for,
     progress_until,
@@ -123,8 +124,8 @@ def test_a_proposal_is_drafted_then_put_to_a_person(stack: Stack, app_database: 
     assert frozen is not None
     assert ask.wait_id == wait.wait_id and ask.run_id == run_id
     assert ask.summary == wait.approval_summary
-    assert ask.percentage == ROLLOUT_PERCENTAGE
-    assert ask.estimated_customers == estimated_customers(frozen) == 4
+    assert ask.percentage == CHOSEN_PERCENTAGE
+    assert ask.estimated_customers == estimated_customers(frozen, CHOSEN_PERCENTAGE) == 4
     assert ask.annual_value_at_risk_cents == frozen.annual_value_at_risk_cents
     assert ask.experiment_version == frozen.experiment_version
 

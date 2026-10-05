@@ -127,7 +127,9 @@ def test_the_turn_is_told_its_ids_and_the_transcript_keeps_what_was_said(
     asked = [e.body for e in events if e.kind == "user"]
     drafting, proposing = asked  # two turns: the draft, then the rollout's proposal
     assert "create_experiment_draft" in drafting and "experiment_id=exp-7" in drafting
-    assert "roll_out_variant_to_percentage" in proposing and "percentage=10" in proposing
+    assert "roll_out_variant_to_percentage" in proposing
+    assert "percentage=" not in proposing, "the percentage is the model's to choose"
+    assert "from 5 to 15" in proposing or "5 to 15" in proposing
     assert any(e.kind == "agent" for e in events)
 
 

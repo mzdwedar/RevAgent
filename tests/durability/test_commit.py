@@ -177,7 +177,9 @@ def held(parked: RunProgress, stack: Stack, **changes: Any) -> dict[str, Any]:
         f"acme/experiments/{parked.cycles[0].experiment_id}/history", {}
     )
     prior_rollout_event = history["latest_rollout_event"]
-    return intended_rollout(cohort, prior_rollout_event=prior_rollout_event) | changes
+    return (
+        intended_rollout(cohort, prior_rollout_event=prior_rollout_event, percentage=10) | changes
+    )
 
 
 @pytest.mark.parametrize(

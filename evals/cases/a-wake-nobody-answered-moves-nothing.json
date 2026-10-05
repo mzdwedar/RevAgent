@@ -11,7 +11,7 @@
     "data_as_of": "eval:abc",
     "targeting_model_version": "stub-1",
     "risk_threshold": 0.61,
-    "size": 480,
+    "size": 1000,
     "annual_value_at_risk_cents": 1000000
   },
   "wake_unanswered": true,
