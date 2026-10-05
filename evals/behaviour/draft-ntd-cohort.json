@@ -1,0 +1,22 @@
+{
+  "id": "draft-ntd-cohort",
+  "stage": "draft",
+  "description": "The KKBox cohort, in NTD.",
+  "cohort": {
+    "experiment_id": "exp-b04",
+    "experiment_version": "exp:expb04b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.24,
+    "size": 4987,
+    "annual_value_at_risk_cents": 1000000,
+    "currency": "NTD"
+  },
+  "expect": {
+    "tool": "create_experiment_draft",
+    "non_empty": [
+      "hypothesis",
+      "variant"
+    ]
+  }
+}

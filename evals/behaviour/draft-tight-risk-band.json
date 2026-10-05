@@ -1,0 +1,28 @@
+{
+  "id": "draft-tight-risk-band",
+  "stage": "draft",
+  "description": "Every customer at nearly the same risk: nothing to segment on.",
+  "cohort": {
+    "experiment_id": "exp-b06",
+    "experiment_version": "exp:expb06b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.5,
+    "size": 2400,
+    "annual_value_at_risk_cents": 12000000,
+    "risk_quantiles": [
+      0.5,
+      0.51,
+      0.52,
+      0.53,
+      0.54
+    ]
+  },
+  "expect": {
+    "tool": "create_experiment_draft",
+    "non_empty": [
+      "hypothesis",
+      "variant"
+    ]
+  }
+}

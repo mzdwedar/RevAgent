@@ -1,0 +1,22 @@
+{
+  "id": "draft-euro-cohort",
+  "stage": "draft",
+  "description": "A euro-denominated cohort; the approver must not be told dollars.",
+  "cohort": {
+    "experiment_id": "exp-b03",
+    "experiment_version": "exp:expb03b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.61,
+    "size": 1200,
+    "annual_value_at_risk_cents": 7200000,
+    "currency": "EUR"
+  },
+  "expect": {
+    "tool": "create_experiment_draft",
+    "non_empty": [
+      "hypothesis",
+      "variant"
+    ]
+  }
+}

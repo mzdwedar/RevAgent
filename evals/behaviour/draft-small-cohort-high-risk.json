@@ -1,0 +1,28 @@
+{
+  "id": "draft-small-cohort-high-risk",
+  "stage": "draft",
+  "description": "A small cohort at very high churn risk.",
+  "cohort": {
+    "experiment_id": "exp-b01",
+    "experiment_version": "exp:expb01b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.85,
+    "size": 312,
+    "annual_value_at_risk_cents": 1560000,
+    "risk_quantiles": [
+      0.85,
+      0.88,
+      0.91,
+      0.94,
+      0.97
+    ]
+  },
+  "expect": {
+    "tool": "create_experiment_draft",
+    "non_empty": [
+      "hypothesis",
+      "variant"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "draft-yen-cohort",
+  "stage": "draft",
+  "description": "A zero-decimal currency.",
+  "cohort": {
+    "experiment_id": "exp-b05",
+    "experiment_version": "exp:expb05b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.7,
+    "size": 640,
+    "annual_value_at_risk_cents": 32000000,
+    "currency": "JPY"
+  },
+  "expect": {
+    "tool": "create_experiment_draft",
+    "non_empty": [
+      "hypothesis",
+      "variant"
+    ]
+  }
+}

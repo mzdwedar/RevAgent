@@ -1,0 +1,28 @@
+{
+  "id": "draft-large-cohort-low-threshold",
+  "stage": "draft",
+  "description": "A large cohort at a low threshold: broad, mildly at risk.",
+  "cohort": {
+    "experiment_id": "exp-b02",
+    "experiment_version": "exp:expb02b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.24,
+    "size": 18000,
+    "annual_value_at_risk_cents": 90000000,
+    "risk_quantiles": [
+      0.24,
+      0.3,
+      0.4,
+      0.55,
+      0.8
+    ]
+  },
+  "expect": {
+    "tool": "create_experiment_draft",
+    "non_empty": [
+      "hypothesis",
+      "variant"
+    ]
+  }
+}

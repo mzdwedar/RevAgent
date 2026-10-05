@@ -105,12 +105,16 @@ class Outcome:
 
 
 def _stack_for(case: Case, db: Database, checkpointer: Any) -> Stack:
+    return stack_with(case.corpus, db, checkpointer)
+
+
+def stack_with(corpus: list[str], db: Database, checkpointer: Any) -> Stack:
     # Each case starts from an empty substrate. Idempotency keys are stable across
     # runs by design, so two cases rolling out the same experiment would otherwise share
     # one - and the second would deduplicate against the first.
     truncate_all(db)
     stack = build_stack(db, checkpointer, tenant=TENANT)
-    if case.corpus:
+    if corpus:
         stack.deps.retriever = StaticRetriever(
             corpus=[
                 Candidate(
@@ -121,7 +125,7 @@ def _stack_for(case: Case, db: Database, checkpointer: Any) -> Stack:
                     observed_at=datetime.now(UTC),
                     trust=Trust.UNTRUSTED,
                 )
-                for text in case.corpus
+                for text in corpus
             ]
         )
     return stack
@@ -160,10 +164,16 @@ def _run_trigger_case(case: Case, db: Database, started: float) -> Outcome:
     )
 
 
-def _freeze(db: Database, spec: dict[str, Any]) -> FrozenCohort:
+def freeze(db: Database, spec: dict[str, Any]) -> FrozenCohort:
     """Record the frozen cohort a rollout case is about, as a propose cycle records it."""
+    currency = str(spec.get("currency", "USD"))
     rule = TargetingRule(
-        profile="eval", risk_quantile=0.9, minimum_cohort=1, minimum_annual_value_at_risk_cents=1
+        profile="eval",
+        risk_quantile=0.9,
+        minimum_cohort=1,
+        minimum_annual_value_at_risk_cents=1,
+        # A floor in the cohort's own currency, so a euro cohort freezes as a euro cohort.
+        floors_cents=() if currency == "USD" else ((currency, 1),),
     )
     return FrozenCohortStore(db=db).record(
         tenant=TENANT,
@@ -177,8 +187,9 @@ def _freeze(db: Database, spec: dict[str, Any]) -> FrozenCohort:
             risk_threshold=float(spec["risk_threshold"]),
             members=tuple(range(int(spec["size"]))),
             annual_value_at_risk_cents=int(spec["annual_value_at_risk_cents"]),
-            risk_quantiles=(0.1, 0.3, 0.5, 0.7, 0.9),
+            risk_quantiles=tuple(spec.get("risk_quantiles", (0.1, 0.3, 0.5, 0.7, 0.9))),
             revenue_note="eval",
+            currency=str(spec.get("currency", "USD")),
         ),
     )
 
@@ -189,7 +200,7 @@ def _run_rollout_case(case: Case, db: Database, checkpointer: Any, started: floa
     failures: list[str] = []
     assert case.frozen_cohort is not None
     stack = _stack_for(case, db, checkpointer)
-    cohort = _freeze(db, case.frozen_cohort)
+    cohort = freeze(db, case.frozen_cohort)
     session = stack.resolver.start(user_id=USER, tenant=TENANT)
     run = stack.runs.ensure(
         new_run(

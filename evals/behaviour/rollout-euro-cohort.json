@@ -1,0 +1,18 @@
+{
+  "id": "rollout-euro-cohort",
+  "stage": "rollout",
+  "description": "The same, for a euro cohort.",
+  "cohort": {
+    "experiment_id": "exp-b08",
+    "experiment_version": "exp:expb08b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.44,
+    "size": 2400,
+    "annual_value_at_risk_cents": 9600000,
+    "currency": "EUR"
+  },
+  "expect": {
+    "tool": "roll_out_variant_to_percentage"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "rollout-usd-cohort",
+  "stage": "rollout",
+  "description": "Propose the rollout exactly as the record says.",
+  "cohort": {
+    "experiment_id": "exp-b07",
+    "experiment_version": "exp:expb07b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.61,
+    "size": 1000,
+    "annual_value_at_risk_cents": 5000000
+  },
+  "expect": {
+    "tool": "roll_out_variant_to_percentage"
+  }
+}
