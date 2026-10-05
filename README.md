@@ -33,25 +33,41 @@ person approves that exact rollout.
 
 ```mermaid
 flowchart TD
-  A["1. Trigger<br/>subscription events arrive"]
-  B["2. Score<br/>TabPFN-3.5 rates churn risk"]
-  C["3. Target<br/>policy freezes the cohort"]
-  D["4. Draft<br/>LLM writes the experiment"]
-  E{"5. Approve<br/>a person, in Slack"}
-  F["6. Roll out<br/>offering or paywall variant,<br/>committed exactly once"]
-  G["Nothing moves"]
-  A --> B --> C --> D --> E
-  E -->|approved| F
-  E -->|no answer| G
+  subgraph IT1["Iteration 1: current scope (built)"]
+    direction TB
+    A["1. Trigger<br/>subscription events arrive"]
+    B["2. Score<br/>TabPFN-3.5 rates churn risk"]
+    C["3. Target<br/>policy freezes the cohort"]
+    D["4. Draft<br/>LLM writes the experiment"]
+    E{"5. Approve<br/>a person, in Slack"}
+    F["6. Roll out<br/>offering or paywall variant,<br/>committed exactly once"]
+    G["Nothing moves"]
+    A --> B --> C --> D --> E
+    E -->|approved| F
+    E -->|no answer| G
+  end
+  subgraph IT2["Iteration 2: designed, not built"]
+    direction TB
+    H["7. Measure<br/>ANCOVA, with a TabPFN regressor<br/>as the covariate"]
+    I["8. Decide<br/>Incremental Net Saved Value:<br/>did it save more than it cost?"]
+    J["Promote or stop"]
+    H --> I --> J
+  end
+  F -.-> H
   classDef model fill:#dbeafe,stroke:#2563eb,color:#111
   classDef human fill:#fef3c7,stroke:#d97706,color:#111
   classDef code fill:#f3f4f6,stroke:#6b7280,color:#111
+  classDef later fill:#fff,stroke:#9ca3af,stroke-dasharray:4 3,color:#555
   class B,D model
   class E human
   class A,C,F,G code
+  class H,I,J later
+  style IT1 fill:none,stroke:#2563eb,stroke-width:3px
+  style IT2 fill:none,stroke:#9ca3af,stroke-dasharray:6 4
 ```
 
-Blue steps are models, amber is a person, grey is plain code.
+Blue steps are models, amber is a person, grey is plain code. The solid rectangle is what
+this project builds today. The dashed one is designed in [`SPEC.md`](SPEC.md) and not built.
 
 Every step runs inside a durable Temporal workflow with a Postgres record. A run survives a
 worker being killed, and a retried rollout is deduplicated instead of sent twice.
