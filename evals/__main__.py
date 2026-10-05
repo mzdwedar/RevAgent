@@ -15,7 +15,14 @@ from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import drop_database, rebuild_database, run_scoped
-from evals.behaviour import engine_for, load_behaviour_cases, run_trials, summarise
+from evals.behaviour import (
+    OUTCOMES,
+    distribution,
+    engine_for,
+    load_behaviour_cases,
+    run_trials,
+    summarise,
+)
 from evals.runner import load_cases, run_case
 
 
@@ -108,6 +115,12 @@ def _behave(args: argparse.Namespace) -> int:
             f"pass@1 {summary.pass_at_1:.2f} (95% Wilson {low:.2f}-{high:.2f})   "
             f"pass^{args.k} {summary.pass_hat_k:.2f} of cases passed every trial"
         )
+        for name, counts in distribution(trials).items():
+            total = sum(counts.values())
+            shares = "  ".join(
+                f"{kind} {counts[kind]}/{total}" for kind in OUTCOMES if kind in counts
+            )
+            print(f"outcomes, {name}: {shares}")
         return 0
 
     return _on_a_substrate(work)

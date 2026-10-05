@@ -123,7 +123,9 @@ def test_trials_are_appended_and_a_second_run_skips_what_is_already_there(
     assert len(rows) == 3
     assert set(rows[0]) == {
         "case", "engine", "model", "seed", "prompt_hash", "passed", "failures", "seconds",
+        "outcome", "fields",
     }  # fmt: skip
+    assert rows[0]["outcome"] == "admitted"
     assert rows[0]["model"] == "drafting-stub" and rows[0]["prompt_hash"] == prompt_hash(case)
 
     second = run_trials([case], factory, engine="stub", k=5, db=app_database,

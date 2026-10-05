@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -44,6 +45,14 @@ from evals.stats import pass_at_1, pass_hat_k, wilson
 BEHAVIOUR_DIR = Path(__file__).resolve().parent / "behaviour"
 
 STAGES = (DRAFT_STAGE, ROLLOUT_STAGE)
+
+# What became of a trial's proposal, read from the system's record of it.
+ADMITTED = "admitted"
+DEVIATES = "deviates"  # audited as proposal.deviates: well-formed, but not the record
+MALFORMED = "malformed"  # refused by validation or exposure, before admission
+WRONG_TOOL = "wrong_tool"
+NO_PROPOSAL = "no_proposal"
+OUTCOMES = (ADMITTED, DEVIATES, MALFORMED, WRONG_TOOL, NO_PROPOSAL)
 EXPECTATIONS = {"tool", "admitted", "non_empty"}
 # The keys that would make a case a script. A proposal in the case is what a gate has.
 SCRIPTED = ("message", "proposal", "proposals")
@@ -99,6 +108,24 @@ class BehaviourOutcome:
     failures: list[str]
     seconds: float
     tool: str | None = None
+    outcome: str = ""
+    # For a deviation, the fields of the proposal that differed from the record.
+    fields: list[str] = field(default_factory=list)
+
+
+def deviating_fields(reasons: Sequence[str]) -> list[str]:
+    """The fields a refusal says differed. The reasons are the system's own text
+    (`rollout_deviation`, `draft_deviation`), not anything the model wrote."""
+    found: list[str] = []
+    for reason in reasons:
+        match = re.search(r"it differs in ([\w, ]+?)\. A proposal", reason)
+        if match:
+            found.extend(name.strip() for name in match.group(1).split(","))
+        elif "names experiment_version" in reason:
+            found.append("experiment_version")
+        elif "is not the experiment frozen cohort" in reason:
+            found.append("resource")
+    return found
 
 
 def load_behaviour_cases() -> list[BehaviourCase]:
@@ -177,28 +204,39 @@ def run_behaviour_case(
     failures: list[str] = []
     proposal = recording.proposals[0] if recording.proposals else None
     expect = case.expect
+    deviated = [
+        r for r in stack.audit.for_run(run.run_id) if r.policy_decision == PROPOSAL_DEVIATES
+    ]
+    fields: list[str] = []
     if proposal is None:
+        outcome = NO_PROPOSAL
         failures.append("no proposal: the model proposed no tool call")
     elif proposal.tool != expect["tool"]:
+        outcome = WRONG_TOOL
         failures.append(f"chose {proposal.tool}, expected {expect['tool']}")
+    elif deviated:
+        outcome = DEVIATES
+        fields = deviating_fields(result.refusals)
+    elif result.refusals:
+        outcome = MALFORMED
     else:
+        outcome = ADMITTED
+    if outcome in (DEVIATES, MALFORMED) and expect.get("admitted", True):
+        reasons = result.refusals or ["it differs from the record"]
+        failures.append(f"not admitted: {'; '.join(reasons)}")
+    if proposal is not None and proposal.tool == expect["tool"]:
         for name in expect.get("non_empty", []):
             value = proposal.arguments.get(name)
             if not isinstance(value, str) or not value.strip():
                 failures.append(f"{name} is missing or empty")
-    if proposal is not None and expect.get("admitted", True):
-        deviated = [
-            r for r in stack.audit.for_run(run.run_id) if r.policy_decision == PROPOSAL_DEVIATES
-        ]
-        if deviated or result.refusals:
-            reasons = result.refusals or ["it differs from the record"]
-            failures.append(f"not admitted: {'; '.join(reasons)}")
     return BehaviourOutcome(
         case=case,
         passed=not failures,
         failures=failures,
         seconds=time.perf_counter() - started,
         tool=None if proposal is None else proposal.tool,
+        outcome=outcome,
+        fields=fields,
     )
 
 
@@ -241,6 +279,9 @@ class Trial:
     passed: bool
     failures: list[str]
     seconds: float
+    # Rows logged before E3 carry neither.
+    outcome: str = ""
+    fields: list[str] = field(default_factory=list)
 
     @property
     def key(self) -> tuple[str, str, int, str]:
@@ -286,6 +327,8 @@ def run_trials(
                     passed=outcome.passed,
                     failures=outcome.failures,
                     seconds=round(outcome.seconds, 3),
+                    outcome=outcome.outcome,
+                    fields=outcome.fields,
                 )
                 log.parent.mkdir(parents=True, exist_ok=True)
                 with log.open("a") as handle:
@@ -329,3 +372,14 @@ def summarise(trials: Sequence[Trial]) -> Summary:
         if per_case
         else 0.0,
     )
+
+
+def distribution(trials: Sequence[Trial]) -> dict[str, dict[str, int]]:
+    """How many trials ended each way, per engine. Rows from before the outcome was
+    recorded are left out rather than counted as something they were not."""
+    counts: dict[str, dict[str, int]] = {}
+    for trial in trials:
+        if trial.outcome:
+            per = counts.setdefault(trial.engine, {})
+            per[trial.outcome] = per.get(trial.outcome, 0) + 1
+    return counts

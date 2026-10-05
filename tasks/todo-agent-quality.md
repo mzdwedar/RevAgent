@@ -58,7 +58,7 @@ active.
     hand-computed values. Live smoke test in `tests/live/test_behaviour_live.py` (k=1, one case).
   - Depends: E1. Files: `evals/behaviour.py`, `evals/stats.py`, live test.
 
-- [ ] **E3: proposal-refusal rate per model** · layer 9 · *S*
+- [x] **E3: proposal-refusal rate per model** · layer 9 · *S*
   - Acceptance:
     - Per trial, classify the outcome from the audit trail and turn result as one of:
       admitted, `proposal.deviates` (which field differed), malformed (validation), wrong
