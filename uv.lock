@@ -2576,7 +2576,7 @@ wheels = [
 ]
 
 [[package]]
-name = "revenuecat-agent"
+name = "revagent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

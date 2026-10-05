@@ -133,7 +133,7 @@ criteria are met.
   - Verify: new `tests/fitness/test_data_snapshot.py` — the same snapshot yields the
     same watermark and the same row count; the documented leakage columns stay dropped.
   - Depends: none. Files: ~3.
-  - **Deviation:** `churn_tabpfn`'s source no longer exists. `~/Desktop/revenuecat` holds
+  - **Deviation:** `churn_tabpfn`'s source no longer exists. The benchmark checkout holds
     only `README.md`, `pyproject.toml` and a lockfile; the package is installed editable
     from a `src/` that is gone, and there is no git history there to recover it. The
     registry and cleaning were rebuilt in `agentstack/context/datasets.py` from the
@@ -1096,7 +1096,7 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
   - The image runs as the unprivileged `temporal` user, so its volume mounts at
     `/home/temporal`, the one directory it owns. A fresh named volume elsewhere comes
     up root-owned, and the server dies with `unable to open database file`.
-  - `docker-compose.yml` now pins `name: revenuecat-agent`. From a second checkout,
+  - `docker-compose.yml` now pins `name: revagent`. From a second checkout,
     compose would otherwise start a second project whose fixed container names
     collide with the first.
   - CI starts Temporal with `docker compose up -d --wait temporal`. It isn't a
@@ -1899,7 +1899,8 @@ numbers (C29–C45) are the spec's; SPEC.md criteria 1–28 must still hold afte
       sabotage-verified (granting the draft stage the rollout scope fails two of them).
     - **Layer 5: "prior decisions are durable memory" was false.** `MemoryStore` is
       in-process and nothing writes it. Now stated as not built; decisions live in registry
-      events and the audit trail, which are records, not memory. (The gap itself is still open.)
+      events and the audit trail, which are records, not memory. (The gap closed 2026-10-01:
+      migration `0021_memory_is_durable`; see Checkpoint A.)
     - **Layer 7: "two surfaces, registry and rollout API" was false.** One surface; a rollout
       is a guarded move to `live` in the registry (ADR-0010).
     - **Layer 3:** four wait kinds, not two. **Layer 9:** spans are per turn stage and gateway

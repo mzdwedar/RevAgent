@@ -17,6 +17,7 @@ import asyncio
 import json
 import time
 import uuid
+from pathlib import Path
 
 import agentstack
 from agentstack.context.datasets import load
@@ -32,10 +33,17 @@ from agentstack.tools.spec import Surface
 
 TENANT = "acme"
 TIMEOUT_S = 900.0  # one draft turn on qwen3:8b, with a retry or two
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _repo_relative(path: str) -> str:
+    """The path from the repo root, so the evidence names no one's home directory."""
+    resolved = Path(path).resolve()
+    return str(resolved.relative_to(ROOT)) if resolved.is_relative_to(ROOT) else str(resolved)
 
 
 async def main(task_queue: str, dataset: str) -> None:
-    print(f"code     : {agentstack.__file__}")
+    print(f"code     : {_repo_relative(agentstack.__file__)}")
     snapshot = load(dataset)
     experiment_id = f"exp-{uuid.uuid4().hex[:6]}"
     payload = {

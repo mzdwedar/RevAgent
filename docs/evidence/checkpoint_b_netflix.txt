@@ -1,4 +1,4 @@
-code     : /Users/mohamedzeyad/Desktop/revenuecat-agent-hackathon/src/agentstack/__init__.py
+code     : src/agentstack/__init__.py
 trigger  : {'kind': 'data_arrival', 'experiment_id': 'exp-aa79b3', 'data_as_of': 'netflix-churn:b53d396f773a376a', 'tenant': 'acme'}
 waited   : 13s; cycles=1 turns=1
 

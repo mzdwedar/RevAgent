@@ -8,12 +8,12 @@ Goal: 1st place in Prior Labs' TabPFN-3.5 hackathon, judged by a panel. Time lef
 - **Story:** "retention science on day one for an indie developer with 200 subscribers."
 - **Submission:** RevAgent is the main entry; revbench is linked as a second entry.
 
-Already done (worktree `~/Desktop/revenuecat-agent-hackathon`, branch `hackathon-cold-start`, uncommitted):
+Already done (the hackathon worktree, branch `hackathon-cold-start`, uncommitted):
 - `scripts/cold_start_curve.py`
 - `docs/evidence/cold_start.{csv,png}`: 270 fits; TabPFN-3.5 beats boosted trees and logistic regression at every n on telecom, bank and KKBox. KKBox n=200: AUC 0.844 vs 0.733; top-10% captures 81% vs 61% of churned revenue.
 
 ### Constraints found in the code
-- `revenuecat-agent` is shared with other sessions. All work stays in the hackathon worktree; commit only our hunks.
+- The main checkout is shared with other sessions. All work stays in the hackathon worktree; commit only our hunks.
 - `tasks/todo.md` and `tasks/todo-kkbox-cohort.md` each have 16 unchecked tasks from other work. **Do not overwrite them.** The breakdown goes to `tasks/plan-hackathon.md` + `tasks/todo-hackathon.md`, following the existing `-kkbox-cohort` naming.
 - **Gates:** `scripts/check_fast.sh` runs ruff, format, strict mypy on `agentstack`, import-linter layer contracts and fitness tests. Tools must declare complete `ToolSpec` metadata (`src/agentstack/tools/spec.py`; checked by `tests/fitness/test_tool_registry.py`).
 - **The LLM already orchestrates:** `OllamaEngine` (`src/agentstack/model/ollama_engine.py`, `qwen3:8b`, installed locally) proposes tool calls from `runtime/nodes.py:call_model`. TabPFN scoring is a fixed pipeline step (`prediction/engine.py`, `context/targeting.py`) that the LLM never sees through a tool.

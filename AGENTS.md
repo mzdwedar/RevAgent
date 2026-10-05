@@ -1,4 +1,4 @@
-# revenuecat-agent (agent instructions)
+# RevAgent (agent instructions)
 
 A production, multi-user, side-effecting AI agent, built to the invariants in
 *The Agent Stack*.
