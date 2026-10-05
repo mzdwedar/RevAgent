@@ -164,6 +164,16 @@ subscriber at a cutoff that nothing after it can leak past.
 5. **Roll out.** The rollout (for example, 10% of the cohort to a variant offering) commits
    exactly once.
 
+This is the approval message from the Netflix run in step 4:
+
+![Slack approval message for a 10% rollout](docs/evidence/slack_approval.png)
+
+It names the irreversible act and every parameter the approval covers, who is acting and on
+whose behalf, how many customers it reaches and the revenue at risk, and what reversing
+costs. The footer ties the approval to the run id and wait id, and says it expires if the
+data moves. Approve and Refuse are the only two answers. No answer means nothing is rolled
+out.
+
 The rollout is the only act a customer can see. The primary metric is **Incremental Net
 Saved Value**, with conversion and churn as guardrails. The point is to reach subscribers an
 offer can *persuade*, not everyone at risk. Full spec: [`SPEC.md`](SPEC.md).
