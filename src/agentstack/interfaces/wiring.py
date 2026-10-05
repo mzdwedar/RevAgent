@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from temporalio.client import Client
 
@@ -34,6 +34,7 @@ from agentstack.observability.spans import LoggingSink, SpanSink, VersionStamp
 from agentstack.policy.approval import ApprovalStore
 from agentstack.policy.approvers import ApproverDirectory
 from agentstack.policy.envelope import IdentityEnvelope
+from agentstack.policy.offers import Bounds, describe_offer, offer_cost
 from agentstack.policy.triggers import TriggerEvent
 from agentstack.runtime.approvals import ApprovalCoordinator, Resolution
 from agentstack.runtime.drafting import estimated_customers
@@ -397,6 +398,10 @@ WITHDRAWN_TEXT: dict[str, str] = {
 }
 
 
+class ExperimentReader(Protocol):
+    def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ChannelAsker:
     """The asker for an experiment run's worker (`runtime.temporal.Asker`).
@@ -410,12 +415,36 @@ class ChannelAsker:
     """
 
     notifier: Notifier
+    # Where the drafted experiment is read from: the offer the model chose is the record's,
+    # not the rollout action's. Its cost and range are computed here, not taken from it.
+    registry: ExperimentReader
     channel: str = "#experiments"
+    bounds: Bounds | None = None
 
     def ask(self, *, run: Run, wait: Wait, cohort: FrozenCohort, action: ActionRequest) -> str:
         if wait.approval_summary is None:
             raise ValueError(f"{wait.wait_id} does not say what it asks about; nothing to put")
         percentage = int(action.payload["percentage"])
+        bounds = self.bounds or Bounds.load()
+        drafted = self.registry.read(f"{run.tenant}/experiments/{cohort.experiment_id}", {})
+        try:
+            kind = str(drafted["offer_kind"])
+            amount, months = int(drafted["offer_amount"]), int(drafted["offer_months"])
+        except KeyError as exc:
+            raise ValueError(
+                f"{cohort.experiment_id} has no offer on its draft; an approval that cannot "
+                "say what the offer is or costs is not put to anyone"
+            ) from exc
+        headcount = estimated_customers(cohort, percentage)
+        per_customer = offer_cost(
+            bounds,
+            kind,
+            amount,
+            months,
+            cohort.annual_value_at_risk_cents // cohort.size,
+            cohort.currency,
+        )
+        low, high = bounds.allowed_percentages(cohort.size)
         return self.notifier.post_approval(
             ApprovalAsk(
                 run_id=run.run_id,
@@ -424,9 +453,18 @@ class ChannelAsker:
                 experiment_version=str(action.payload["experiment_version"]),
                 data_as_of=cohort.data_as_of,
                 percentage=percentage,
-                estimated_customers=estimated_customers(cohort, percentage),
+                estimated_customers=headcount,
                 annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
                 tenant=run.tenant,
+                offer=describe_offer(kind, amount, months),
+                cost_per_customer_cents=per_customer,
+                total_cost_cents=per_customer * headcount,
+                allowed_percentages=(low, high),
+                allowed_customers=(
+                    estimated_customers(cohort, low),
+                    estimated_customers(cohort, high),
+                ),
+                reason=str(action.payload.get("reason", "")),
                 currency=cohort.currency,
             ),
             channel=self.channel,

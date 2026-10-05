@@ -31,6 +31,9 @@ TOKEN_VARIABLE = "SLACK_BOT_TOKEN"
 # Slack truncates hard. The summary is the part a person actually reads, so it is what
 # gets the room rather than the metadata around it.
 MAX_SUMMARY = 2_800
+# The model's reason is a line, not an essay: it is shown so a person can weigh it, and a
+# long one would push the buttons off the screen.
+MAX_REASON = 300
 
 
 class NotificationFailed(RuntimeError):
@@ -69,6 +72,16 @@ class ApprovalAsk:
     estimated_customers: int
     annual_value_at_risk_cents: int
     tenant: str
+    # What the model chose and what it was allowed to choose (ADR-0015). Required, like the
+    # headcount: an approval that shows a choice without its bounds, or an offer without its
+    # cost, is the one a tired approver waves through.
+    offer: str
+    cost_per_customer_cents: int
+    total_cost_cents: int
+    allowed_percentages: tuple[int, int]
+    allowed_customers: tuple[int, int]
+    # Written by the model, shown as such. Empty when it gave none.
+    reason: str = ""
     currency: str = "USD"
 
     def __post_init__(self) -> None:
@@ -96,6 +109,36 @@ class ApprovalAsk:
     def money(self) -> str:
         return money(self.annual_value_at_risk_cents, self.currency)
 
+    def cost(self, cents: int) -> str:
+        """A cost to the cent: a per-customer figure is a few dollars, and whole dollars
+        would round it to nothing."""
+        amount = f"{cents / 100:,.2f}"
+        return f"${amount}" if self.currency == "USD" else f"{self.currency} {amount}"
+
+    def fallback(self) -> str:
+        """The notification text: the headcount and the offer, for clients without blocks."""
+        return f"{self.headline()} · {self.offer}, {self.cost(self.total_cost_cents)} in all"
+
+
+def escape_mrkdwn(text: str) -> str:
+    """Slack's own escaping: `&`, `<` and `>` only. Everything that makes a mention, a link
+    or a channel ping starts with `<`, so none of it survives."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _quoted_reason(reason: str) -> str:
+    """The model's words as one escaped quoted line, labelled as the model's.
+
+    Collapsed to a single line and stripped of backticks so it cannot close a code fence
+    or start a block of its own, and cut so it cannot crowd out the buttons.
+    """
+    line = " ".join(reason.split()).replace("`", "'")
+    if not line:
+        return "*Reason (model-written)*\n_no reason given_"
+    if len(line) > MAX_REASON:
+        line = line[: MAX_REASON - 1].rstrip() + "…"
+    return f"*Reason (model-written)*\n> {escape_mrkdwn(line)}"
+
 
 def render_blocks(ask: ApprovalAsk) -> list[dict[str, Any]]:
     """Slack Block Kit for one approval.
@@ -114,10 +157,32 @@ def render_blocks(ask: ApprovalAsk) -> list[dict[str, Any]]:
             "fields": [
                 {"type": "mrkdwn", "text": f"*Customers affected*\n~{ask.estimated_customers:,}"},
                 {"type": "mrkdwn", "text": f"*Annual revenue at risk*\n{ask.money()}"},
+                {"type": "mrkdwn", "text": f"*Offer*\n{escape_mrkdwn(ask.offer)}"},
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Cost*\n{ask.cost(ask.cost_per_customer_cents)} per customer, "
+                        f"{ask.cost(ask.total_cost_cents)} for ~{ask.estimated_customers:,}"
+                    ),
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Chosen*\n{ask.percentage}% (~{ask.estimated_customers:,} customers)"
+                    ),
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Allowed*\n{ask.allowed_percentages[0]}-{ask.allowed_percentages[1]}% "
+                        f"(~{ask.allowed_customers[0]:,}-{ask.allowed_customers[1]:,} customers)"
+                    ),
+                },
                 {"type": "mrkdwn", "text": f"*Experiment*\n`{ask.experiment_version}`"},
                 {"type": "mrkdwn", "text": f"*Data as of*\n`{ask.data_as_of}`"},
             ],
         },
+        {"type": "section", "text": {"type": "mrkdwn", "text": _quoted_reason(ask.reason)}},
         {
             "type": "actions",
             # The ids travel in the button value, so the answer comes back bound to the
@@ -248,7 +313,7 @@ class SlackNotifier:
                 blocks=blocks,
                 # Shown in notifications and by clients that cannot render blocks. It
                 # carries the headcount too, so the quantity survives the fallback.
-                text=ask.headline(),
+                text=ask.fallback(),
             )
         except NotificationFailed:
             raise

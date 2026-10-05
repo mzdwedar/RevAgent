@@ -113,6 +113,20 @@ class Bounds:
             )
         return None
 
+    def allowed_percentages(self, cohort_size: int) -> tuple[int, int]:
+        """The lowest and highest rollout percentage that passes `check_percentage`.
+
+        The range in config, with its low end raised when the arm floor needs more than
+        that share of this cohort. Where nothing passes, the configured range: the person
+        is shown the bounds, and admission refuses every choice in them.
+        """
+        allowed = [
+            p
+            for p in range(self.percentage_min, self.percentage_max + 1)
+            if self.check_percentage(p, cohort_size) is None
+        ]
+        return (allowed[0], allowed[-1]) if allowed else (self.percentage_min, self.percentage_max)
+
     def check_cost(self, total_cost_cents: int, annual_value_at_risk_cents: int) -> str | None:
         """A reason the total offer cost is over the cap, or `None`."""
         cap_pct = f"{self.cost_cap_bps / 100:g}%"
@@ -160,6 +174,18 @@ def offer_cost(
     if spec.cost_basis == "months_of_arpu":
         return _ceil_div(arpu * amount, MONTHS_PER_YEAR)
     return _ceil_div(arpu * spec.uplift_bps * months, BPS * MONTHS_PER_YEAR)
+
+
+def describe_offer(kind: str, amount: int, months: int) -> str:
+    """The offer in words a person weighs: what the approver is shown, not what is stored."""
+    span = f"{months} month{'s' if months != 1 else ''}"
+    if kind == "percent_off":
+        return f"{amount}% off for {span}"
+    if kind == "free_months":
+        return f"{amount} free month{'s' if amount != 1 else ''}"
+    if kind == "tier_upgrade":
+        return f"tier upgrade for {span}"
+    return f"{kind} ({amount}) for {span}"
 
 
 def _ceil_div(numerator: int, denominator: int) -> int:

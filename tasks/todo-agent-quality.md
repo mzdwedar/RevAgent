@@ -148,7 +148,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - `replay_guard.py` and `checkpoint_guard.py --base main` green.
   - Depends: D1. Files: `runtime/drafting.py`, `policy/offers.py`, 3 eval cases, tests.
 
-- [ ] **D4: the approver sees the choices** · layer 1 · *S*
+- [x] **D4: the approver sees the choices** · layer 1 · *S*
   - Acceptance:
     - The Slack approval shows:
       - the offer, its cost per customer and its total cost for the headcount;
@@ -158,6 +158,8 @@ refuses anything outside them, and the approval binds the exact values chosen.
   - Verify: `tests/fitness/test_slack_outbound.py` is extended. An approval without range or
     cost fails. The model's reason renders escaped, so it cannot add buttons or links.
     Re-take `docs/evidence/slack_approval.png`.
+  - **Open:** the image is a screenshot of a real Slack post and is now stale (it shows no offer,
+    cost, range or reason). Re-take it from a live post; not done here, no workspace.
   - Depends: D2, D3. Files: `interfaces/slack.py`, test, evidence image.
 
 - [ ] **D5: decision behaviour cases, before and after** · layer 9 · *S*

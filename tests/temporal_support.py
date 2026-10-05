@@ -203,7 +203,7 @@ def turns_for(stack: Stack, engine: Any) -> ExperimentTurns:
 
 def asker_for(stack: Stack) -> ChannelAsker:
     """The production asker, posting to the test stack's recording notifier."""
-    return ChannelAsker(stack.notifier)
+    return ChannelAsker(stack.notifier, stack.registry_client, bounds=TEST_BOUNDS)
 
 
 @asynccontextmanager

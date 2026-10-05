@@ -417,11 +417,19 @@ def frozen(stack: Stack, run: Run) -> FrozenCohort:
     )
 
 
+class DraftedOffer:
+    """These waits are parked without drafting an experiment, so the offer is stated here."""
+
+    def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
+        del resource, query
+        return {"offer_kind": "free_months", "offer_amount": 1, "offer_months": 1}
+
+
 class Asking:
     """Records every question put, and can fail or be answered mid-ask."""
 
     def __init__(self, stack: Stack, *, fail: bool = False, answer: bool = False) -> None:
-        self.inner = ChannelAsker(stack.notifier)
+        self.inner = ChannelAsker(stack.notifier, DraftedOffer())
         self.stack = stack
         self.fail = fail
         self.answer = answer

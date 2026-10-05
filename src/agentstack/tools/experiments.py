@@ -206,6 +206,9 @@ ROLLOUT = ToolSpec(
             # get_rollout_history, 0 before the first. The approval binds it with the
             # rest, so a human approves "from here to there", never a bare target.
             "prior_rollout_event": _PRIOR,
+            # Why the model chose this percentage, in a line. Shown to the approver as the
+            # model's, and bound with the rest, so what they read is what they approved.
+            "reason": {"type": "string", "maxLength": 300},
         },
         "required": [
             "tenant",
@@ -497,6 +500,7 @@ def prepare_rollout(arguments: Mapping[str, Any]) -> ActionRequest:
     model = arguments["targeting_model_version"]
     threshold = arguments["risk_threshold"]
     prior = arguments["prior_rollout_event"]
+    reason = {"reason": arguments["reason"]} if "reason" in arguments else {}
     return ActionRequest(
         tool=ROLLOUT.name,
         surface=ROLLOUT.surface,
@@ -507,7 +511,8 @@ def prepare_rollout(arguments: Mapping[str, Any]) -> ActionRequest:
             "targeting_model_version": model,
             "risk_threshold": threshold,
             "prior_rollout_event": prior,
-        },
+        }
+        | reason,
         # From where, to where, for whom. The prior event first: 10%, 25%, then 10%
         # again is three moves, and keyed on the percentage alone the approved ramp-down
         # got the first move's key and was answered as a duplicate. Then the whole

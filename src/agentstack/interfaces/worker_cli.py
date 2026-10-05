@@ -133,7 +133,7 @@ async def _serve(
                 # Refusals at the ask and the act that never reach the gateway.
                 audit=stack.audit,
                 turns=ExperimentTurns(stack),
-                asker=ChannelAsker(stack.notifier),
+                asker=ChannelAsker(stack.notifier, stack.registry_client),
             )
             worker = build_worker(
                 client, activities=activities, executor=executor, task_queue=task_queue

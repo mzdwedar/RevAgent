@@ -142,3 +142,35 @@ def test_the_instruction_raises_the_lower_end_for_a_small_cohort() -> None:
     )
 
     assert "10" in told and "15" in told
+
+
+# --- D4: the reason travels in the bound action, so the person is shown what they bind ---
+
+
+def test_a_reason_is_in_the_payload_and_in_the_fingerprint() -> None:
+    plain = proposed(10)
+    reasoned = proposed(10, reason="small arm first")
+    reworded = proposed(10, reason="large arm first")
+
+    assert reasoned.payload["reason"] == "small arm first"
+    assert "reason" not in plain.payload
+    assert len({plain.fingerprint(), reasoned.fingerprint(), reworded.fingerprint()}) == 3
+
+
+def test_a_reason_is_not_a_deviation() -> None:
+    request = proposed(10, reason="small arm first")
+
+    assert rollout_deviation(request, cohort(), prior_rollout_event=0) is None
+
+
+def test_a_reason_that_is_not_text_is_a_deviation() -> None:
+    request = proposed(10, reason=["not", "text"])
+
+    assert rollout_deviation(request, cohort(), prior_rollout_event=0) is not None
+
+
+def test_the_allowed_range_is_the_configs_raised_by_the_arm_floor() -> None:
+    bounds = Bounds.load("default")
+
+    assert bounds.allowed_percentages(10_000) == (5, 15)
+    assert bounds.allowed_percentages(1_000) == (10, 15)

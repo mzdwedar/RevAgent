@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from agentstack.policy.offers import DEFAULTS, Bounds, OfferRefused, offer_cost
+from agentstack.policy.offers import DEFAULTS, Bounds, OfferRefused, describe_offer, offer_cost
 
 ANNUAL_ARPU = 12_000  # 120.00 a year, 10.00 a month, in the cohort's currency
 
@@ -197,3 +197,20 @@ def test_every_registered_profile_loads() -> None:
     # A profile in the file that does not parse is a bound nobody noticed was missing.
     for profile in ("default", "dev"):
         assert Bounds.load(profile).kinds
+
+
+@pytest.mark.parametrize(
+    ("kind", "amount", "months", "words"),
+    [
+        ("percent_off", 20, 3, "20% off for 3 months"),
+        ("percent_off", 10, 1, "10% off for 1 month"),
+        ("free_months", 2, 1, "2 free months"),
+        ("free_months", 1, 1, "1 free month"),
+        ("tier_upgrade", 1, 2, "tier upgrade for 2 months"),
+        ("gift_card", 5, 1, "gift_card (5) for 1 month"),
+    ],
+)
+def test_an_offer_is_described_in_words_a_person_weighs(
+    kind: str, amount: int, months: int, words: str
+) -> None:
+    assert describe_offer(kind, amount, months) == words

@@ -319,12 +319,18 @@ _OFFER_SHAPE: dict[str, Callable[[Any], bool]] = {
 }
 
 
+# A rollout may also carry the model's reason for its percentage.
+_ROLLOUT_REASON: dict[str, Callable[[Any], bool]] = {"reason": _string}
+
+
 def _shaped(resource: str, action: str, payload: dict[str, Any]) -> None:
     """Refuse a payload that is not exactly this act's shape. Checked before any state
     is read or written, so a refusal here provably applied nothing."""
     shape = _SHAPES[action]
     if action == "draft" and set(payload) & set(_OFFER_SHAPE):
         shape = shape | _OFFER_SHAPE
+    if action == "rollout" and "reason" in payload:
+        shape = shape | _ROLLOUT_REASON
     if set(payload) != set(shape):
         raise SurfaceRefused(
             f"{resource}: a {action} carries exactly {sorted(shape)}, "
@@ -575,7 +581,8 @@ class PostgresRegistryClient:
         if action == "history":
             return self._history(tenant, experiment)
         row = self.db.fetch_one(
-            "SELECT e.status, e.current_version, v.variant, r.hypothesis, r.revision_no"
+            "SELECT e.status, e.current_version, v.variant, r.hypothesis, r.revision_no,"
+            " v.offer_kind, v.offer_amount, v.offer_months"
             " FROM experiments e"
             " JOIN experiment_versions v"
             "   ON (v.tenant, v.experiment_id, v.experiment_version)"
@@ -589,7 +596,12 @@ class PostgresRegistryClient:
         )
         if row is None:
             return {}
-        status, version, variant, hypothesis, revision_no = row
+        status, version, variant, hypothesis, revision_no, kind, amount, months = row
+        offer = (
+            {"offer_kind": kind, "offer_amount": amount, "offer_months": months}
+            if kind is not None
+            else {}
+        )
         return {
             "experiment_id": experiment,
             "status": status,
@@ -597,7 +609,7 @@ class PostgresRegistryClient:
             "hypothesis": hypothesis,
             "variant": variant,
             "revision_no": revision_no,
-        }
+        } | offer
 
     def state(self, resource: str) -> tuple[str, ...] | None:
         """The experiment's current version, its variant and its latest hypothesis.

@@ -55,7 +55,7 @@ def estimated_customers(cohort: FrozenCohort, percentage: int) -> int:
 
 
 def intended_rollout(
-    cohort: FrozenCohort, *, prior_rollout_event: int, percentage: int
+    cohort: FrozenCohort, *, prior_rollout_event: int, percentage: int, reason: Any = None
 ) -> dict[str, Any]:
     """The rollout for this cohort at `percentage`, as the tool's arguments.
 
@@ -74,7 +74,7 @@ def intended_rollout(
         "targeting_model_version": cohort.targeting_model_version,
         "risk_threshold": cohort.risk_threshold,
         "prior_rollout_event": prior_rollout_event,
-    }
+    } | ({} if reason is None else {"reason": reason})
 
 
 def rollout_deviation(
@@ -104,6 +104,10 @@ def rollout_deviation(
             cohort,
             prior_rollout_event=prior_rollout_event,
             percentage=chosen if isinstance(chosen, int) else 0,
+            # The model's words are its own; they are held to being text, not to a value.
+            reason=request.payload.get("reason")
+            if isinstance(request.payload.get("reason"), str)
+            else None,
         )
     )
     if request.fingerprint() == intended.fingerprint():
@@ -273,14 +277,7 @@ def rollout_instruction(
     told = intended_rollout(cohort, prior_rollout_event=prior_rollout_event, percentage=0) | {
         "experiment_id": experiment_id
     }
-    lowest = next(
-        (
-            p
-            for p in range(bounds.percentage_min, bounds.percentage_max + 1)
-            if bounds.check_percentage(p, cohort.size) is None
-        ),
-        bounds.percentage_min,
-    )
+    lowest, _ = bounds.allowed_percentages(cohort.size)
     return (
         "The experiment is drafted. Propose its rollout by calling "
         f"roll_out_variant_to_percentage with tenant={told['tenant']} "
@@ -292,8 +289,8 @@ def rollout_instruction(
         f"percentage yourself, a whole number from {lowest} to {bounds.percentage_max}: "
         f"the cohort has {cohort.size:,} customers and the treatment arm must be at least "
         f"{bounds.minimum_treatment_arm} customers. A percentage outside that is refused "
-        "and never reaches a person. Give a one-line reason for it in your reply. A person "
-        "approves the rollout before it happens."
+        "and never reaches a person. Give a one-line reason for it as the reason argument. "
+        "A person approves the rollout before it happens."
     )
 
 
