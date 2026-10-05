@@ -71,7 +71,7 @@ active.
 #### Checkpoint E-A (the baseline)
 - [x] qwen3:8b × 10 cases × k=5 run on the *narrow* agent (temperature 0.7). pass@1, pass^k and the refusal distribution recorded in `docs/evidence/behaviour_qwen3_8b_narrow.jsonl`
 - [x] Gates 20/20, `check_task.sh` green, `stack_guard` clean
-- [ ] Review the failure reasons with you before widening anything
+- [x] Review the failure reasons with you before widening anything
 
 ---
 
@@ -80,7 +80,7 @@ active.
 The model chooses the offer and the rollout percentage. Policy holds the bounds, admission
 refuses anything outside them, and the approval binds the exact values chosen.
 
-- [ ] **D0: ADR and constraint rows for bounded discretion** · docs + layer 8 · *S*
+- [x] **D0: ADR and constraint rows for bounded discretion** · docs + layer 8 · *S*
   - Acceptance:
     - ADR-0015 records:
       - which arguments are record-held and which discretionary;

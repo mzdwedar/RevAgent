@@ -51,7 +51,7 @@ Either trigger wakes the run. It pulls the new cohort data, scores it with TabPF
 
 - **continue** — not enough evidence yet; go back to waiting
 - **abstain** — the evidence says stop, or a guardrail tripped; explain why and stop
-- **propose** — draft the rollout, store it in the registry, and ask a human in Slack. On approval, roll the winning variant out to ~10% **of the targeted cohort**.
+- **propose** — draft the rollout, store it in the registry, and ask a human in Slack. On approval, roll the winning variant out to a percentage the model chooses within 5–15% **of the targeted cohort** (treatment arm ≥ 100 customers; [ADR-0015](docs/adr/0015-bounded-discretion.md)).
 
 The run survives process restarts, deploys, and long stretches of nothing happening.
 
@@ -623,7 +623,11 @@ All six are settled. Three you chose; three I defaulted and have marked, because
 is a number or a scoping call rather than a design, and each is cheap to change.
 
 **1. The model drafts the candidate.** It proposes the hypothesis, the variant and the
-offer parameters, and that output travels the full chain before anything is written:
+offer parameters, and that output travels the full chain before anything is written.
+*Amended 2026-10-05 ([ADR-0015](docs/adr/0015-bounded-discretion.md)): the rollout
+percentage is chosen by the model within 5–15% with a treatment arm of at least 100
+customers, superseding "~10%"; the offer kind and amount are chosen from a capped catalog.
+Bounds are policy, never context.*
 
 ```
 model proposal -> exposure filter -> schema validation -> policy -> gateway -> registry
