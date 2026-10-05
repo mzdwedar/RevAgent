@@ -78,7 +78,7 @@ worker being killed, and a retried rollout is deduplicated instead of sent twice
 
 ### Proof 1: the LLM cannot rank churn from the table, TabPFN can
 
-Same 200 labelled KKBox subscribers, same 100 held-out test rows, three seeds
+Same 200 labelled subscribers, same 100 held-out test rows, three seeds
 ([`scripts/llm_vs_tabpfn.py`](scripts/llm_vs_tabpfn.py), data in
 [`docs/evidence/llm_vs_tabpfn.csv`](docs/evidence/llm_vs_tabpfn.csv)).
 
@@ -88,9 +88,19 @@ Same 200 labelled KKBox subscribers, same 100 held-out test rows, three seeds
 | TabPFN-3.5 | **0.842** | 0.477 |
 | qwen3:8b given TabPFN's score | 0.772 | 0.477 |
 
-![LLM vs TabPFN on KKBox](docs/evidence/llm_vs_tabpfn.png)
+The same protocol on the committed Netflix file (synthetic as far as we can tell):
 
-The LLM alone is close to a coin flip (AUC 0.45 to 0.61 by seed). TabPFN scores 0.79 to 0.88.
+| Arm | AUC (mean of 3 seeds) | Revenue captured in top 10% |
+|---|---|---|
+| qwen3:8b alone, shown the table | **0.609** | 0.174 |
+| TabPFN-3.5 | **0.974** | 0.169 |
+| qwen3:8b given TabPFN's score | 0.965 | 0.173 |
+
+![LLM vs TabPFN on KKBox and Netflix](docs/evidence/llm_vs_tabpfn.png)
+
+On KKBox the LLM alone is close to a coin flip (AUC 0.45 to 0.61 by seed) and TabPFN scores
+0.79 to 0.88. On Netflix the LLM reaches 0.59 to 0.64 and TabPFN 0.96 to 0.99, and the LLM
+keeps TabPFN's ranking on every seed (0.96 to 0.97).
 That is why the agent passes the table to TabPFN instead of reasoning over it.
 
 ### Why a foundation model: the cold-start curve
@@ -121,10 +131,13 @@ where TabPFN's lead is largest.
   is 0.87, 0.85 and 0.60 across seeds. Seed 2 is a real failure to use the score. The revenue
   captured in the top 10% does match TabPFN on every seed. So TabPFN does the ranking, and
   the LLM is not trusted to relay it.
-- **Not a broad benchmark.** Proof 1 is KKBox only, 3 seeds, 100 test rows. In two of three
-  seeds the LLM alone captured no churned revenue in its top 10%.
-- **No TabPFN claim on Netflix.** The data is easy (AUC 0.97 to 1.0 for every model) and
-  probably synthetic. On IBM Telco the lead is small.
+- **Not a broad benchmark.** Proof 1 covers KKBox and Netflix only, 3 seeds, 100 test rows.
+  On KKBox, in two of three seeds the LLM alone captured no churned revenue in its top 10%.
+- **No TabPFN-over-classical claim on Netflix.** The data is easy and probably synthetic:
+  boosted trees match TabPFN (0.974 vs 0.972 at n=200). Netflix only shows that the LLM
+  cannot rank from the table. Its revenue column holds three values (the plan tiers), so
+  revenue captured in the top 10% is about 0.17 for every arm and separates nothing there.
+  On IBM Telco the lead is small.
 - **Revenue is observed, never predicted.** It is what the subscriber last paid, annualised by
   the length of the plan they bought, in NTD. The column was corrected during this work (it
   had been last payment × 12, about 2.5× too high), and every figure here was re-run on the
@@ -297,13 +310,14 @@ uv run python scripts/fetch_datasets.py --kkbox
 uv run python scripts/build_kkbox_cohort.py
 
 # Proof 1 (appends to the CSV and skips rows already there; --plot-only redraws)
-uv run python scripts/llm_vs_tabpfn.py --datasets kkbox-churn telecom-bigml bank-churn
+uv run python scripts/llm_vs_tabpfn.py --datasets kkbox-churn telecom-bigml bank-churn netflix-churn
 
 # cold-start curve (add ibm-telco netflix-churn to --datasets for the full table)
 uv run python scripts/cold_start_curve.py
 ```
 
-The committed `llm_vs_tabpfn.csv` holds KKBox only. `--seeds` and `--test-rows` change the
+The committed `llm_vs_tabpfn.csv` holds KKBox and Netflix. Netflix is the one dataset a fresh
+clone can run without a Kaggle login, since its CSV is committed. `--seeds` and `--test-rows` change the
 protocol (defaults: seeds 0 1 2, 100 test rows).
 
 ## Path to production
