@@ -9,13 +9,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from agentstack.model.engine import EchoEngine, ModelEngine
+from agentstack.model.ollama_engine import ModelUnavailable
 from agentstack.storage import migrate
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import drop_database, rebuild_database, run_scoped
-from evals.behaviour import load_behaviour_cases, run_behaviour_case
+from evals.behaviour import engine_for, load_behaviour_cases, run_trials, summarise
 from evals.runner import load_cases, run_case
 
 
@@ -23,11 +23,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="evals")
     parser.add_argument("command", choices=["run", "list", "behave"])
     parser.add_argument("--gates", action="store_true", help="only the release gates")
-    parser.add_argument("--engine", default="echo", help="behave: the engine to measure")
+    parser.add_argument("--engine", default="echo", help="behave: echo or ollama:<model>")
+    parser.add_argument("--k", type=int, default=1, help="behave: trials per case, seeds 0..k-1")
+    parser.add_argument("--log", default=".tmp/behaviour.jsonl", help="behave: the JSONL trial log")
+    parser.add_argument(
+        "--temperature", type=float, default=None, help="behave: override the engine's"
+    )
     args = parser.parse_args()
 
     if args.command == "behave":
-        return _behave(args.engine)
+        return _behave(args)
 
     cases = [c for c in load_cases() if c.gate or not args.gates]
     if not cases:
@@ -70,27 +75,39 @@ def _on_a_substrate(work: Callable[[Database, Any], int]) -> int:
         drop_database(admin, database)
 
 
-def _engine(name: str) -> ModelEngine:
-    if name == "echo":
-        return EchoEngine()
-    raise SystemExit(f"unknown engine {name!r}; only 'echo' until E2")
-
-
-def _behave(engine_name: str) -> int:
-    """Run the behaviour cases once on `engine_name` and report. Never a gate: a model's
+def _behave(args: argparse.Namespace) -> int:
+    """Run the behaviour cases k times on one engine and report. Never a gate: a model's
     proposals are a rate, so a miss here does not fail the command."""
-    engine = _engine(engine_name)
     cases = load_behaviour_cases()
+    try:
+        engine_for(args.engine, seed=0)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    log = Path(args.log)
 
     def work(db: Database, saver: Any) -> int:
-        passed = 0
-        for case in cases:
-            outcome = run_behaviour_case(case, db, saver, engine)
-            passed += outcome.passed
-            print(f"{'pass' if outcome.passed else 'MISS'}  {case.stage:<8}  {case.id}")
-            for failure in outcome.failures:
-                print(f"        {failure}")
-        print(f"\n{passed}/{len(cases)} behaviour cases met their expectations on {engine_name}")
+        try:
+            trials = run_trials(
+                cases,
+                lambda seed: engine_for(args.engine, seed=seed, temperature=args.temperature),
+                engine=args.engine,
+                k=args.k,
+                db=db,
+                checkpointer=saver,
+                log=log,
+            )
+        except ModelUnavailable as exc:
+            raise SystemExit(f"{exc}\nStart it: brew services start ollama") from exc
+        summary = summarise(trials)
+        for case_id, case in summary.per_case.items():
+            mark = "pass" if case.pass_hat_k else "MISS"
+            print(f"{mark}  pass@1 {case.pass_at_1:.2f}  {case_id}")
+        low, high = summary.interval
+        print(
+            f"\n{args.engine}, k={args.k}, {summary.trials} trials ({log})\n"
+            f"pass@1 {summary.pass_at_1:.2f} (95% Wilson {low:.2f}-{high:.2f})   "
+            f"pass^{args.k} {summary.pass_hat_k:.2f} of cases passed every trial"
+        )
         return 0
 
     return _on_a_substrate(work)

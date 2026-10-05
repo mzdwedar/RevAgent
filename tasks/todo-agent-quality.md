@@ -45,7 +45,7 @@ active.
     `uv run python -m evals run --gates` unchanged (20/20).
   - Depends: none. Files: `evals/behaviour.py`, `evals/__main__.py`, `evals/behaviour/*.json`, test.
 
-- [ ] **E2: k trials per case, pass@1 and pass^k** · layer 9 (+ layer 4 engine factory) · *S*
+- [x] **E2: k trials per case, pass@1 and pass^k** · layer 9 (+ layer 4 engine factory) · *S*
   - Acceptance:
     - `--engine ollama:qwen3:8b --k 5` runs each case k times with seeds 0..k-1 (temperature
       stays as configured).

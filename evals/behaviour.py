@@ -9,17 +9,22 @@ not a gate, so nothing here blocks CI; the deterministic gates stay the release 
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import json
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from agentstack.interfaces.wiring import ExperimentTurns
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
-from agentstack.model.engine import ModelEngine
+from agentstack.model.engine import EchoEngine, ModelEngine
+from agentstack.model.ollama_engine import OllamaEngine
 from agentstack.policy.triggers import Outcome, TriggerKind
+from agentstack.runtime import drafting
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.drafting import (
     PROPOSAL_DEVIATES,
@@ -34,6 +39,7 @@ from agentstack.storage.database import Database
 from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT_STAGE
 from agentstack.tools.spec import Surface
 from evals.runner import TENANT, USER, freeze, stack_with
+from evals.stats import pass_at_1, pass_hat_k, wilson
 
 BEHAVIOUR_DIR = Path(__file__).resolve().parent / "behaviour"
 
@@ -193,4 +199,133 @@ def run_behaviour_case(
         failures=failures,
         seconds=time.perf_counter() - started,
         tool=None if proposal is None else proposal.tool,
+    )
+
+
+def engine_for(name: str, *, seed: int, temperature: float | None = None) -> ModelEngine:
+    """`echo`, or `ollama:<model>` (the model name may itself contain a colon)."""
+    if name == "echo":
+        return EchoEngine()
+    kind, _, model = name.partition(":")
+    if kind == "ollama" and model:
+        settings = {} if temperature is None else {"temperature": temperature}
+        return OllamaEngine(model=model, seed=seed, **settings)
+    raise ValueError(f"unknown engine {name!r}; use 'echo' or 'ollama:<model>'")
+
+
+def prompt_hash(case: BehaviourCase) -> str:
+    """What the model is shown, as far as it can be known without running a turn: the
+    case, and the source of the functions that turn it into a prompt. A reworded
+    instruction therefore invalidates the cache instead of being served from it."""
+    shown = [
+        drafting.draft_instruction,
+        drafting.rollout_instruction,
+        drafting.cohort_profile,
+        drafting.intended_rollout,
+    ]
+    material = json.dumps(asdict(case), sort_keys=True) + "".join(
+        inspect.getsource(f) for f in shown
+    )
+    return hashlib.sha256(material.encode()).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class Trial:
+    """One run of one case: one row of the JSONL log."""
+
+    case: str
+    engine: str
+    model: str
+    seed: int
+    prompt_hash: str
+    passed: bool
+    failures: list[str]
+    seconds: float
+
+    @property
+    def key(self) -> tuple[str, str, int, str]:
+        return (self.case, self.engine, self.seed, self.prompt_hash)
+
+
+def read_trials(log: Path) -> list[Trial]:
+    if not log.exists():
+        return []
+    return [Trial(**json.loads(line)) for line in log.read_text().splitlines() if line.strip()]
+
+
+def run_trials(
+    cases: Sequence[BehaviourCase],
+    factory: Callable[[int], ModelEngine],
+    *,
+    engine: str,
+    k: int,
+    db: Database,
+    checkpointer: Any,
+    log: Path,
+) -> list[Trial]:
+    """Seeds 0..k-1 for every case, appending each trial to `log` as it finishes.
+
+    A trial already in the log for the same (case, engine, seed, prompt hash) is not run
+    again, so an interrupted run resumes and a longer k only pays for the new seeds.
+    """
+    done = {t.key: t for t in read_trials(log)}
+    wanted: list[Trial] = []
+    for case in cases:
+        digest = prompt_hash(case)
+        for seed in range(k):
+            key = (case.id, engine, seed, digest)
+            if key not in done:
+                model = factory(seed)
+                outcome = run_behaviour_case(case, db, checkpointer, model)
+                done[key] = Trial(
+                    case=case.id,
+                    engine=engine,
+                    model=model.asset.name,
+                    seed=seed,
+                    prompt_hash=digest,
+                    passed=outcome.passed,
+                    failures=outcome.failures,
+                    seconds=round(outcome.seconds, 3),
+                )
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with log.open("a") as handle:
+                    handle.write(json.dumps(asdict(done[key])) + "\n")
+            wanted.append(done[key])
+    return wanted
+
+
+@dataclass(frozen=True)
+class CaseSummary:
+    trials: int
+    pass_at_1: float
+    pass_hat_k: bool
+
+
+@dataclass(frozen=True)
+class Summary:
+    per_case: dict[str, CaseSummary]
+    trials: int
+    pass_at_1: float
+    interval: tuple[float, float]
+    # The share of cases every one of whose trials passed.
+    pass_hat_k: float
+
+
+def summarise(trials: Sequence[Trial]) -> Summary:
+    by_case: dict[str, list[bool]] = {}
+    for trial in trials:
+        by_case.setdefault(trial.case, []).append(trial.passed)
+    per_case = {
+        case: CaseSummary(len(p), pass_at_1(p), pass_hat_k(p))
+        for case, p in sorted(by_case.items())
+    }
+    passed = sum(trial.passed for trial in trials)
+    return Summary(
+        per_case=per_case,
+        trials=len(trials),
+        pass_at_1=passed / len(trials) if trials else 0.0,
+        interval=wilson(passed, len(trials)),
+        pass_hat_k=sum(c.pass_hat_k for c in per_case.values()) / len(per_case)
+        if per_case
+        else 0.0,
     )

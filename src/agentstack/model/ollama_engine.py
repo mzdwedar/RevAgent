@@ -61,6 +61,9 @@ class OllamaEngine:
     # qwen3 is a reasoning model. Its thinking is not an answer, and leaving it on puts
     # a monologue in the text the turn returns to a human.
     think: bool = False
+    # Sent only when set, so a run that does not ask for one is exactly what it was.
+    # Evals set it to tell k trials apart.
+    seed: int | None = None
     # A seam for tests, so the adapter can be exercised without a model on the machine.
     build_client: Callable[[str], Any] | None = field(default=None)
 
@@ -106,6 +109,7 @@ class OllamaEngine:
                     "num_ctx": self.num_ctx,
                     "num_predict": request.max_output_tokens,
                     "temperature": self.temperature,
+                    **({} if self.seed is None else {"seed": self.seed}),
                 },
             )
         except ModelUnavailable:
