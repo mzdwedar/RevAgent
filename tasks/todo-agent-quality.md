@@ -97,7 +97,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     weakened). `/stack-audit` on the ADR.
   - Depends: Checkpoint E-A, your sign-off. Files: `docs/adr/0015-*.md`, `CONSTRAINTS.md`, `SPEC.md` (own hunks).
 
-- [ ] **D1: offer catalog and bounds as policy** · layer 8 · *S*
+- [x] **D1: offer catalog and bounds as policy** · layer 8 · *S*
   - Acceptance:
     - `experiments/offers.toml` defines, per profile:
       - offer kinds with min/max amount and duration;
