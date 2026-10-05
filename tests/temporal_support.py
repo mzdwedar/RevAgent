@@ -127,6 +127,9 @@ class DraftingEngine:
         arguments |= {
             "hypothesis": "a discount retains the customers most at risk",
             "variant": "20-percent-off",
+            "offer_kind": "percent_off",
+            "offer_amount": 20,
+            "offer_months": 3,
         }
         return ModelResponse(
             text="drafted the experiment",

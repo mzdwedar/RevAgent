@@ -20,6 +20,7 @@ from typing import Any
 from agentstack.context.frozen_cohorts import FrozenCohort
 from agentstack.context.targeting import money
 from agentstack.observability.audit import AuditSink
+from agentstack.policy.offers import Bounds, OfferRefused, draft_cost
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.run import Run
 from agentstack.tools.action import ActionRequest
@@ -31,6 +32,16 @@ ROLLOUT_PERCENTAGE = 10
 # What the audit trail names when a proposal is refused for not being the rollout the
 # record says. Refused before anyone is asked, and again at the ask and at the act.
 PROPOSAL_DEVIATES = "proposal.deviates"
+
+# What the audit trail names when a proposal is the right cohort's and a choice the model
+# was free to make, but outside the range policy allows (ADR-0015).
+PROPOSAL_OUT_OF_BOUNDS = "proposal.out_of_bounds"
+
+
+class OutOfBounds(str):
+    """A refusal reason that is about a discretionary choice, not the record. It is a
+    string so every admission can quote it; the type is what picks the audit decision."""
+
 
 # Admits or refuses one prepared request before it goes anywhere near the gateway: the
 # refusal's reason, or None. A turn that is told exactly what to propose is given one.
@@ -98,7 +109,9 @@ def rollout_deviation(
     )
 
 
-def draft_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | None:
+def draft_deviation(
+    request: ActionRequest, cohort: FrozenCohort, *, bounds: Bounds | None = None
+) -> str | None:
     """Why `request` is not a draft of the frozen cohort, or None if it is.
 
     The hypothesis and the variant are the model's to write, and nothing here judges
@@ -106,6 +119,10 @@ def draft_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | None:
     is held to and the approver is shown, so a draft that carries a mistyped or invented
     one lands in the registry beside a cohort it was never about. The model was told the
     version "exactly as given" and copied it with one character added (Checkpoint B).
+
+    The offer is the model's to choose and policy's to bound (ADR-0015): one outside the
+    catalog, or whose cost over the largest arm policy allows exceeds the cap, is refused
+    as `OutOfBounds`. The bounds come from config, never from what the model was told.
     """
     resource = f"{cohort.tenant}/experiments/{cohort.experiment_id}"
     if request.tool != DRAFT.name:
@@ -122,6 +139,35 @@ def draft_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | None:
             f"{cohort.experiment_version!r}. A draft is held to the record: one written "
             "under another version is about a cohort nobody froze"
         )
+    return offer_refusal(request, cohort, bounds or Bounds.load())
+
+
+def offer_refusal(
+    request: ActionRequest, cohort: FrozenCohort, bounds: Bounds
+) -> OutOfBounds | None:
+    """Why the offer in a draft is outside what policy allows, or None."""
+    kind = request.payload.get("offer_kind")
+    amount = request.payload.get("offer_amount")
+    months = request.payload.get("offer_months")
+    if not (isinstance(kind, str) and isinstance(amount, int) and isinstance(months, int)):
+        return OutOfBounds(
+            "the draft names no complete offer (offer_kind, offer_amount, offer_months)"
+        )
+    reason = bounds.check_offer(kind, amount, months)
+    if reason is not None:
+        return OutOfBounds(reason)
+    try:
+        draft_cost(
+            bounds,
+            kind,
+            amount,
+            months,
+            cohort_size=cohort.size,
+            annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
+            currency=cohort.currency,
+        )
+    except OfferRefused as refused:
+        return OutOfBounds(str(refused))
     return None
 
 
@@ -145,7 +191,9 @@ def _admitting(
                 action_fingerprint=request.fingerprint(),
                 surface=request.surface.value,
                 resource=request.resource,
-                policy_decision=PROPOSAL_DEVIATES,
+                policy_decision=(
+                    PROPOSAL_OUT_OF_BOUNDS if isinstance(reason, OutOfBounds) else PROPOSAL_DEVIATES
+                ),
                 approval_id=None,
                 outcome="refused",
             )
@@ -218,6 +266,23 @@ def cohort_profile(cohort: FrozenCohort) -> str:
     )
 
 
+def offer_instruction(cohort: FrozenCohort, bounds: Bounds | None = None) -> str:
+    """The catalog and the caps, in words. Telling the model the range is not granting it
+    one: admission holds the same numbers, from config, whatever this says."""
+    bounds = bounds or Bounds.load()
+    kinds = "; ".join(
+        f"{name} (offer_amount {k.amount_min}-{k.amount_max}, offer_months "
+        f"{k.months_min}-{k.months_max})"
+        for name, k in sorted(bounds.kinds.items())
+    )
+    return (
+        f"Choose the offer with offer_kind, offer_amount and offer_months: {kinds}. Its total "
+        f"cost may not exceed {bounds.cost_cap_bps / 100:g}% of the annual value at risk "
+        f"({money(cohort.annual_value_at_risk_cents, cohort.currency)}). A choice outside "
+        "these is refused and never reaches a person."
+    )
+
+
 def draft_instruction(*, tenant: str, cycle: Cycle, cohort: FrozenCohort) -> str:
     if cycle.outcome is None or cycle.outcome.value != "propose" or cycle.run_id is None:
         raise NothingToDraft(
@@ -230,5 +295,6 @@ def draft_instruction(*, tenant: str, cycle: Cycle, cohort: FrozenCohort) -> str
         f"experiment_version={cycle.run_id} exactly as given. Write the hypothesis and the "
         "variant yourself: what offer to test, and why it should retain these customers, "
         "grounded in the risk profile below. "
+        f"{offer_instruction(cohort)} "
         f"The cohort was scored on the batch {cycle.data_as_of}. {cohort_profile(cohort)}"
     )

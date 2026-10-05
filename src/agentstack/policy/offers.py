@@ -193,3 +193,31 @@ def _kind(profile: str, name: str, spec: dict[str, object]) -> OfferKind:
     if not 0 < kind.amount_min <= kind.amount_max or not 0 < kind.months_min <= kind.months_max:
         raise OfferRefused(f"offers {where}: ranges must be positive and min <= max")
     return kind
+
+
+def draft_cost(
+    bounds: Bounds,
+    kind: str,
+    amount: int,
+    months: int,
+    *,
+    cohort_size: int,
+    annual_value_at_risk_cents: int,
+    currency: str,
+) -> tuple[int, int]:
+    """(cost per customer, total cost) of an offer, in cents, or `OfferRefused`.
+
+    The total is over the widest arm policy allows, because the percentage is chosen
+    later and the cap must hold for whatever it is. Observed ARPU is the cohort's value
+    at risk over its size: nothing here is a number the model supplied.
+    """
+    if cohort_size <= 0:
+        raise OfferRefused("a cohort with no members has no cost to cap")
+    per_customer = offer_cost(
+        bounds, kind, amount, months, annual_value_at_risk_cents // cohort_size, currency
+    )
+    total = per_customer * treatment_arm(bounds.percentage_max, cohort_size)
+    over = bounds.check_cost(total, annual_value_at_risk_cents)
+    if over is not None:
+        raise OfferRefused(over)
+    return per_customer, total

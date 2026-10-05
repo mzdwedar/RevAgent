@@ -321,7 +321,19 @@ def test_a_read_is_bound_to_its_verb_too(stack: Stack, run: Run) -> None:
 
     for spec, request in (
         (GET, replace(get, resource=f"{get.resource}/history")),
-        (DRAFT, prepare_draft({**ids(), "hypothesis": "h", "variant": "v"})),
+        (
+            DRAFT,
+            prepare_draft(
+                {
+                    **ids(),
+                    "hypothesis": "h",
+                    "variant": "v",
+                    "offer_kind": "percent_off",
+                    "offer_amount": 20,
+                    "offer_months": 3,
+                }
+            ),
+        ),
     ):
         with pytest.raises(PolicyDenied):
             stack.deps.gateway.read(
@@ -347,7 +359,16 @@ def test_the_c1_request_is_refused_by_binding_even_past_validation(stack: Stack,
     builds a resource that names a rollout. The gateway refuses it for its verb."""
     fake = fake_registry(stack, live=False)
     view = stack.resolver.resolve(session_id=run.session_id, user_id=USER, tenant=TENANT)
-    request = prepare_draft({**ids("exp-9/rollout"), "hypothesis": "h", "variant": "v"})
+    request = prepare_draft(
+        {
+            **ids("exp-9/rollout"),
+            "hypothesis": "h",
+            "variant": "v",
+            "offer_kind": "percent_off",
+            "offer_amount": 20,
+            "offer_months": 3,
+        }
+    )
 
     with pytest.raises(PolicyDenied, match="create_experiment_draft is a draft"):
         stack.deps.gateway.execute(
@@ -391,7 +412,8 @@ def test_a_drafting_turn_cannot_roll_out_through_an_experiment_id(
         session_id=run.session_id,
         text=(
             "create_experiment_draft tenant=acme experiment_id=exp-9/rollout "
-            f"experiment_version={VERSION} hypothesis=bigger variant=100-percent-off"
+            f"experiment_version={VERSION} hypothesis=bigger variant=100-percent-off "
+            "offer_kind=percent_off offer_amount=20 offer_months=3"
         ),
     )
 

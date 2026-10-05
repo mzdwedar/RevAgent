@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from agentstack.policy.offers import Bounds, OfferRefused, draft_cost
 from agentstack.storage.database import Database, IntegrityViolation
 from agentstack.tools.spec import Surface
 
@@ -309,10 +310,21 @@ _SHAPES: dict[str, dict[str, Callable[[Any], bool]]] = {
 }
 
 
+# A draft may also carry its offer - all three keys or none. Drafts written before the model
+# chose offers have none, and are still drafts.
+_OFFER_SHAPE: dict[str, Callable[[Any], bool]] = {
+    "offer_kind": _text,
+    "offer_amount": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 1,
+    "offer_months": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 1,
+}
+
+
 def _shaped(resource: str, action: str, payload: dict[str, Any]) -> None:
     """Refuse a payload that is not exactly this act's shape. Checked before any state
     is read or written, so a refusal here provably applied nothing."""
     shape = _SHAPES[action]
+    if action == "draft" and set(payload) & set(_OFFER_SHAPE):
+        shape = shape | _OFFER_SHAPE
     if set(payload) != set(shape):
         raise SurfaceRefused(
             f"{resource}: a {action} carries exactly {sorted(shape)}, "
@@ -761,7 +773,47 @@ class PostgresRegistryClient:
             ),
         )
 
+    def _offer_cost(
+        self, tenant: str, experiment: str, payload: dict[str, Any]
+    ) -> tuple[int | None, int | None, int | None, int | None, int | None]:
+        """The offer and what it costs, computed here from the frozen cohort and the
+        policy bounds - first-party, never an argument. Fails closed: an offer with no
+        cohort to cost it against, or outside the bounds, is not stored."""
+        if "offer_kind" not in payload:
+            return None, None, None, None, None
+        row = self.db.fetch_one(
+            "SELECT size, annual_value_at_risk_cents, description->>'currency'"
+            " FROM frozen_cohorts"
+            " WHERE tenant = %s AND experiment_id = %s AND experiment_version = %s",
+            (tenant, experiment, payload["experiment_version"]),
+        )
+        if row is None:
+            raise SurfaceRefused(
+                f"{tenant}/experiments/{experiment}: no frozen cohort to cost the offer "
+                "against; nothing applied"
+            )
+        try:
+            per_customer, total = draft_cost(
+                Bounds.load(),
+                payload["offer_kind"],
+                payload["offer_amount"],
+                payload["offer_months"],
+                cohort_size=int(row[0]),
+                annual_value_at_risk_cents=int(row[1]),
+                currency=row[2] or "USD",
+            )
+        except OfferRefused as refused:
+            raise SurfaceRefused(f"{tenant}/experiments/{experiment}: {refused}") from refused
+        return (
+            payload["offer_kind"],
+            payload["offer_amount"],
+            payload["offer_months"],
+            per_customer,
+            total,
+        )
+
     def _draft(self, tenant: str, experiment: str, payload: dict[str, Any]) -> str:
+        offer = self._offer_cost(tenant, experiment, payload)
         # `ON CONFLICT DO NOTHING` on the experiment, and the version and revision are
         # selected from what that insert returned: an experiment that already exists
         # yields no row, so neither does anything after it.
@@ -772,8 +824,9 @@ class PostgresRegistryClient:
             "  ON CONFLICT (tenant, experiment_id) DO NOTHING"
             "  RETURNING tenant, experiment_id, current_version),"
             " v AS ("
-            "  INSERT INTO experiment_versions (tenant, experiment_id, experiment_version, variant)"
-            "  SELECT tenant, experiment_id, current_version, %s FROM e"
+            "  INSERT INTO experiment_versions (tenant, experiment_id, experiment_version, variant,"
+            "   offer_kind, offer_amount, offer_months, cost_per_customer_cents, total_cost_cents)"
+            "  SELECT tenant, experiment_id, current_version, %s, %s, %s, %s, %s, %s FROM e"
             "  RETURNING tenant, experiment_id, experiment_version)"
             " INSERT INTO draft_revisions"
             "  (tenant, experiment_id, experiment_version, revision_no, hypothesis)"
@@ -784,6 +837,7 @@ class PostgresRegistryClient:
                 experiment,
                 payload["experiment_version"],
                 payload["variant"],
+                *offer,
                 payload["hypothesis"],
             ),
         )

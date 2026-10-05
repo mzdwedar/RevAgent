@@ -113,7 +113,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - an unknown kind is refused.
   - Depends: D0. Files: `experiments/offers.toml`, `policy/offers.py`, test.
 
-- [ ] **D2: the model chooses the offer** · layers 6 + 3 · *M*
+- [x] **D2: the model chooses the offer** · layers 6 + 3 · *M*
   - Acceptance:
     - `create_experiment_draft` gains scalar `offer_kind` (enum from the catalog),
       `offer_amount` (int) and `offer_months` (int). `variant` remains as the model's

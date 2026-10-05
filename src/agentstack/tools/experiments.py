@@ -63,6 +63,8 @@ _ID = {"type": "string", "format": "id"}
 # A position in the registry's own history, as a read returned it. An integer, not an
 # id string: it counts rather than names, and it cannot carry prose.
 _PRIOR = {"type": "integer", "minimum": 0}
+# What an experiment may offer. Mirrors the catalog in experiments/offers.toml.
+OFFER_KINDS = ["percent_off", "free_months", "tier_upgrade"]
 
 
 def experiment_resource(tenant: str, experiment_id: str) -> str:
@@ -154,6 +156,12 @@ DRAFT = ToolSpec(
             "experiment_version": _ID,
             "hypothesis": {"type": "string"},
             "variant": {"type": "string"},
+            # The offer, as three flat scalars: the model chooses them, policy holds the
+            # range (ADR-0015). The kinds are `experiments/offers.toml`'s, held equal by
+            # tests/fitness/test_offer_catalog_matches_tool.py - layer 6 cannot read layer 8.
+            "offer_kind": {"type": "string", "enum": OFFER_KINDS},
+            "offer_amount": {"type": "integer", "minimum": 1},
+            "offer_months": {"type": "integer", "minimum": 1},
         },
         "required": [
             "tenant",
@@ -161,6 +169,9 @@ DRAFT = ToolSpec(
             "experiment_version",
             "hypothesis",
             "variant",
+            "offer_kind",
+            "offer_amount",
+            "offer_months",
         ],
     },
     acts_as=ActsAs.DELEGATED,
@@ -467,6 +478,9 @@ def prepare_draft(arguments: Mapping[str, Any]) -> ActionRequest:
             "experiment_version": version,
             "hypothesis": arguments["hypothesis"],
             "variant": arguments["variant"],
+            "offer_kind": arguments["offer_kind"],
+            "offer_amount": arguments["offer_amount"],
+            "offer_months": arguments["offer_months"],
         },
         # Keyed on the frozen version, not on a uuid. Drafting the same candidate for
         # the same frozen cohort twice is one draft; drafting against a different
