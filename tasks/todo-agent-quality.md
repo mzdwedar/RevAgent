@@ -247,7 +247,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
 
 ### Phase L1: prove the estimator
 
-- [ ] **L0: spec amendment and ADR** · docs · *S*
+- [x] **L0: spec amendment and ADR** · docs · *S*
   - Acceptance:
     - `SPEC-learning-loop.md` has the three Agent Stack sections (Layer Ownership Ledger,
       Foundation Assumptions, Boundary Decisions) and records Open questions 3–5 as decided.
@@ -257,6 +257,9 @@ refuses anything outside them, and the approval binds the exact values chosen.
       label must appear.
   - Verify: `/stack-audit` on the spec. `layer_of.py` prints a ledger row for every new module.
   - Depends: Open questions 3, 4, 5. Files: `SPEC-learning-loop.md`, `docs/adr/0014-*.md`.
+  - Done 2026-10-06. Two notes: L2 no longer waits on D1 (Part D is deferred; the effect table is keyed
+    on the five `VARIANTS`). The "Saved LTV" definition is the author's proposal and needs your
+    confirmation before L4. `layer_of.py` rows can only be checked as each module lands.
 
 - [ ] **L1: randomise within the frozen cohort** · layer 5 · *S*
   - Acceptance:
