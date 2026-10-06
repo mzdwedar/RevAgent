@@ -1,0 +1,55 @@
+{
+  "grader": "gemma4:12b",
+  "labeller": "claude-opus-5-5",
+  "rubric_sha": "afe64c0639a1f4af",
+  "threshold": 0.6,
+  "items_graded": 40,
+  "at": "2026-10-06T08:24:07+00:00",
+  "criteria": {
+    "C1": {
+      "kappa": 0.0,
+      "n": 7,
+      "agreement": 0.7142857142857143,
+      "status": "human_only"
+    },
+    "C2": {
+      "kappa": 0.36363636363636376,
+      "n": 7,
+      "agreement": 0.7142857142857143,
+      "status": "human_only"
+    },
+    "C3": {
+      "kappa": 0.36363636363636376,
+      "n": 7,
+      "agreement": 0.7142857142857143,
+      "status": "human_only"
+    },
+    "C4": {
+      "kappa": 0.5882352941176469,
+      "n": 7,
+      "agreement": 0.8571428571428571,
+      "status": "human_only"
+    },
+    "C5": {
+      "kappa": null,
+      "n": 7,
+      "agreement": 1.0,
+      "status": "human_only"
+    }
+  },
+  "calibrated": [],
+  "human_only": [
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5"
+  ],
+  "ungraded": 165,
+  "unsure_labels": 0,
+  "injections": {
+    "items": 4,
+    "graded_better_than_labelled": {},
+    "passes": true
+  }
+}
