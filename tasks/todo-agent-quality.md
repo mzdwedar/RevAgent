@@ -294,7 +294,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     `scripts/simulate_outcomes.py` is invented and goes to Checkpoint L-A. Output goes to
     `data/outcomes/` (gitignored).
 
-- [ ] **L3: `eLTV_pre` covariate** · layer 4b · *M*
+- [x] **L3: `eLTV_pre` covariate** · layer 4b · *M*
   - Acceptance:
     - TabPFN regressor `ŷ_spend` and classifier `ŷ_conv` are computed on pre-treatment features
       at freeze time, combined into `eLTV_pre`, and recorded like `RecordedScorer`
@@ -305,6 +305,10 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - The recorded file round-trips.
     - The checkpoint constant is pinned (extend `test_prediction_gate.py`).
   - Depends: L0. Files: `prediction/engine.py`, `prediction/covariate.py`, `scripts/record_scores.py`, tests.
+  - Done 2026-10-06, with one deviation: no new TabPFN regressor. `eLTV_pre = (1 - recorded churn
+    probability) * last observed monthly payment`. The churn scores are already recorded and cross-fitted,
+    and next month's payment is last month's, so a regressor adds a 40-minute run and no information.
+    Nothing new to record and no token needed. The model version comes from the scores' pinned one.
 
 - [ ] **L4: ANCOVA and INSV readout** · layer per `layer_of.py` (expected 5) · *M*
   - Acceptance:
