@@ -41,9 +41,9 @@ WINDOW_DAYS = 30
 # offer -> (chance a treated subscriber who would have churned renews instead,
 #           cost per treated subscriber as a share of the cohort's mean monthly payment)
 EFFECTS: dict[str, tuple[float, float]] = {
-    "10-percent-off": (0.30, 0.10),  # modest and cheap: gains
-    "20-percent-off": (0.35, 0.20),  # buys little more than the 10% and costs twice: loses
-    "free-month": (0.60, 1.00),  # strongest pull, a whole month: loses clearly
+    "10-percent-off": (0.30, 0.10),  # cheap: gains
+    "20-percent-off": (0.35, 0.20),  # twice the cost for a little more pull: gains less
+    "free-month": (0.60, 1.00),  # strongest pull, a whole month: loses
     "annual-plan-switch": (0.25, 0.05),  # cheap, sticky: the best
     "pause-subscription": (0.15, 0.02),  # small pull, near free: gains a little
 }
@@ -77,7 +77,9 @@ def simulate(
 
     arms = assignment.arms()
     rows = []
-    expected_gain = 0.0
+    # The estimand is the cohort-wide effect, not the effect on whoever was drawn into
+    # treatment: randomisation noise in who was drawn is what the interval is for.
+    effect_per_member = lift * sum(prices[m] for m in members if churns[m]) / len(members)
     treated = 0
     for m in members:
         churned = churns[m]
@@ -85,7 +87,6 @@ def simulate(
         if arms[m] == "treatment":
             treated += 1
             if churned:
-                expected_gain += lift * prices[m]
                 renewed = _draw(seed, offer, m) < lift
         rows.append(
             {
@@ -110,8 +111,8 @@ def simulate(
         "offer": offer,
         "lift": lift,
         "treated": treated,
-        "true_tau_cents": expected_gain / treated if treated else 0.0,
-        "true_insv_cents": expected_gain - treated * cost,
+        "true_tau_cents": effect_per_member,
+        "true_insv_cents": (effect_per_member - cost) * treated,
     }
     return payload, truth
 

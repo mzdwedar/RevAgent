@@ -310,7 +310,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     and next month's payment is last month's, so a regressor adds a 40-minute run and no information.
     Nothing new to record and no token needed. The model version comes from the scores' pinned one.
 
-- [ ] **L4: ANCOVA and INSV readout** · layer per `layer_of.py` (expected 5) · *M*
+- [x] **L4: ANCOVA and INSV readout** · layer per `layer_of.py` (expected 5) · *M*
   - Acceptance:
     - A pure function `(outcomes, assignment, covariate) -> Readout` computes τ̂ by OLS
       `outcome ~ treatment + eLTV_pre` with HC2 standard errors, plus:
@@ -325,6 +325,11 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - The adjusted CI is no wider than the unadjusted one on average.
     - The INSV input schema contains only observed columns (criterion 12).
   - Depends: L1, L2, L3. Files: `context/readout.py`, test (+ `statsmodels` oracle test only if approved).
+  - Done 2026-10-06. Saved LTV confirmed by the owner. The simulator's truth is the cohort-wide effect
+    (the estimand), not the effect on whoever was drawn into treatment. Real KKBox cohort, 100 seeds per
+    offer, `docs/evidence/readout_simulation.csv`: coverage 95-98 of 100, false positives 3 of 100 at
+    tau = 0, variance ratio about 0.83. Flag for Checkpoint L-A: four of five offers promote in every
+    seed, so only free-month is a loser and the table barely ranks the offers.
 
 #### Checkpoint L-A
 - [ ] Coverage, false-positive rate and variance reduction committed to `docs/evidence/readout_simulation.csv`
