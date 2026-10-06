@@ -25,7 +25,7 @@ from temporalio.exceptions import ApplicationError
 
 from agentstack.context.conclusion_store import ConclusionStore, StoredConclusion
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
-from agentstack.context.learnings import Learnings
+from agentstack.context.learnings import Learnings, render_learnings
 from agentstack.context.outcomes import OutcomesRefused
 from agentstack.context.targeting import TargetingRule
 from agentstack.execution.gateway import UnresolvedEffect
@@ -483,8 +483,14 @@ class RunActivities:
     ) -> str:
         """What this stage's turn is told, from the record. Never passed through history."""
         if intent.stage == DRAFT:
+            frozen = self._frozen(run.tenant, cycle)
+            prior = (
+                render_learnings(self._learnings.recall(run.tenant, frozen.description))
+                if self._learnings is not None
+                else ""
+            )
             return draft_instruction(
-                tenant=run.tenant, cycle=cycle, cohort=self._frozen(run.tenant, cycle)
+                tenant=run.tenant, cycle=cycle, cohort=frozen, prior_learnings=prior
             )
         if intent.stage == EVALUATION:
             # After a conclusion that said stop: the one thing this turn may propose.
