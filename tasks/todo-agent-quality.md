@@ -71,7 +71,7 @@ active.
 #### Checkpoint E-A (the baseline)
 - [x] qwen3:8b × 10 cases × k=5 run on the *narrow* agent (temperature 0.7). pass@1, pass^k and the refusal distribution recorded in `docs/evidence/behaviour_qwen3_8b_narrow.jsonl`
 - [x] Gates 20/20, `check_task.sh` green, `stack_guard` clean
-- [x] Review the failure reasons with you before widening anything
+- [ ] Review the failure reasons with you before widening anything
 
 ---
 
@@ -80,7 +80,7 @@ active.
 The model chooses the offer and the rollout percentage. Policy holds the bounds, admission
 refuses anything outside them, and the approval binds the exact values chosen.
 
-- [x] **D0: ADR and constraint rows for bounded discretion** · docs + layer 8 · *S*
+- [ ] **D0: ADR and constraint rows for bounded discretion** · docs + layer 8 · *S*
   - Acceptance:
     - ADR-0015 records:
       - which arguments are record-held and which discretionary;
@@ -97,7 +97,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     weakened). `/stack-audit` on the ADR.
   - Depends: Checkpoint E-A, your sign-off. Files: `docs/adr/0015-*.md`, `CONSTRAINTS.md`, `SPEC.md` (own hunks).
 
-- [x] **D1: offer catalog and bounds as policy** · layer 8 · *S*
+- [ ] **D1: offer catalog and bounds as policy** · layer 8 · *S*
   - Acceptance:
     - `experiments/offers.toml` defines, per profile:
       - offer kinds with min/max amount and duration;
@@ -113,7 +113,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - an unknown kind is refused.
   - Depends: D0. Files: `experiments/offers.toml`, `policy/offers.py`, test.
 
-- [x] **D2: the model chooses the offer** · layers 6 + 3 · *M*
+- [ ] **D2: the model chooses the offer** · layers 6 + 3 · *M*
   - Acceptance:
     - `create_experiment_draft` gains scalar `offer_kind` (enum from the catalog),
       `offer_amount` (int) and `offer_months` (int). `variant` remains as the model's
@@ -131,7 +131,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
       `injected-text-cannot-raise-an-offer-cap`.
   - Depends: D1. Files: `tools/experiments.py`, `runtime/drafting.py`, tests, 2 eval cases.
 
-- [x] **D3: the model chooses the rollout percentage** · layers 3 + 8 · *M*
+- [ ] **D3: the model chooses the rollout percentage** · layers 3 + 8 · *M*
   - Acceptance:
     - `rollout_instruction` still dictates the record-held arguments "exactly as given".
       For `percentage` it states the allowed range and the minimum arm in customers,
@@ -148,7 +148,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - `replay_guard.py` and `checkpoint_guard.py --base main` green.
   - Depends: D1. Files: `runtime/drafting.py`, `policy/offers.py`, 3 eval cases, tests.
 
-- [x] **D4: the approver sees the choices** · layer 1 · *S*
+- [ ] **D4: the approver sees the choices** · layer 1 · *S*
   - Acceptance:
     - The Slack approval shows:
       - the offer, its cost per customer and its total cost for the headcount;
@@ -158,8 +158,6 @@ refuses anything outside them, and the approval binds the exact values chosen.
   - Verify: `tests/fitness/test_slack_outbound.py` is extended. An approval without range or
     cost fails. The model's reason renders escaped, so it cannot add buttons or links.
     Re-take `docs/evidence/slack_approval.png`.
-  - **Open:** the image is a screenshot of a real Slack post and is now stale (it shows no offer,
-    cost, range or reason). Re-take it from a live post; not done here, no workspace.
   - Depends: D2, D3. Files: `interfaces/slack.py`, test, evidence image.
 
 - [ ] **D5: decision behaviour cases, before and after** · layer 9 · *S*

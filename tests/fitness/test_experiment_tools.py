@@ -19,7 +19,6 @@ from agentstack.model.ollama_engine import OllamaEngine
 from agentstack.observability.spans import Tracer
 from agentstack.policy.approval import ApprovalRequired
 from agentstack.runtime.run import Run, new_run
-from agentstack.storage.database import Database
 from agentstack.tools.experiments import (
     DRAFT,
     DRAFT_STAGE,
@@ -42,9 +41,6 @@ GOOD_DRAFT = {
     "experiment_version": "exp:abc123",
     "hypothesis": "a discount retains at-risk customers",
     "variant": "20-percent-off",
-    "offer_kind": "percent_off",
-    "offer_amount": 20,
-    "offer_months": 3,
 }
 GOOD_ROLLOUT = {
     "tenant": TENANT,
@@ -258,17 +254,8 @@ def experiment_run(stack: Stack, stage: str = DRAFT_STAGE) -> Run:
     )
 
 
-def test_a_draft_commits_on_a_policy_grant_with_no_human(
-    stack: Stack, app_database: Database
-) -> None:
+def test_a_draft_commits_on_a_policy_grant_with_no_human(stack: Stack) -> None:
     """PRE_COMMIT, end to end: the registry is written and nobody was woken."""
-    # The registry costs the offer against the cohort that was frozen for this version.
-    app_database.execute(
-        "INSERT INTO frozen_cohorts (tenant, experiment_id, experiment_version, data_as_of,"
-        " targeting_model_version, risk_threshold, size, annual_value_at_risk_cents, description)"
-        " VALUES (%s, 'exp-7', %s, 'fixture:1', 'tabpfn-3.5', 0.24, 1000, 200000, '{}'::jsonb)",
-        (TENANT, GOOD_DRAFT["experiment_version"]),
-    )
     run = experiment_run(stack)
     view = stack.resolver.resolve(session_id=run.session_id, user_id=USER, tenant=TENANT)
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)

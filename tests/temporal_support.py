@@ -13,7 +13,6 @@ import json
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -35,7 +34,6 @@ from agentstack.interfaces.wiring import (
 from agentstack.model.contract import ModelAsset, ModelRequest, ModelResponse, ToolCallProposal
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import CollectingSink, SpanSink
-from agentstack.policy.offers import Bounds
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
@@ -57,11 +55,6 @@ DEFAULT_TRIGGER_DEADLINE = timedelta(days=1)
 
 
 DRAFT_TOOL = "create_experiment_draft"
-# What the stub model chooses on a rollout turn: inside the signed-off 5-15% range.
-CHOSEN_PERCENTAGE = 10
-# The signed-off arm floor is 100 customers; the fixtures here have tens. Everything else
-# is the real policy, so the range and the catalog are still what config says.
-TEST_BOUNDS = replace(Bounds.load("default"), minimum_treatment_arm=1)
 ROLLOUT_TOOL = "roll_out_variant_to_percentage"
 
 
@@ -118,7 +111,7 @@ class DraftingEngine:
                 )
             }
             rollout |= {
-                "percentage": CHOSEN_PERCENTAGE,
+                "percentage": int(told["percentage"]),
                 "risk_threshold": float(told["risk_threshold"]),
                 "prior_rollout_event": int(told["prior_rollout_event"]),
             }
@@ -134,9 +127,6 @@ class DraftingEngine:
         arguments |= {
             "hypothesis": "a discount retains the customers most at risk",
             "variant": "20-percent-off",
-            "offer_kind": "percent_off",
-            "offer_amount": 20,
-            "offer_months": 3,
         }
         return ModelResponse(
             text="drafted the experiment",
@@ -162,7 +152,6 @@ def activities_for(
     turns: TurnHost | None = None,
     asker: Asker | None = None,
     traces: SpanSink | None = None,
-    bounds: Bounds | None = None,
 ) -> RunActivities:
     return RunActivities(
         audit=AuditSink(db=db),
@@ -177,7 +166,6 @@ def activities_for(
         rule=rule,
         turns=turns,
         asker=asker,
-        bounds=bounds or TEST_BOUNDS,
     )
 
 
@@ -203,7 +191,7 @@ def turns_for(stack: Stack, engine: Any) -> ExperimentTurns:
 
 def asker_for(stack: Stack) -> ChannelAsker:
     """The production asker, posting to the test stack's recording notifier."""
-    return ChannelAsker(stack.notifier, stack.registry_client, bounds=TEST_BOUNDS)
+    return ChannelAsker(stack.notifier)
 
 
 @asynccontextmanager

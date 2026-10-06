@@ -28,12 +28,7 @@ from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.interfaces.slack import RecordingNotifier, render_blocks
 from agentstack.interfaces.wiring import ChannelAsker, Stack, answer, deliver
 from agentstack.model.contract import ModelRequest, ModelResponse, ToolCallProposal
-from agentstack.runtime.drafting import (
-    PROPOSAL_DEVIATES,
-    PROPOSAL_OUT_OF_BOUNDS,
-    estimated_customers,
-    intended_rollout,
-)
+from agentstack.runtime.drafting import PROPOSAL_DEVIATES, estimated_customers, intended_rollout
 from agentstack.runtime.run import new_run
 from agentstack.runtime.temporal.activities import DEVIATES
 from agentstack.runtime.temporal.contracts import AskIntent, RunProgress, workflow_id
@@ -88,19 +83,17 @@ class DeviatingEngine(DraftingEngine):
         )
 
 
-# Differing from the record is a deviation; choosing a percentage outside the range is a
-# choice the model was free to make, refused as out of bounds (ADR-0015).
 DEVIATIONS = {
-    "everyone": ({"percentage": 100}, PROPOSAL_OUT_OF_BOUNDS),
-    "a-looser-threshold": ({"risk_threshold": 0.05}, PROPOSAL_DEVIATES),
-    "another-cohort": ({"experiment_version": "exp:not-the-frozen-one"}, PROPOSAL_DEVIATES),
-    "another-model": ({"targeting_model_version": "some-other-model"}, PROPOSAL_DEVIATES),
+    "everyone": {"percentage": 100},
+    "a-looser-threshold": {"risk_threshold": 0.05},
+    "another-cohort": {"experiment_version": "exp:not-the-frozen-one"},
+    "another-model": {"targeting_model_version": "some-other-model"},
 }
 
 
-@pytest.mark.parametrize(("changes", "decision"), DEVIATIONS.values(), ids=DEVIATIONS.keys())
+@pytest.mark.parametrize("changes", DEVIATIONS.values(), ids=DEVIATIONS.keys())
 def test_a_proposal_that_differs_from_the_frozen_cohort_is_never_put_to_a_person(
-    stack: Stack, app_database: Database, changes: dict[str, Any], decision: str
+    stack: Stack, app_database: Database, changes: dict[str, Any]
 ) -> None:
     async def go() -> tuple[str, RunProgress]:
         async with (
@@ -136,7 +129,7 @@ def test_a_proposal_that_differs_from_the_frozen_cohort_is_never_put_to_a_person
     assert parked == [], "nothing was parked that a person could be asked about later"
     assert stack.registry_client.rollouts == []
     # Refused, and on the record: under the agent that proposed it, before any gateway.
-    (refused,) = [r for r in stack.audit.for_run(run_id) if r.policy_decision == decision]
+    (refused,) = [r for r in stack.audit.for_run(run_id) if r.policy_decision == PROPOSAL_DEVIATES]
     assert refused.outcome == "refused" and refused.resource.endswith("/rollout")
     assert refused.principal == "agent-operator"
     # The gateway never saw the rollout: its only rollout record is the refusal above.
@@ -167,16 +160,6 @@ def test_the_headline_is_the_payload_that_commits(stack: Stack, app_database: Da
     assert asked.experiment_version == payload["experiment_version"]
 
 
-class DraftReader:
-    """The registry's read of a drafted experiment, as the asker sees it: the offer the model
-    chose, which is the record's, not the action's."""
-
-    def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
-        del query
-        assert resource == "acme/experiments/exp-7"
-        return {"offer_kind": "percent_off", "offer_amount": 20, "offer_months": 3}
-
-
 def test_the_question_is_sized_from_the_action_it_binds_not_from_a_constant() -> None:
     """The asker is handed the action the wait holds, and every rollout number it states
     is that action's. Held here with an action whose percentage is not the default."""
@@ -192,7 +175,7 @@ def test_the_question_is_sized_from_the_action_it_binds_not_from_a_constant() ->
         annual_value_at_risk_cents=1_000_000,
         description={},
     )
-    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0, percentage=25))
+    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0) | {"percentage": 25})
     run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
     wait = Wait(
         wait_id="wait-1",
@@ -204,91 +187,12 @@ def test_the_question_is_sized_from_the_action_it_binds_not_from_a_constant() ->
         approval_summary="roll_out_variant_to_percentage — IRREVERSIBLE",
     )
 
-    ChannelAsker(notifier, DraftReader()).ask(run=run, wait=wait, cohort=cohort, action=action)
+    ChannelAsker(notifier).ask(run=run, wait=wait, cohort=cohort, action=action)
 
     ((_, asked),) = notifier.posted
     assert (asked.percentage, asked.estimated_customers) == (25, 120)
     assert asked.experiment_version == "exp:v1"
     assert asked.currency == "USD"
-    # The offer the draft holds, its cost from the cohort's own value (1,000,000 / 480 a
-    # year: 20% off for 3 months is 105 cents, rounded up), for the 120 this reaches, and
-    # the range the bounds allow as people: 5% of 480 is 24, 15% is 72.
-    assert asked.offer == "20% off for 3 months"
-    assert (asked.cost_per_customer_cents, asked.total_cost_cents) == (105, 105 * 120)
-    assert asked.allowed_percentages[1] == 15
-    assert asked.allowed_customers[1] == 72
-    assert asked.reason == ""
-
-
-def test_the_question_quotes_the_reason_the_bound_action_carries() -> None:
-    notifier = RecordingNotifier()
-    cohort = FrozenCohort(
-        tenant="acme",
-        experiment_id="exp-7",
-        experiment_version="exp:v1",
-        data_as_of="fixture:abc",
-        targeting_model_version="stub-1",
-        risk_threshold=0.6,
-        size=480,
-        annual_value_at_risk_cents=1_000_000,
-        description={},
-    )
-    action = prepare_rollout(
-        intended_rollout(cohort, prior_rollout_event=0, percentage=10) | {"reason": "start small"}
-    )
-    run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
-    wait = Wait(
-        wait_id="wait-1",
-        run_id=run.run_id,
-        kind="human_approval",
-        state_snapshot="s",
-        created_at=datetime.now(UTC),
-        action_fingerprint=action.fingerprint(),
-        approval_summary="roll_out_variant_to_percentage — IRREVERSIBLE",
-    )
-
-    ChannelAsker(notifier, DraftReader()).ask(run=run, wait=wait, cohort=cohort, action=action)
-
-    ((_, asked),) = notifier.posted
-    assert asked.reason == "start small"
-
-
-def test_a_draft_with_no_offer_is_not_put_to_a_person() -> None:
-    """An approval without a cost fails: nothing is asked rather than asked without it."""
-
-    class Bare:
-        def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
-            del resource, query
-            return {"experiment_id": "exp-7"}
-
-    cohort = FrozenCohort(
-        tenant="acme",
-        experiment_id="exp-7",
-        experiment_version="exp:v1",
-        data_as_of="fixture:abc",
-        targeting_model_version="stub-1",
-        risk_threshold=0.6,
-        size=480,
-        annual_value_at_risk_cents=1_000_000,
-        description={},
-    )
-    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0, percentage=10))
-    run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
-    wait = Wait(
-        wait_id="wait-1",
-        run_id=run.run_id,
-        kind="human_approval",
-        state_snapshot="s",
-        created_at=datetime.now(UTC),
-        action_fingerprint=action.fingerprint(),
-        approval_summary="roll_out_variant_to_percentage — IRREVERSIBLE",
-    )
-    notifier = RecordingNotifier()
-
-    with pytest.raises(ValueError, match="offer"):
-        ChannelAsker(notifier, Bare()).ask(run=run, wait=wait, cohort=cohort, action=action)
-
-    assert notifier.posted == []
 
 
 def test_the_question_carries_the_frozen_cohorts_currency() -> None:
@@ -306,7 +210,7 @@ def test_the_question_carries_the_frozen_cohorts_currency() -> None:
         annual_value_at_risk_cents=1_000_000,
         description={"currency": "NTD"},
     )
-    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0, percentage=10))
+    action = prepare_rollout(intended_rollout(cohort, prior_rollout_event=0))
     run = new_run(session_id="s", tenant="acme", user="agent-operator", channel="t")
     wait = Wait(
         wait_id="wait-1",
@@ -318,7 +222,7 @@ def test_the_question_carries_the_frozen_cohorts_currency() -> None:
         approval_summary="roll_out_variant_to_percentage — IRREVERSIBLE",
     )
 
-    ChannelAsker(notifier, DraftReader()).ask(run=run, wait=wait, cohort=cohort, action=action)
+    ChannelAsker(notifier).ask(run=run, wait=wait, cohort=cohort, action=action)
 
     ((_, asked),) = notifier.posted
     assert asked.money() == "NTD 10,000"

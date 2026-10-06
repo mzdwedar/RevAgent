@@ -20,25 +20,17 @@ from typing import Any
 from agentstack.context.frozen_cohorts import FrozenCohort
 from agentstack.context.targeting import money
 from agentstack.observability.audit import AuditSink
-from agentstack.policy.offers import Bounds, OfferRefused, draft_cost
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.run import Run
 from agentstack.tools.action import ActionRequest
 from agentstack.tools.experiments import DRAFT, prepare_rollout
 
+# SPEC.md: "On approval, roll the winning variant out to ~10% of the targeted cohort."
+ROLLOUT_PERCENTAGE = 10
+
 # What the audit trail names when a proposal is refused for not being the rollout the
 # record says. Refused before anyone is asked, and again at the ask and at the act.
 PROPOSAL_DEVIATES = "proposal.deviates"
-
-# What the audit trail names when a proposal is the right cohort's and a choice the model
-# was free to make, but outside the range policy allows (ADR-0015).
-PROPOSAL_OUT_OF_BOUNDS = "proposal.out_of_bounds"
-
-
-class OutOfBounds(str):
-    """A refusal reason that is about a discretionary choice, not the record. It is a
-    string so every admission can quote it; the type is what picks the audit decision."""
-
 
 # Admits or refuses one prepared request before it goes anywhere near the gateway: the
 # refusal's reason, or None. A turn that is told exactly what to propose is given one.
@@ -49,72 +41,47 @@ class NothingToDraft(RuntimeError):
     """The cycle did not propose, so there is no candidate to draft."""
 
 
-def estimated_customers(cohort: FrozenCohort, percentage: int) -> int:
+def estimated_customers(cohort: FrozenCohort, percentage: int = ROLLOUT_PERCENTAGE) -> int:
     """How many customers the rollout reaches: what the approver decides about."""
     return round(cohort.size * percentage / 100)
 
 
-def intended_rollout(
-    cohort: FrozenCohort, *, prior_rollout_event: int, percentage: int, reason: Any = None
-) -> dict[str, Any]:
-    """The rollout for this cohort at `percentage`, as the tool's arguments.
+def intended_rollout(cohort: FrozenCohort, *, prior_rollout_event: int) -> dict[str, Any]:
+    """The rollout the record says this cohort gets, as the tool's arguments.
 
-    Every value but the percentage is the record's: the frozen cohort's own identity and
-    predicate, and the registry's own compare-and-set key for its next rollout event (C2),
-    read by the caller so this stays a function of the record and not an importer of the
-    execution surface it reads. The percentage is the model's to choose within policy's
-    bounds (ADR-0015), so it is a parameter: `rollout_deviation` holds a proposal to the
-    record at the percentage it chose, and to the bounds separately.
+    Every value is the record's: the frozen cohort's own identity and predicate, the
+    percentage SPEC.md sets, and the registry's own compare-and-set key for its next
+    rollout event (C2), read by the caller so this stays a function of the record and
+    not an importer of the execution surface it reads. Nothing here was chosen by a
+    model, so it is what a proposal is held to, and what the instruction tells the
+    model to propose.
     """
     return {
         "tenant": cohort.tenant,
         "experiment_id": cohort.experiment_id,
         "experiment_version": cohort.experiment_version,
-        "percentage": percentage,
+        "percentage": ROLLOUT_PERCENTAGE,
         "targeting_model_version": cohort.targeting_model_version,
         "risk_threshold": cohort.risk_threshold,
         "prior_rollout_event": prior_rollout_event,
-    } | ({} if reason is None else {"reason": reason})
+    }
 
 
 def rollout_deviation(
-    request: ActionRequest,
-    cohort: FrozenCohort,
-    *,
-    prior_rollout_event: int,
-    bounds: Bounds | None = None,
+    request: ActionRequest, cohort: FrozenCohort, *, prior_rollout_event: int
 ) -> str | None:
     """Why `request` is not the rollout the frozen cohort gets, or None if it is.
 
     The model is told the arguments; it is not trusted to have used them. Its proposal
     is untrusted output, and the approver's headline, the approval's fingerprint and the
     act all rest on it (T43: the proposal is what commits). So a proposal that differs
-    from the record in anything - a looser threshold, another cohort's version - is
-    refused here, before a person is asked about it, rather than headlined as the rollout
-    they would expect.
-
-    The percentage is the one thing the model chooses (ADR-0015): everything else is held
-    to the record as before, and the percentage is held to the bounds, which come from
-    config. A record deviation outranks a bad percentage; a percentage outside the range,
-    or whose arm is under the floor, is `OutOfBounds`.
+    from the record in anything - a wider percentage, a looser threshold, another
+    cohort's version - is refused here, before a person is asked about it, rather than
+    headlined as the rollout they would expect.
     """
-    chosen = request.payload.get("percentage")
-    intended = prepare_rollout(
-        intended_rollout(
-            cohort,
-            prior_rollout_event=prior_rollout_event,
-            percentage=chosen if isinstance(chosen, int) else 0,
-            # The model's words are its own; they are held to being text, not to a value.
-            reason=request.payload.get("reason")
-            if isinstance(request.payload.get("reason"), str)
-            else None,
-        )
-    )
+    intended = prepare_rollout(intended_rollout(cohort, prior_rollout_event=prior_rollout_event))
     if request.fingerprint() == intended.fingerprint():
-        reason = (bounds or Bounds.load()).check_percentage(
-            chosen if isinstance(chosen, int) else 0, cohort.size
-        )
-        return OutOfBounds(reason) if reason is not None else None
+        return None
     differs = sorted(
         key
         for key in set(intended.payload) | set(request.payload)
@@ -131,9 +98,7 @@ def rollout_deviation(
     )
 
 
-def draft_deviation(
-    request: ActionRequest, cohort: FrozenCohort, *, bounds: Bounds | None = None
-) -> str | None:
+def draft_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | None:
     """Why `request` is not a draft of the frozen cohort, or None if it is.
 
     The hypothesis and the variant are the model's to write, and nothing here judges
@@ -141,10 +106,6 @@ def draft_deviation(
     is held to and the approver is shown, so a draft that carries a mistyped or invented
     one lands in the registry beside a cohort it was never about. The model was told the
     version "exactly as given" and copied it with one character added (Checkpoint B).
-
-    The offer is the model's to choose and policy's to bound (ADR-0015): one outside the
-    catalog, or whose cost over the largest arm policy allows exceeds the cap, is refused
-    as `OutOfBounds`. The bounds come from config, never from what the model was told.
     """
     resource = f"{cohort.tenant}/experiments/{cohort.experiment_id}"
     if request.tool != DRAFT.name:
@@ -161,35 +122,6 @@ def draft_deviation(
             f"{cohort.experiment_version!r}. A draft is held to the record: one written "
             "under another version is about a cohort nobody froze"
         )
-    return offer_refusal(request, cohort, bounds or Bounds.load())
-
-
-def offer_refusal(
-    request: ActionRequest, cohort: FrozenCohort, bounds: Bounds
-) -> OutOfBounds | None:
-    """Why the offer in a draft is outside what policy allows, or None."""
-    kind = request.payload.get("offer_kind")
-    amount = request.payload.get("offer_amount")
-    months = request.payload.get("offer_months")
-    if not (isinstance(kind, str) and isinstance(amount, int) and isinstance(months, int)):
-        return OutOfBounds(
-            "the draft names no complete offer (offer_kind, offer_amount, offer_months)"
-        )
-    reason = bounds.check_offer(kind, amount, months)
-    if reason is not None:
-        return OutOfBounds(reason)
-    try:
-        draft_cost(
-            bounds,
-            kind,
-            amount,
-            months,
-            cohort_size=cohort.size,
-            annual_value_at_risk_cents=cohort.annual_value_at_risk_cents,
-            currency=cohort.currency,
-        )
-    except OfferRefused as refused:
-        return OutOfBounds(str(refused))
     return None
 
 
@@ -213,9 +145,7 @@ def _admitting(
                 action_fingerprint=request.fingerprint(),
                 surface=request.surface.value,
                 resource=request.resource,
-                policy_decision=(
-                    PROPOSAL_OUT_OF_BOUNDS if isinstance(reason, OutOfBounds) else PROPOSAL_DEVIATES
-                ),
+                policy_decision=PROPOSAL_DEVIATES,
                 approval_id=None,
                 outcome="refused",
             )
@@ -225,37 +155,21 @@ def _admitting(
 
 
 def draft_admission(
-    *,
-    cohort: FrozenCohort,
-    audit: AuditSink,
-    run: Run,
-    principal: str,
-    bounds: Bounds | None = None,
+    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str
 ) -> Admission:
     """An `Admission` for a drafting turn: a draft of the frozen cohort, or an audited refusal."""
     return _admitting(
-        lambda request: draft_deviation(request, cohort, bounds=bounds),
-        audit=audit,
-        run=run,
-        principal=principal,
+        lambda request: draft_deviation(request, cohort), audit=audit, run=run, principal=principal
     )
 
 
 def rollout_admission(
-    *,
-    cohort: FrozenCohort,
-    audit: AuditSink,
-    run: Run,
-    principal: str,
-    prior_rollout_event: int,
-    bounds: Bounds | None = None,
+    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str, prior_rollout_event: int
 ) -> Admission:
     """An `Admission` for a rollout turn: the frozen cohort's rollout, or a refusal that is
     written to the audit trail."""
     return _admitting(
-        lambda request: rollout_deviation(
-            request, cohort, prior_rollout_event=prior_rollout_event, bounds=bounds
-        ),
+        lambda request: rollout_deviation(request, cohort, prior_rollout_event=prior_rollout_event),
         audit=audit,
         run=run,
         principal=principal,
@@ -263,34 +177,24 @@ def rollout_admission(
 
 
 def rollout_instruction(
-    *,
-    experiment_id: str,
-    cohort: FrozenCohort,
-    prior_rollout_event: int,
-    bounds: Bounds | None = None,
+    *, experiment_id: str, cohort: FrozenCohort, prior_rollout_event: int
 ) -> str:
-    """The rollout turn is told the record-held arguments exactly, and the range for the
-    one it chooses. The frozen cohort's predicate travels in the payload, because a
-    rollout is to *this* cohort. The model proposes the percentage; layer 8 holds it to
-    bounds it reads from config, not from this text, with a person in the loop."""
-    bounds = bounds or Bounds.load()
-    told = intended_rollout(cohort, prior_rollout_event=prior_rollout_event, percentage=0) | {
+    """The rollout turn is told the action exactly. Every argument comes from the record:
+    the frozen cohort's predicate travels in the payload, because a rollout is to *this*
+    cohort. The model proposes it; layer 8 decides it, with a person in the loop."""
+    told = intended_rollout(cohort, prior_rollout_event=prior_rollout_event) | {
         "experiment_id": experiment_id
     }
-    lowest, _ = bounds.allowed_percentages(cohort.size)
     return (
         "The experiment is drafted. Propose its rollout by calling "
         f"roll_out_variant_to_percentage with tenant={told['tenant']} "
         f"experiment_id={told['experiment_id']} "
         f"experiment_version={told['experiment_version']} "
+        f"percentage={told['percentage']} "
         f"targeting_model_version={told['targeting_model_version']} "
         f"risk_threshold={told['risk_threshold']!r} "
-        f"prior_rollout_event={told['prior_rollout_event']} exactly as given. Choose the "
-        f"percentage yourself, a whole number from {lowest} to {bounds.percentage_max}: "
-        f"the cohort has {cohort.size:,} customers and the treatment arm must be at least "
-        f"{bounds.minimum_treatment_arm} customers. A percentage outside that is refused "
-        "and never reaches a person. Give a one-line reason for it as the reason argument. "
-        "A person approves the rollout before it happens."
+        f"prior_rollout_event={told['prior_rollout_event']} exactly as given. A person "
+        "approves it before it happens."
     )
 
 
@@ -314,26 +218,7 @@ def cohort_profile(cohort: FrozenCohort) -> str:
     )
 
 
-def offer_instruction(cohort: FrozenCohort, bounds: Bounds | None = None) -> str:
-    """The catalog and the caps, in words. Telling the model the range is not granting it
-    one: admission holds the same numbers, from config, whatever this says."""
-    bounds = bounds or Bounds.load()
-    kinds = "; ".join(
-        f"{name} (offer_amount {k.amount_min}-{k.amount_max}, offer_months "
-        f"{k.months_min}-{k.months_max})"
-        for name, k in sorted(bounds.kinds.items())
-    )
-    return (
-        f"Choose the offer with offer_kind, offer_amount and offer_months: {kinds}. Its total "
-        f"cost may not exceed {bounds.cost_cap_bps / 100:g}% of the annual value at risk "
-        f"({money(cohort.annual_value_at_risk_cents, cohort.currency)}). A choice outside "
-        "these is refused and never reaches a person."
-    )
-
-
-def draft_instruction(
-    *, tenant: str, cycle: Cycle, cohort: FrozenCohort, bounds: Bounds | None = None
-) -> str:
+def draft_instruction(*, tenant: str, cycle: Cycle, cohort: FrozenCohort) -> str:
     if cycle.outcome is None or cycle.outcome.value != "propose" or cycle.run_id is None:
         raise NothingToDraft(
             f"{cycle.experiment_id} @ {cycle.data_as_of} concluded {cycle.outcome}; only a "
@@ -345,6 +230,5 @@ def draft_instruction(
         f"experiment_version={cycle.run_id} exactly as given. Write the hypothesis and the "
         "variant yourself: what offer to test, and why it should retain these customers, "
         "grounded in the risk profile below. "
-        f"{offer_instruction(cohort, bounds)} "
         f"The cohort was scored on the batch {cycle.data_as_of}. {cohort_profile(cohort)}"
     )

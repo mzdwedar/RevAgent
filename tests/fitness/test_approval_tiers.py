@@ -55,9 +55,6 @@ def draft_request(tenant: str = "acme") -> ActionRequest:
             "experiment_version": "exp:abc123",
             "hypothesis": "a discount retains at-risk customers",
             "variant": "20-percent-off",
-            "offer_kind": "percent_off",
-            "offer_amount": 20,
-            "offer_months": 3,
         }
     )
 
@@ -330,18 +327,8 @@ def test_a_stale_policy_grant_is_refused_like_any_other(stack: Stack, run: Run) 
         )
 
 
-def test_a_pre_commit_action_is_audited_through_the_gateway(
-    stack: Stack, run: Run, app_database: Database
-) -> None:
+def test_a_pre_commit_action_is_audited_through_the_gateway(stack: Stack, run: Run) -> None:
     """Criterion 20's other half: it proceeds *and* leaves a record naming the rule."""
-    # The registry costs the offer against the cohort frozen for this version.
-    app_database.execute(
-        "INSERT INTO frozen_cohorts (tenant, experiment_id, experiment_version, data_as_of,"
-        " targeting_model_version, risk_threshold, size, annual_value_at_risk_cents, description)"
-        " VALUES (%s, 'exp-7', 'exp:abc123', 'fixture:1', 'tabpfn-3.5', 0.24, 1000, 200000,"
-        " '{}'::jsonb)",
-        ("acme",),
-    )
     tracer = Tracer(run_id=run.run_id, session_id=run.session_id, versions=stack.deps.versions)
 
     result = stack.deps.gateway.execute(

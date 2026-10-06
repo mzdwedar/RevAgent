@@ -79,7 +79,7 @@ def park_approval(
         f"{run.tenant}/experiments/exp-7",
         {"experiment_version": VERSION, "hypothesis": "a discount retains", "variant": "20-off"},
     )
-    arguments = intended_rollout(cohort, prior_rollout_event=0, percentage=10)
+    arguments = intended_rollout(cohort, prior_rollout_event=0)
     request = prepare_rollout(arguments)
     # The world as the surface describes it now, as the rollout turn parks it: a re-ask
     # reads the world again and compares, so a placeholder here would read as "moved".
@@ -417,19 +417,11 @@ def frozen(stack: Stack, run: Run) -> FrozenCohort:
     )
 
 
-class DraftedOffer:
-    """These waits are parked without drafting an experiment, so the offer is stated here."""
-
-    def read(self, resource: str, query: dict[str, Any]) -> dict[str, Any]:
-        del resource, query
-        return {"offer_kind": "free_months", "offer_amount": 1, "offer_months": 1}
-
-
 class Asking:
     """Records every question put, and can fail or be answered mid-ask."""
 
     def __init__(self, stack: Stack, *, fail: bool = False, answer: bool = False) -> None:
-        self.inner = ChannelAsker(stack.notifier, DraftedOffer())
+        self.inner = ChannelAsker(stack.notifier)
         self.stack = stack
         self.fail = fail
         self.answer = answer

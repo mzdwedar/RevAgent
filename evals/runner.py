@@ -27,7 +27,7 @@ from agentstack.observability.spans import CollectingSink
 from agentstack.policy.triggers import Outcome as Outcome_
 from agentstack.policy.triggers import OutcomeNotAuthorized
 from agentstack.runtime.cycles import CycleStore, evaluate
-from agentstack.runtime.drafting import draft_admission, rollout_admission
+from agentstack.runtime.drafting import rollout_admission
 from agentstack.runtime.loop import run_turn
 from agentstack.runtime.run import Run, new_run
 from agentstack.runtime.steps import StepLedger
@@ -36,7 +36,7 @@ from agentstack.runtime.temporal.contracts import CommitIntent
 from agentstack.runtime.waits import HUMAN_APPROVAL, ResumeEvent, resume
 from agentstack.storage.database import Database
 from agentstack.storage.provision import truncate_all
-from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT_STAGE
+from agentstack.tools.experiments import ROLLOUT_STAGE
 from agentstack.tools.spec import Surface
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
@@ -68,9 +68,6 @@ class Case:
     # A rollout case runs the rollout turn against this frozen cohort, held to it as the
     # worker holds it, with `message` as what the model proposes (A1).
     frozen_cohort: dict[str, Any] | None = None
-    # A cohort frozen before an ordinary turn, so a draft it commits has one to be costed
-    # against (the registry computes an offer's cost from the frozen record).
-    seed_cohort: dict[str, Any] | None = None
     # Then wake the run's act while its approval wait is still unanswered (A1, H2).
     wake_unanswered: bool = False
     # The stage the run is on, which decides the tools its turn is shown.
@@ -210,33 +207,29 @@ def _run_rollout_case(case: Case, db: Database, checkpointer: Any, started: floa
             session_id=session.session_id,
             tenant=TENANT,
             user=USER,
-            stage=DRAFT_STAGE if case.stage == DRAFT_STAGE else ROLLOUT_STAGE,
+            stage=ROLLOUT_STAGE,
             channel="eval",
         )
     )
     turns = ExperimentTurns(stack)
     envelope = turns.envelope(run)
-    if case.stage == DRAFT_STAGE:
-        # A drafting turn is held to the version and, since the model chooses the offer,
-        # to the bounds (ADR-0015).
-        admit = draft_admission(
-            cohort=cohort, audit=stack.audit, run=run, principal=envelope.principal
-        )
-    else:
-        # The registry's own compare-and-set key, as the worker reads it; an experiment it
-        # has no events for has none, so 0.
-        history = stack.deps.gateway.surfaces[Surface.REGISTRY].read(
-            f"{TENANT}/experiments/{case.frozen_cohort['experiment_id']}/history", {}
-        )
-        admit = rollout_admission(
+    # The registry's own compare-and-set key, as the worker reads it; an experiment it has
+    # no events for has none, so 0.
+    history = stack.deps.gateway.surfaces[Surface.REGISTRY].read(
+        f"{TENANT}/experiments/{case.frozen_cohort['experiment_id']}/history", {}
+    )
+    result = run_turn(
+        run=run,
+        envelope=envelope,
+        message=case.message,
+        deps=stack.deps,
+        admit=rollout_admission(
             cohort=cohort,
             audit=stack.audit,
             run=run,
             principal=envelope.principal,
             prior_rollout_event=int(history.get("latest_rollout_event", 0)),
-        )
-    result = run_turn(
-        run=run, envelope=envelope, message=case.message, deps=stack.deps, admit=admit
+        ),
     )
 
     commit_status: str | None = None
@@ -276,7 +269,6 @@ def _run_rollout_case(case: Case, db: Database, checkpointer: Any, started: floa
     checks: dict[str, Any] = {
         "status": result.status,
         "rollouts": len(stack.registry_client.rollouts),
-        "drafts": len(stack.registry_client.drafts),
         "approval_waits": len(approval_waits),
         "pending_approval_waits": len([w for w in approval_waits if not w.satisfied]),
         "questions_posted": posted,
@@ -323,8 +315,6 @@ def _run_rerun_case(case: Case, db: Database, checkpointer: Any, started: float)
     """
     failures: list[str] = []
     first = _stack_for(case, db, checkpointer)
-    if case.seed_cohort is not None:
-        freeze(db, case.seed_cohort)
     session = first.resolver.start(user_id=USER, tenant=TENANT)
     run = first.runs.ensure(
         new_run(

@@ -32,7 +32,7 @@ COHORT = {
     "data_as_of": "fixture:abc",
     "targeting_model_version": "tabpfn-3.5",
     "risk_threshold": 0.61,
-    "size": 1000,
+    "size": 200,
     "annual_value_at_risk_cents": 4_000_000,
 }
 

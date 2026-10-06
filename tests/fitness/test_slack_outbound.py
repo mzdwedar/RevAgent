@@ -38,13 +38,6 @@ ASK = {
     "estimated_customers": 33,
     "annual_value_at_risk_cents": 24_212_000,
     "tenant": "acme",
-    # What the model chose (ADR-0015), and the bounds it chose within, as the person weighs them.
-    "offer": "20% off for 3 months",
-    "cost_per_customer_cents": 600,
-    "total_cost_cents": 19_800,
-    "allowed_percentages": (5, 15),
-    "allowed_customers": (17, 50),
-    "reason": "A small arm first keeps the cost down while the effect is measured.",
 }
 
 
@@ -175,14 +168,7 @@ def test_the_blocks_are_serialisable_and_well_formed() -> None:
     blocks = render_blocks(ask())
 
     json.dumps(blocks)
-    assert [b["type"] for b in blocks] == [
-        "header",
-        "section",
-        "section",
-        "section",
-        "actions",
-        "context",
-    ]
+    assert [b["type"] for b in blocks] == ["header", "section", "section", "actions", "context"]
 
 
 def test_the_summary_is_truncated_rather_than_rejected_by_slack() -> None:
@@ -372,106 +358,3 @@ def test_the_recorder_keeps_the_notices_apart_from_the_asks() -> None:
 
     assert notifier.posted == []
     assert [(channel, n.reason) for channel, n in notifier.notices] == [("#experiments", "stale")]
-
-
-# --- D4: the approver sees what the model chose, and what it was allowed to choose ---
-
-
-def all_text(blocks: list[dict[str, Any]]) -> str:
-    out: list[str] = []
-    for block in blocks:
-        if "text" in block:
-            out.append(block["text"]["text"])
-        out += [f["text"] for f in block.get("fields", [])]
-        out += [e["text"] for e in block.get("elements", []) if e.get("type") == "mrkdwn"]
-    return "\n".join(out)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "offer",
-        "cost_per_customer_cents",
-        "total_cost_cents",
-        "allowed_percentages",
-        "allowed_customers",
-    ],
-)
-def test_an_approval_without_the_offer_its_cost_or_the_range_cannot_be_built(name: str) -> None:
-    """Structural, like the headcount: a later edit cannot quietly drop what was chosen."""
-    field = ApprovalAsk.__dataclass_fields__[name]
-
-    assert field.default is dataclasses.MISSING
-    assert field.default_factory is dataclasses.MISSING
-
-
-def test_the_approval_shows_the_offer_and_what_it_costs() -> None:
-    text = all_text(render_blocks(ask()))
-
-    assert "20% off for 3 months" in text
-    assert "$6.00" in text  # per customer, in cents' precision
-    assert "$198" in text  # for the whole headcount
-
-
-def test_the_approval_shows_the_chosen_percentage_and_the_allowed_range_as_headcounts() -> None:
-    text = all_text(render_blocks(ask()))
-
-    assert "10%" in text
-    assert "5%" in text and "15%" in text
-    assert "17" in text and "50" in text  # the range as people, not only as a ratio
-
-
-def test_the_models_reason_is_quoted_and_labelled_model_written() -> None:
-    text = all_text(render_blocks(ask()))
-
-    assert "model-written" in text
-    assert "> A small arm first keeps the cost down" in text
-
-
-def test_no_reason_is_said_so_rather_than_left_blank() -> None:
-    text = all_text(render_blocks(ask(reason="")))
-
-    assert "no reason given" in text
-
-
-def test_the_models_reason_renders_escaped_and_cannot_add_buttons_or_links() -> None:
-    hostile = "<!channel> <https://evil.example|Approve now> & *bold*\n```\n[x](y)"
-    blocks = render_blocks(ask(reason=hostile))
-    text = all_text(blocks)
-
-    assert "<!channel>" not in text
-    assert "<https://evil.example" not in text
-    assert "&lt;!channel&gt;" in text
-    assert "&amp;" in text
-    assert sum(1 for b in blocks if b["type"] == "actions") == 1  # the one pair, never more
-    quoted = next(b for b in blocks if "model-written" in b.get("text", {}).get("text", ""))
-    assert "```" not in quoted["text"]["text"].split("\n", 1)[1]  # cannot close a code fence
-
-
-def test_a_long_reason_is_cut_short() -> None:
-    text = all_text(render_blocks(ask(reason="word " * 400)))
-
-    assert len(text) < 3_500
-    assert "…" in text
-
-
-def test_the_footer_is_unchanged() -> None:
-    footer = render_blocks(ask())[-1]["elements"][0]["text"]
-
-    assert footer == (
-        "run `run-7` · wait `wait-1` · tenant `acme` · this approval is granted against "
-        "this cohort and expires if the data moves"
-    )
-
-
-def test_the_fallback_text_carries_the_offer_too() -> None:
-    sent: dict[str, Any] = {}
-
-    class Capturing:
-        def chat_postMessage(self, **kwargs: Any) -> dict[str, Any]:
-            sent.update(kwargs)
-            return {"ts": "1700000000.000100"}
-
-    SlackNotifier(build_client=lambda: Capturing()).post_approval(ask(), channel="#x")
-
-    assert "20% off for 3 months" in sent["text"]

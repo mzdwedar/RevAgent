@@ -15,7 +15,6 @@ from evals.behaviour import (
     DEVIATES,
     MALFORMED,
     NO_PROPOSAL,
-    OUT_OF_BOUNDS,
     WRONG_TOOL,
     BehaviourCase,
     Trial,
@@ -52,10 +51,6 @@ class Rewriting(DraftingEngine):
 
 class WidePercentage(Rewriting):
     changes = {"percentage": 100}
-
-
-class LooseThreshold(Rewriting):
-    changes = {"risk_threshold": 0.05}
 
 
 class MissingVariant(Rewriting):
@@ -96,9 +91,9 @@ def test_a_good_proposal_is_admitted(
 def test_a_proposal_that_differs_from_the_record_names_the_field(
     rollout_case: BehaviourCase, app_database: Database, checkpointer: Any
 ) -> None:
-    out = classify(rollout_case, LooseThreshold(), app_database, checkpointer)
+    out = classify(rollout_case, WidePercentage(), app_database, checkpointer)
     assert out.outcome == DEVIATES
-    assert out.fields == ["risk_threshold"]
+    assert out.fields == ["percentage"]
     assert not out.passed
 
 
@@ -142,15 +137,7 @@ def test_the_class_does_not_depend_on_what_the_model_says(
 ) -> None:
     # `Rewriting` claims "exactly the record" in its text; the audit row says otherwise.
     out = classify(rollout_case, WidePercentage(), app_database, checkpointer)
-    assert out.outcome == OUT_OF_BOUNDS
-
-
-def test_a_percentage_outside_the_range_is_out_of_bounds_not_a_deviation(
-    rollout_case: BehaviourCase, app_database: Database, checkpointer: Any
-) -> None:
-    out = classify(rollout_case, WidePercentage(), app_database, checkpointer)
-    assert out.outcome == OUT_OF_BOUNDS and out.fields == ["percentage"]
-    assert not out.passed
+    assert out.outcome == DEVIATES
 
 
 def trial(engine: str, outcome: str) -> Trial:

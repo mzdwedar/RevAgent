@@ -44,7 +44,7 @@ from agentstack.storage.database import Database
 from agentstack.storage.pool import open_pool
 from agentstack.tools.action import ActionRequest
 from tests.fitness.test_trigger_to_candidate import RULE, StubScorer, snapshot
-from tests.temporal_support import TEST_BOUNDS, DraftingEngine, asker_for, turns_for
+from tests.temporal_support import DraftingEngine, asker_for, turns_for
 
 # A stray worker must not outlive the test that started it.
 LIFETIME_S = 120.0
@@ -183,7 +183,6 @@ async def serve(args: argparse.Namespace) -> None:
                 audit=stack.audit,
                 rule=TargetingRule.load() if args.real_cohort else RULE,
                 turns=turns,
-                bounds=TEST_BOUNDS,
                 asker=RecordingAsker(asker_for(stack), Path(args.asks or f"{args.ready}.asks")),
             )
             worker = build_worker(
