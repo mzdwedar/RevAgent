@@ -350,6 +350,11 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - New gates `a-negative-insv-never-promotes` and `a-promotion-still-requires-approval`.
     - `replay_guard.py` and `checkpoint_guard.py --base main` green (workflow change is patched).
   - Depends: L4. Files: `policy/conclusions.py`, `runtime/temporal/workflows.py`, `runtime/temporal/activities.py`, 2 eval cases, test.
+  - **L5a done 2026-10-06** (`86b1105`): `policy/conclusions.py`, `experiments/conclusions.toml`,
+    `tests/fitness/test_conclusions.py` (both named gates as fitness tests, plus the rule's edges).
+  - **L5b not started:** the conclude step in `ExperimentWorkflow` (durable timer, readout activity,
+    promote through the rollout approval, stop through `halt_rollout`, Slack explanation), its
+    durability test, and the replay and checkpoint guards. L5 stays unticked until it lands.
 
 - [ ] **L6: conclusion written to memory, split by trust** · layer 5 · *S*
   - Acceptance:
