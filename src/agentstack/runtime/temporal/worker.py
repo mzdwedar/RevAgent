@@ -77,6 +77,7 @@ def build_worker(
             activities.commit,
             activities.withdraw_approval,
             activities.conclude,
+            activities.explain_conclusion,
         ],
         activity_executor=executor,
         max_concurrent_activities=max_concurrent_activities,

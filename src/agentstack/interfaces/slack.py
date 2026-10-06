@@ -197,6 +197,17 @@ def _message_id(answer: Any) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class ConclusionNotice:
+    """What a measured experiment concluded. Not a question: it asks nothing, binds nothing
+    and grants nothing. `text` names whether the outcomes were simulated."""
+
+    run_id: str
+    tenant: str
+    experiment_version: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class ApprovalNotice:
     """Something the approver should know about a question they answered or were asked.
 
@@ -218,6 +229,8 @@ class Notifier(Protocol):
     def post_approval(self, ask: ApprovalAsk, *, channel: str) -> str: ...
 
     def post_notice(self, notice: ApprovalNotice, *, channel: str) -> str: ...
+
+    def post_conclusion(self, notice: ConclusionNotice, *, channel: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +298,26 @@ class SlackNotifier:
             )
         return timestamp
 
+    def post_conclusion(self, notice: ConclusionNotice, *, channel: str = "") -> str:
+        try:
+            answer = self._client().chat_postMessage(
+                channel=channel or self.default_channel, text=notice.text
+            )
+        except NotificationFailed:
+            raise
+        except Exception as exc:
+            raise NotificationFailed(
+                f"the conclusion for run {notice.run_id} did not reach "
+                f"{channel or self.default_channel}: {exc}"
+            ) from exc
+        timestamp = _message_id(answer)
+        if not timestamp:
+            raise NotificationFailed(
+                f"Slack accepted the conclusion for run {notice.run_id} without returning a "
+                "message id; there is no way to tell whether anyone can see it"
+            )
+        return timestamp
+
 
 @dataclass(slots=True)
 class RecordingNotifier:
@@ -292,6 +325,7 @@ class RecordingNotifier:
 
     posted: list[tuple[str, ApprovalAsk]] = field(default_factory=list)
     notices: list[tuple[str, ApprovalNotice]] = field(default_factory=list)
+    conclusions: list[tuple[str, ConclusionNotice]] = field(default_factory=list)
     fail: bool = False
 
     def post_approval(self, ask: ApprovalAsk, *, channel: str = "#experiments") -> str:
@@ -305,3 +339,9 @@ class RecordingNotifier:
             raise NotificationFailed(f"could not reach {channel}")
         self.notices.append((channel, notice))
         return f"ts-notice-{len(self.notices)}"
+
+    def post_conclusion(self, notice: ConclusionNotice, *, channel: str = "#experiments") -> str:
+        if self.fail:
+            raise NotificationFailed(f"could not reach {channel}")
+        self.conclusions.append((channel, notice))
+        return f"ts-conclusion-{len(self.conclusions)}"

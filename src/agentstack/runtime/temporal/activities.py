@@ -28,6 +28,7 @@ from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.outcomes import OutcomesRefused
 from agentstack.context.targeting import TargetingRule
 from agentstack.execution.gateway import UnresolvedEffect
+from agentstack.model.contract import ModelRequest
 from agentstack.observability.audit import AuditSink
 from agentstack.observability.spans import SpanSink, Tracer, VersionStamp
 from agentstack.policy.envelope import IdentityEnvelope
@@ -40,6 +41,7 @@ from agentstack.policy.triggers import (
 )
 from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
+from agentstack.runtime.announce import INSTRUCTIONS, explanation_context, message
 from agentstack.runtime.conclude import ConclusionRefused, conclude_experiment
 from agentstack.runtime.drafting import (
     PROMOTE_PERCENTAGE,
@@ -68,6 +70,7 @@ from agentstack.runtime.temporal.contracts import (
     ENSURE_RUN,
     EVALUATE_CYCLE,
     EVALUATION,
+    EXPLAIN,
     NOT_ANSWERED,
     PARK_TRIGGER_WAIT,
     PROMOTE,
@@ -83,6 +86,7 @@ from agentstack.runtime.temporal.contracts import (
     ConcludeIntent,
     ConcludeOutcome,
     CycleResult,
+    ExplainIntent,
     ParkedWait,
     RunStart,
     Trigger,
@@ -168,6 +172,13 @@ class Asker(Protocol):
         ...
 
 
+class Announcer(Protocol):
+    """Says what a conclusion was, to the channel. Supplied by the composition root, for
+    the reason `Asker` is. Returns the message id."""
+
+    def announce(self, *, run: Run, experiment_version: str, text: str) -> str: ...
+
+
 class RunActivities:
     """Activities bound to the stores they write, built once per worker."""
 
@@ -188,6 +199,7 @@ class RunActivities:
         asker: Asker | None = None,
         conclusions: ConclusionStore | None = None,
         outcomes_root: Path | None = None,
+        announcer: Announcer | None = None,
     ) -> None:
         # Required: an activity's caller is the workflow, which never holds spans (they
         # would be history). Without a sink, every span a turn or a commit emits is lost.
@@ -211,6 +223,7 @@ class RunActivities:
         # activity rather than guess where outcomes are.
         self._conclusions = conclusions
         self._outcomes_root = outcomes_root
+        self._announcer = announcer
 
     @activity.defn(name=ENSURE_RUN)
     def ensure_run(self, start: RunStart) -> str:
@@ -646,6 +659,58 @@ class RunActivities:
             action=stored.action,
             reason=stored.reason,
             simulated=stored.simulated,
+        )
+
+    @activity.defn(name=EXPLAIN)
+    def explain_conclusion(self, intent: ExplainIntent) -> None:
+        """Tell the channel what was concluded: the recorded facts, then the model's
+        explanation of those same numbers, labelled as its own.
+
+        Reads the stored conclusion and nothing else, so what is said is what was
+        recorded. The model sees numbers only, proposes no tool, and its words change
+        nothing: if it is unavailable the facts go out alone. Said at least once, not
+        exactly once: a repeat is a repeated message, not a second conclusion.
+        """
+        if self._conclusions is None or self._announcer is None:
+            raise ApplicationError(
+                "this worker has no conclusion store or announcer",
+                type="AnnouncerNotConfigured",
+                non_retryable=True,
+            )
+        recorded = self._runs.get(intent.run_id)
+        assert recorded is not None  # ensure_run ran first in this workflow
+        stored = self._conclusions.get(
+            tenant=recorded.tenant,
+            experiment_id=intent.experiment_id,
+            experiment_version=intent.experiment_version,
+            endpoint=intent.endpoint,
+        )
+        if stored is None:
+            raise ApplicationError(
+                f"no conclusion recorded for {intent.experiment_id} at endpoint {intent.endpoint}",
+                type="NothingConcluded",
+                non_retryable=True,
+            )
+        explanation: str | None
+        try:
+            explanation = (
+                self._host()
+                .deps.engine.generate(
+                    ModelRequest(
+                        instructions=INSTRUCTIONS,
+                        rendered_context=explanation_context(stored),
+                        exposed_tools=(),
+                        max_output_tokens=300,
+                    )
+                )
+                .text
+            )
+        except Exception:  # noqa: BLE001 - any model failure costs the explanation only
+            explanation = None
+        self._announcer.announce(
+            run=recorded,
+            experiment_version=intent.experiment_version,
+            text=message(stored, explanation),
         )
 
     @activity.defn(name=WITHDRAW_APPROVAL)

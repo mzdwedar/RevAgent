@@ -25,7 +25,13 @@ from agentstack.execution.gateway import Gateway
 from agentstack.execution.idempotency import IdempotencyLedger
 from agentstack.execution.surfaces import PostgresRegistryClient, RecordingClient, Sandbox
 from agentstack.interfaces.inbound import InboundEvent
-from agentstack.interfaces.slack import ApprovalAsk, ApprovalNotice, Notifier, RecordingNotifier
+from agentstack.interfaces.slack import (
+    ApprovalAsk,
+    ApprovalNotice,
+    ConclusionNotice,
+    Notifier,
+    RecordingNotifier,
+)
 from agentstack.interfaces.slack_callback import ReplayGuard, accept
 from agentstack.interfaces.triggers import parse_trigger
 from agentstack.model.engine import EchoEngine
@@ -442,6 +448,26 @@ class ChannelAsker:
                 tenant=run.tenant,
                 reason=reason,
                 text=WITHDRAWN_TEXT[reason].format(summary=wait.approval_summary),
+            ),
+            channel=self.channel,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelAnnouncer:
+    """The announcer for an experiment run's worker (`runtime.temporal.Announcer`): what a
+    conclusion says, to the stack's notifier."""
+
+    notifier: Notifier
+    channel: str = "#experiments"
+
+    def announce(self, *, run: Run, experiment_version: str, text: str) -> str:
+        return self.notifier.post_conclusion(
+            ConclusionNotice(
+                run_id=run.run_id,
+                tenant=run.tenant,
+                experiment_version=experiment_version,
+                text=text,
             ),
             channel=self.channel,
         )

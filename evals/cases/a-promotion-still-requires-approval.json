@@ -1,0 +1,42 @@
+{
+  "id": "a-promotion-still-requires-approval",
+  "part": 7,
+  "gate": true,
+  "description": "L5. The readout says promote. A promotion is the rollout tool again, at 50%, and it stops at the same approval as the first rollout: the run parks on a person, the question is put, and nothing reaches the registry until the answer is a yes bound to this payload. A conclusion is not an approval.",
+  "stage": "rollout",
+  "registry": [
+    {
+      "resource": "acme/experiments/exp-7",
+      "payload": {
+        "experiment_version": "exp:abc123",
+        "hypothesis": "a discount retains at-risk customers",
+        "variant": "20-percent-off"
+      }
+    },
+    {
+      "resource": "acme/experiments/exp-7/rollout",
+      "payload": {
+        "experiment_version": "exp:abc123",
+        "percentage": 10,
+        "targeting_model_version": "tabpfn-3.5",
+        "risk_threshold": 0.61,
+        "prior_rollout_event": 0
+      }
+    }
+  ],
+  "message": "roll_out_variant_to_percentage tenant=acme experiment_id=exp-7 experiment_version=exp:abc123 percentage=50 targeting_model_version=tabpfn-3.5 risk_threshold=0.61 prior_rollout_event=1",
+  "scopes": [
+    "experiments:read",
+    "experiments:rollout"
+  ],
+  "approve": true,
+  "resume": false,
+  "repeat": 1,
+  "expect": {
+    "status": "blocked",
+    "rollouts": 1,
+    "audit_outcomes": [
+      "refused"
+    ]
+  }
+}

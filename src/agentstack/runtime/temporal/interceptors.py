@@ -30,6 +30,7 @@ from agentstack.runtime.temporal.contracts import (
     CONCLUDE,
     ENSURE_RUN,
     EVALUATE_CYCLE,
+    EXPLAIN,
     PARK_TRIGGER_WAIT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
@@ -54,6 +55,8 @@ DECLARED: Mapping[str, str] = {
     # Measures a rolled-out experiment and records one conclusion. Reads outcomes, acts on
     # nothing: promote and stop are separate turns through the gateway.
     CONCLUDE: "record",
+    # Says what was concluded, in a message. Decides and commits nothing.
+    EXPLAIN: "notify",
 }
 
 

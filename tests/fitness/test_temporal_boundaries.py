@@ -48,7 +48,12 @@ from agentstack.policy.triggers import (
 )
 from agentstack.prediction import licence
 from agentstack.runtime.cycles import Cycle
-from agentstack.runtime.drafting import draft_instruction, rollout_instruction
+from agentstack.runtime.drafting import (
+    PROMOTE_PERCENTAGE,
+    draft_instruction,
+    halt_instruction,
+    rollout_instruction,
+)
 from agentstack.runtime.run import RunStore
 from agentstack.runtime.temporal import client as temporal_client
 from agentstack.runtime.temporal import contracts
@@ -468,7 +473,16 @@ def _instruction_openings() -> tuple[str, ...]:
     )
     drafted = draft_instruction(tenant="t", cycle=cycle, cohort=cohort)
     rolled = rollout_instruction(experiment_id="e", cohort=cohort, prior_rollout_event=0)
-    return (drafted.split(" by calling")[0], rolled.split(" by calling")[0])
+    promoted = rollout_instruction(
+        experiment_id="e", cohort=cohort, prior_rollout_event=1, percentage=PROMOTE_PERCENTAGE
+    )
+    halted = halt_instruction(experiment_id="e", cohort=cohort)
+    return (
+        drafted.split(" by calling")[0],
+        rolled.split(" by calling")[0],
+        promoted.split(" by calling")[0],
+        halted.split(" by calling")[0],
+    )
 
 
 def _decoded(history: dict[str, Any]) -> tuple[list[Any], list[str]]:
@@ -478,6 +492,8 @@ def _decoded(history: dict[str, Any]) -> tuple[list[Any], list[str]]:
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
+            if node.get("markerName") == "core_patch":
+                return  # Temporal's own record that a patch ran: an id, no application data
             if "metadata" in node and "data" in node:
                 encoding = base64.b64decode(node["metadata"]["encoding"]).decode()
                 # A payload that can't be read can't be checked: an unknown encoding

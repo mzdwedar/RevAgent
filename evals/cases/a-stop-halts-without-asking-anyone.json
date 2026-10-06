@@ -1,0 +1,42 @@
+{
+  "id": "a-stop-halts-without-asking-anyone",
+  "part": 7,
+  "gate": true,
+  "description": "L5. The readout says stop. A stop is halt_rollout, which sets exposure to zero and nothing else, and the policy lets it through without a person: stopping is the safe direction and must not wait on Slack. It commits once, for the experiment the run is bound to.",
+  "stage": "evaluation",
+  "subject": "exp-7",
+  "registry": [
+    {
+      "resource": "acme/experiments/exp-7",
+      "payload": {
+        "experiment_version": "exp:abc123",
+        "hypothesis": "a discount retains at-risk customers",
+        "variant": "20-percent-off"
+      }
+    },
+    {
+      "resource": "acme/experiments/exp-7/rollout",
+      "payload": {
+        "experiment_version": "exp:abc123",
+        "percentage": 10,
+        "targeting_model_version": "tabpfn-3.5",
+        "risk_threshold": 0.61,
+        "prior_rollout_event": 0
+      }
+    }
+  ],
+  "message": "halt_rollout tenant=acme experiment_id=exp-7 experiment_version=exp:abc123 reason=the-readout-said-stop",
+  "scopes": [
+    "experiments:read",
+    "experiments:halt"
+  ],
+  "expect": {
+    "audit_outcomes": [
+      "committed"
+    ],
+    "experiment_status": {
+      "exp-7": "halted"
+    },
+    "questions_posted": 0
+  }
+}

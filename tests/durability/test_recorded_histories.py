@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -34,9 +35,11 @@ from agentstack.runtime.temporal.workflows import ExperimentWorkflow
 from agentstack.runtime.waits import ResumeEvent, WaitStore, resume
 from agentstack.storage.database import Database
 from agentstack.tools.spec import Surface
+from tests.durability.test_act_on_conclusion import concluding, run_until_concluded
 from tests.durability.test_approval_wait import PAYLOAD, propose_and_wait
 from tests.durability.test_approval_wait import stack as stack  # the same fixture
 from tests.durability.test_commit import LosesTheFirstRolloutAnswer, acted
+from tests.durability.test_conclude_timer import approve
 from tests.durability.test_reconcile import LosesTheFirstDraftAnswer, drive, reconcile
 from tests.durability.test_slack_answer import APPROVER, slack_click
 from tests.fitness.test_trigger_to_candidate import RULE, WATERMARK, StubScorer
@@ -214,3 +217,51 @@ def test_a_draft_unresolved_in_its_turn_reconciled_then_taken_again(
     unresolved, drafted, proposed = done.turns
     assert unresolved.status == UNRESOLVED
     assert drafted.receipts == 1 and proposed.status == "awaiting_approval"
+
+
+def test_a_measured_experiment_is_concluded_and_stopped(
+    stack: Stack, app_database: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The path L5b added: a committed rollout, the outcome window on a durable timer, the
+    conclusion said to the channel, and a halt. A history with none of it replays through the
+    patches because the older ones do; this one holds the new commands in order."""
+    concluding(monkeypatch, "stop")
+
+    async def kept(handle: Any, where: RunProgress) -> RunProgress:
+        await keep_history(handle, "concluded_stop")
+        return where
+
+    done, _ = run_until_concluded(
+        stack,
+        app_database,
+        tmp_path,
+        then=kept,
+        ready=lambda p: bool(p.conclusions) and len(p.turns) == 3,
+    )
+
+    assert [c.action for c in done.conclusions] == ["stop"]
+
+
+def test_a_promotion_is_put_to_a_person_and_committed_on_their_yes(
+    stack: Stack, app_database: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    concluding(monkeypatch, "promote")
+
+    async def approved(handle: Any, where: RunProgress) -> RunProgress:
+        approve(stack, where)
+        await handle.signal(ExperimentWorkflow.answered, where.awaiting_approval)
+        done = await progress_until(
+            handle, lambda p: len(p.commits) == 2 and p.awaiting_approval is None, timeout=30
+        )
+        await keep_history(handle, "concluded_promoted")
+        return done
+
+    _, done = run_until_concluded(
+        stack,
+        app_database,
+        tmp_path,
+        then=approved,
+        ready=lambda p: p.awaiting_approval is not None and p.asks == 1 and bool(p.conclusions),
+    )
+
+    assert [c.status for c in done.commits] == ["committed", "committed"]
