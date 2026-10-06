@@ -19,10 +19,12 @@ from temporalio.exceptions import ActivityError, ApplicationError, CancelledErro
 from agentstack.runtime.temporal.contracts import (
     ASK_APPROVAL,
     COMMIT,
+    CONCLUDE,
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
     NOT_ANSWERED,
+    OUTCOME_WINDOW,
     PARK_TRIGGER_WAIT,
     REASK_EVERY,
     ROLLOUT,
@@ -35,6 +37,8 @@ from agentstack.runtime.temporal.contracts import (
     Carried,
     CommitIntent,
     CommitOutcome,
+    ConcludeIntent,
+    ConcludeOutcome,
     CycleResult,
     ParkedWait,
     RunEnd,
@@ -100,6 +104,9 @@ class ExperimentWorkflow:
         # How many answers to each reconcile wait the run has acted on. Replay rebuilds it.
         self._spent: dict[str, int] = {}
         self._cycles_before = 0
+        self._conclusions: list[ConcludeOutcome] = []
+        # The version whose rollout committed in the cycle just proposed, if one did.
+        self._rolled_out: str | None = None
 
     @workflow.run
     async def run(self, start: RunStart) -> RunEnd:
@@ -126,7 +133,12 @@ class ExperimentWorkflow:
             self._cycles.append(cycle)
             self._last_watermark = trigger.data_as_of
             if cycle.outcome == "propose":
+                self._rolled_out = None
                 await self._propose(cycle)
+                # Behind a patch: histories recorded before this step have no measurement
+                # in them, and replay must not go looking for one.
+                if self._rolled_out is not None and workflow.patched("conclude-after-rollout"):
+                    await self._measure(cycle, self._rolled_out)
 
     async def _continue_as_new(self, start: RunStart) -> None:
         """Hand the run to a fresh execution: same workflow id, same `run_id`, same record.
@@ -178,10 +190,59 @@ class ExperimentWorkflow:
                 # answer that does come later wakes it again, and still counts.
                 self._answered.remove(wait_id)
                 await self._await_approval(wait_id, cycle, asked=True)
+            if self._commits and self._commits[-1].status in ("committed", "deduplicated"):
+                self._rolled_out = cycle.experiment_version
             if wait_id in self._withdrawn:
                 # The question's world moved before anyone answered it again. It was
                 # closed unasked; tell the channel it was put in, and end the proposal.
                 await self._withdraw(wait_id, "superseded")
+
+    async def _measure(self, cycle: CycleResult, version: str) -> None:
+        """Let the outcome window pass on a durable timer, then measure, and measure again
+        after each extension the policy grants. The window is the rollout's day plus
+        OUTCOME_WINDOW, taken from the workflow's clock so a replay computes the same date.
+
+        The run does not evaluate new triggers while it waits: they queue as signals and
+        are taken afterwards, one run per experiment. Only `extend` loops, and the policy
+        grants it once, so this is at most two timers.
+        """
+        rollout_on = workflow.now().date().isoformat()
+        endpoint = 0
+        while True:
+            await workflow.sleep(OUTCOME_WINDOW)
+            outcome = await self._conclude(
+                ConcludeIntent(
+                    run_id=self._run_id,
+                    experiment_id=cycle.experiment_id,
+                    experiment_version=version,
+                    rollout_on=rollout_on,
+                    endpoint=endpoint,
+                )
+            )
+            self._conclusions.append(outcome)
+            if outcome.action != "extend":
+                return
+            endpoint += 1
+
+    async def _conclude(self, intent: ConcludeIntent) -> ConcludeOutcome:
+        try:
+            outcome: ConcludeOutcome = await workflow.execute_activity(
+                CONCLUDE,
+                intent,
+                result_type=ConcludeOutcome,
+                start_to_close_timeout=CYCLE_TIMEOUT,
+                retry_policy=RETRY,
+            )
+            return outcome
+        except ActivityError as exc:
+            _a_cancel_is_not_a_refusal(exc)
+            cause = exc.cause
+            refusal = cause.type if isinstance(cause, ApplicationError) else None
+            return ConcludeOutcome(
+                status="unreadable",
+                endpoint=intent.endpoint,
+                refusal=refusal or type(cause).__name__,
+            )
 
     async def _settled_turn(self, stage: str, cycle: CycleResult) -> TurnOutcome:
         """Take the turn; if it met an effect of unknown outcome, wait for the claim to be
@@ -456,4 +517,5 @@ class ExperimentWorkflow:
             reconciling=self._reconciling,
             withdrawn=tuple(self._withdrawn),
             cycles_before=self._cycles_before,
+            conclusions=tuple(self._conclusions),
         )
