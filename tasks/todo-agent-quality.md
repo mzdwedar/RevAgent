@@ -417,7 +417,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
 
 ## Phase X: the payoff
 
-- [ ] **L8: two sequential experiments, end to end** · scripts / evidence · *S*
+- [x] **L8: two sequential experiments, end to end** · scripts / evidence · *S*
   - Acceptance:
     - `scripts/learning_loop_demo.py` runs experiment A on a simulated KKBox cohort through
       trigger, draft, approval, rollout, outcomes, readout and conclusion.
@@ -427,6 +427,11 @@ refuses anything outside them, and the approval binds the exact values chosen.
   - Verify: live test `tests/live/test_learning_loop.py` asserts that B's assembled context
     contains A's readout id.
   - Depends: L7.
+  - Done: `scripts/learning_loop_demo.py` (real KKBox cohort, recorded scores, real workflow,
+    approval, readout, memory; outcomes SIMULATED; the model is a scripted stand-in that avoids an
+    offer a recalled learning says lost). A drafts free-month and is STOPPED (INSV CI below 0); B's
+    context carries A's readout id and drafts 10-percent-off, which is promoted. Transcript in
+    `docs/evidence/learning_loop.txt`; live test `tests/live/test_learning_loop.py` passes.
 
 - [ ] **E8: draft quality with vs without memory, per model** · layer 9 · *S*
   - Acceptance:
