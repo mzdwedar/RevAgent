@@ -236,7 +236,7 @@ by six `.importlinter` contracts.
 | 10 | Infrastructure substrate | `agentstack.storage` |
 
 - **The bar is written down and guarded.** [`CONSTRAINTS.md`](CONSTRAINTS.md) holds every
-  threshold and the command that produces its verdict. `tests/fitness/` has 64 tests, one
+  threshold and the command that produces its verdict. `tests/fitness/` has 65 tests, one
   per collapsed-boundary failure mode, out of more than 950 tests in the suite.
   `scripts/stack_guard.py` fails a change that weakens the bar itself, for example a skipped
   test, a new suppression or a lowered threshold.

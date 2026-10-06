@@ -23,8 +23,9 @@ from typing import NoReturn, Protocol
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from agentstack.context.conclusion_store import ConclusionStore
+from agentstack.context.conclusion_store import ConclusionStore, StoredConclusion
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
+from agentstack.context.learnings import Learnings
 from agentstack.context.outcomes import OutcomesRefused
 from agentstack.context.targeting import TargetingRule
 from agentstack.execution.gateway import UnresolvedEffect
@@ -200,6 +201,7 @@ class RunActivities:
         conclusions: ConclusionStore | None = None,
         outcomes_root: Path | None = None,
         announcer: Announcer | None = None,
+        learnings: Learnings | None = None,
     ) -> None:
         # Required: an activity's caller is the workflow, which never holds spans (they
         # would be history). Without a sink, every span a turn or a commit emits is lost.
@@ -223,6 +225,9 @@ class RunActivities:
         # activity rather than guess where outcomes are.
         self._conclusions = conclusions
         self._outcomes_root = outcomes_root
+        # Where a final conclusion is remembered. Optional: a worker without it concludes
+        # all the same and leaves nothing behind for the next draft.
+        self._learnings = learnings
         self._announcer = announcer
 
     @activity.defn(name=ENSURE_RUN)
@@ -653,12 +658,29 @@ class RunActivities:
             )
         except (ConclusionRefused, OutcomesRefused, FileNotFoundError) as exc:
             raise ApplicationError(str(exc), type=type(exc).__name__, non_retryable=True) from exc
+        self._remember(recorded.tenant, stored)
         return ConcludeOutcome(
             status="concluded",
             endpoint=stored.endpoint,
             action=stored.action,
             reason=stored.reason,
             simulated=stored.simulated,
+        )
+
+    def _remember(self, tenant: str, stored: StoredConclusion) -> None:
+        """Write the learning for a final conclusion. Idempotent, so a retry of the
+        activity (or a rerun after the conclusion was already stored) writes nothing new."""
+        if self._learnings is None or stored.action == "extend":
+            return
+        frozen = self._cohorts.get(
+            tenant=tenant,
+            experiment_id=stored.experiment_id,
+            experiment_version=stored.experiment_version,
+        )
+        self._learnings.learn(
+            stored,
+            cohort=frozen.description if frozen is not None else {},
+            percentage=ROLLOUT_PERCENTAGE,
         )
 
     @activity.defn(name=EXPLAIN)

@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from agentstack.context.conclusion_store import ConclusionStore, StoredConclusion
+from agentstack.context.learnings import Learnings
 from agentstack.interfaces.wiring import ChannelAnnouncer, Stack, build_stack, deliver
 from agentstack.policy.approvers import ApprovalReply
 from agentstack.runtime.temporal.contracts import OUTCOME_WINDOW, RunProgress, workflow_id
@@ -68,7 +69,7 @@ def options(stack: Stack, db: Database, tmp_path: Path) -> dict[str, Any]:
     return dict(
         scorer=StubScorer(), rule=RULE, turns=turns_for(stack, DraftingEngine()),
         asker=asker_for(stack), conclusions=ConclusionStore(db), outcomes_root=tmp_path,
-        announcer=ChannelAnnouncer(stack.notifier),
+        announcer=ChannelAnnouncer(stack.notifier), learnings=Learnings(db),
     )  # fmt: skip
 
 

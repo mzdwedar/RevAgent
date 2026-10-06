@@ -211,3 +211,20 @@ def test_the_channel_is_told_what_was_concluded_and_that_it_was_simulated(
 
 def kinds_of(db: Database) -> list[str]:
     return [kind for kind, _ in events(db)]
+
+
+def test_a_final_conclusion_is_remembered_once_and_an_extend_is_not(
+    stack: Stack, app_database: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L6 through the workflow: the conclude activity leaves the learning, split by trust."""
+    concluding(monkeypatch, "stop")
+
+    async def settled(handle: Any, _: RunProgress) -> RunProgress:
+        return await progress_until(handle, lambda p: bool(p.conclusions), timeout=30)
+
+    run_until_concluded(
+        stack, app_database, tmp_path, then=settled, ready=lambda p: bool(p.conclusions)
+    )
+
+    kept = {r.key.split(":")[0]: r.trust.value for r in stack.memory.all_records()}
+    assert kept == {"learning": "first_party", "learning-hypothesis": "untrusted"}
