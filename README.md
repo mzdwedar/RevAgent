@@ -13,6 +13,7 @@ person approves that exact rollout.
 - [How a run works](#how-a-run-works)
 - [Agent design decisions](#agent-design-decisions)
 - [Evals that judge the path, not the answer](#evals-that-judge-the-path-not-the-answer)
+- [Evals that measure the model](#evals-that-measure-the-model)
 - [How it is built](#how-it-is-built)
 - [Licensing](#licensing)
 - [Quickstart](#quickstart)
@@ -215,6 +216,25 @@ happened along the way. Their names read as the spec:
 `uv run python -m evals run --gates` runs them, and CI blocks on them. Every failure that
 reaches production becomes a new case here.
 
+## Evals that measure the model
+
+The gates above check the system, which is deterministic. A model's proposals are a rate, so
+they are measured separately and never gate a release. `python -m evals behave --k 5` runs
+10 draft and rollout cases five times per engine, and `python -m evals report` turns the log
+into [`docs/evidence/model_evals.csv`](docs/evidence/model_evals.csv) and a
+[chart](docs/evidence/model_evals.png):
+
+| Engine | pass@1 (95% CI) | pass^5, share of cases | Proposals that deviated or were refused |
+|---|---|---|---|
+| gemma4:12b | 0.96 (0.87 to 0.99) | 0.90 | 4% |
+| qwen3:8b | 0.88 (0.76 to 0.94) | 0.80 | 12% |
+| llama3.1:8b | 0.64 (0.50 to 0.76) | 0.00 | 36% |
+
+Not claimed: this is 10 cases and 5 trials each at temperature 0.7, so the intervals are wide
+and cover one cohort family. Draft quality is not scored: no model judge agreed with the
+labels well enough (Cohen's kappa under 0.6 on every criterion), so the rubric criteria stay
+human-only and the CSV's `calibrated_criteria` column reads `none`.
+
 ## How it is built
 
 The architecture is a ten-layer agent stack, and every rule in it is a test. The 11 packages
@@ -236,7 +256,7 @@ by six `.importlinter` contracts.
 | 10 | Infrastructure substrate | `agentstack.storage` |
 
 - **The bar is written down and guarded.** [`CONSTRAINTS.md`](CONSTRAINTS.md) holds every
-  threshold and the command that produces its verdict. `tests/fitness/` has 66 tests, one
+  threshold and the command that produces its verdict. `tests/fitness/` has 67 tests, one
   per collapsed-boundary failure mode, out of more than 950 tests in the suite.
   `scripts/stack_guard.py` fails a change that weakens the bar itself, for example a skipped
   test, a new suppression or a lowered threshold.

@@ -226,7 +226,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     committed to `docs/evidence/grader_calibration.json`.
   - Depends: E5. Files: `evals/grader.py`, `evals/stats.py`, tests.
 
-- [ ] **E7: evidence report** · layer 9 / docs · *S*
+- [x] **E7: evidence report** · layer 9 / docs · *S*
   - Acceptance:
     - `python -m evals report` writes `docs/evidence/model_evals.csv` and a chart: per engine,
       pass@1 ± CI, pass^k, refusal mix, grader score per calibrated criterion, median tokens
@@ -235,6 +235,9 @@ refuses anything outside them, and the approval binds the exact values chosen.
       section, including what is *not* claimed.
   - Verify: report test on a fixture JSONL (golden CSV). README links resolve.
   - Depends: E6. Files: `evals/report.py`, `README.md` (own hunk only), test.
+  - Done: `docs/evidence/model_evals.csv` and `.png` from `behaviour_matrix_menu.jsonl`. Grader
+    score per criterion is not reported: no criterion reached kappa 0.6 (qwen3:8b and gemma4:12b
+    graders against Opus labels), so the column states `none` rather than a score.
 
 #### Checkpoint E-B
 - [ ] Matrix of ≥3 engines in `docs/evidence/model_evals.csv`

@@ -16,7 +16,7 @@ from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import drop_database, rebuild_database, run_scoped
-from evals import checks, grader, labelling
+from evals import checks, grader, labelling, report
 from evals.behaviour import (
     OUTCOMES,
     cost_per_engine,
@@ -34,7 +34,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="evals")
     parser.add_argument(
         "command",
-        choices=["run", "list", "behave", "sample-drafts", "label", "calibrate", "check-drafts"],
+        choices=[
+            "run", "list", "behave", "sample-drafts", "label", "calibrate", "check-drafts",
+            "report",
+        ],  # fmt: skip
     )
     parser.add_argument("--gates", action="store_true", help="only the release gates")
     parser.add_argument(
@@ -58,8 +61,17 @@ def main() -> int:
     )
     parser.add_argument("--labels", default=None, help="calibrate: a labels file (default: yours)")
     parser.add_argument("--labeller", default="owner", help="calibrate: who made those labels")
+    parser.add_argument(
+        "--calibration", default="docs/evidence/grader_calibration_opus_labels_qwen3.json",
+        help="report: the calibration whose calibrated criteria may carry a grader score",
+    )
+    parser.add_argument(
+        "--out-csv", default="docs/evidence/model_evals.csv", help="report: the CSV, chart beside"
+    )
     args = parser.parse_args()
 
+    if args.command == "report":
+        return _report(args)
     if args.command == "check-drafts":
         return _check_drafts(args)
     if args.command == "calibrate":
@@ -200,6 +212,26 @@ def _check_drafts(args: argparse.Namespace) -> int:
         precision = "n/a" if veto["precision"] is None else f"{veto['precision']:.2f}"
         recall = "n/a" if veto["recall"] is None else f"{veto['recall']:.2f}"
         print(f"{name}  kappa {kappa}  precision {precision}  recall {recall}  {result['status']}")
+    print(f"report: {out}")
+    return 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    """Turn a trial log into the committed CSV and chart. Reads only; runs no model."""
+    log = Path(args.log)
+    trials = read_trials(log)
+    if not trials:
+        raise SystemExit(f"no trials in {log}")
+    calibration = Path(args.calibration)
+    table = report.rows(trials, calibration)
+    out = Path(args.out_csv)
+    report.write_csv(table, out)
+    report.write_chart(table, out.with_suffix(".png"))
+    for row in table:
+        print(
+            f"{row['engine']}: pass@1 {row['pass_at_1']} ({row['ci_low']}-{row['ci_high']}), "
+            f"pass^k {row['pass_hat_k']}, graded criteria: {row['calibrated_criteria']}"
+        )
     print(f"report: {out}")
     return 0
 

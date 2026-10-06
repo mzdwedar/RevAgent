@@ -1,0 +1,4 @@
+engine,trials,cases,pass_at_1,ci_low,ci_high,pass_hat_k,admitted,deviates,malformed,wrong_tool,no_proposal,median_prompt_tokens,median_output_tokens,median_model_seconds,calibrated_criteria
+ollama:gemma4:12b,50,10,0.96,0.865,0.989,0.9,0.96,0.04,0.0,0.0,0.0,853.0,109.0,8.68,none
+ollama:llama3.1:8b,50,10,0.64,0.501,0.759,0.0,0.64,0.1,0.08,0.06,0.12,809.0,95.0,4.02,none
+ollama:qwen3:8b,50,10,0.88,0.762,0.944,0.8,0.88,0.12,0.0,0.0,0.0,797.0,96.0,4.15,none
