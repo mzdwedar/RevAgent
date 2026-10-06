@@ -33,7 +33,10 @@ ALL = list(CRITERIA)
 
 
 def answer(verdict: str = "yes", **overrides: Any) -> dict[str, Any]:
-    body: dict[str, Any] = {c: {"verdict": verdict, "reason": "because"} for c in ALL}
+    body: dict[str, Any] = {}
+    for c in ALL:
+        body[f"{c}_verdict"] = verdict
+        body[f"{c}_reason"] = "because"
     return body | overrides
 
 
@@ -95,7 +98,7 @@ def test_kappa_is_undefined_not_perfect_when_nothing_varies() -> None:
 
 
 def test_a_valid_answer_is_read_criterion_by_criterion() -> None:
-    grade = read_grades(answer("no", C2={"verdict": "yes", "reason": "  a\nspecific   offer "}))
+    grade = read_grades(answer("no", C2_verdict="yes", C2_reason="  a\nspecific   offer "))
     assert grade.verdicts == dict.fromkeys(ALL, "no") | {"C2": "yes"}
     assert grade.reasons["C2"] == "a specific offer"  # one line
 
@@ -107,11 +110,11 @@ def test_a_valid_answer_is_read_criterion_by_criterion() -> None:
         "yes",
         [],
         {},
-        answer(C3={"verdict": "maybe", "reason": "x"}),
-        answer(C3={"verdict": "yes", "reason": ""}),
-        answer(C3={"verdict": "yes"}),
-        answer(C3="yes"),
-        answer(C3={"verdict": True, "reason": "x"}),
+        answer(C3_verdict="maybe"),
+        answer(C3_reason=""),
+        {k: v for k, v in answer().items() if k != "C3_verdict"},  # reason only, as gemma4 did
+        {k: v for k, v in answer().items() if k != "C3_reason"},
+        answer(C3_verdict=True),
     ],
 )
 def test_a_malformed_answer_is_ungraded_never_a_pass(bad: Any) -> None:
