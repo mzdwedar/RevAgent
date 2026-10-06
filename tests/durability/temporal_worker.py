@@ -16,12 +16,14 @@ import argparse
 import asyncio
 import os
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from agentstack.context import datasets
+from agentstack.context.conclusion_store import ConclusionStore, StoredConclusion
 from agentstack.context.datasets import REGISTRY, CohortSnapshot, DatasetSpec
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
@@ -31,6 +33,8 @@ from agentstack.prediction.churn import ChurnScorer, ChurnScores, RecordedScorer
 from agentstack.runtime.cadence import TriggerCadence
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import Run, RunStore
+from agentstack.runtime.temporal import activities as activity_module
+from agentstack.runtime.temporal import contracts
 from agentstack.runtime.temporal.activities import RunActivities
 from agentstack.runtime.temporal.client import connect
 from agentstack.runtime.temporal.worker import (
@@ -147,6 +151,36 @@ class RecordingAsker:
         return message
 
 
+def _conclude_stand_in(args: argparse.Namespace) -> None:
+    """The measurement is a stand-in that writes through the real store, as the in-process
+    tests' is; this one also notes each call in a file and, for the worker about to be
+    killed, announces itself and never returns."""
+    calls = Path(args.conclude_calls)
+
+    def conclude(*, store: ConclusionStore, tenant: str, experiment_id: str,
+                 experiment_version: str, endpoint: int, **_: Any) -> StoredConclusion:  # fmt: skip
+        with calls.open("a") as handle:
+            handle.write(f"{os.getpid()}\n")
+        if args.hang_in_conclude:
+            Path(args.hang_in_conclude).write_text(str(os.getpid()))
+            time.sleep(LIFETIME_S)
+            raise AssertionError("a hanging measurement outlived its test")
+        return store.record(
+            StoredConclusion(
+                tenant, experiment_id, experiment_version, endpoint,
+                args.conclude_action, "stand-in", True, {}, {},
+            )
+        )  # fmt: skip
+
+    pytest.MonkeyPatch().setattr(activity_module, "conclude_experiment", conclude)
+    # A 30-day window cannot be waited out on a real server. The workflow sandbox
+    # re-imports `contracts`, so let it share this process's copy, with the short window.
+    contracts.OUTCOME_WINDOW = timedelta(seconds=args.outcome_window_s)
+    from temporalio.worker.workflow_sandbox import SandboxRestrictions
+
+    SandboxRestrictions.default.passthrough_modules.add("agentstack.runtime.temporal.contracts")
+
+
 async def serve(args: argparse.Namespace) -> None:
     client = await connect(args.address)
     checkpoints, saver = open_checkpointer(args.database_url)
@@ -184,6 +218,8 @@ async def serve(args: argparse.Namespace) -> None:
                 rule=TargetingRule.load() if args.real_cohort else RULE,
                 turns=turns,
                 asker=RecordingAsker(asker_for(stack), Path(args.asks or f"{args.ready}.asks")),
+                conclusions=ConclusionStore(db) if args.conclude_calls else None,
+                outcomes_root=Path(args.ready).parent,
             )
             worker = build_worker(
                 client, activities=activities, executor=executor, task_queue=args.task_queue
@@ -214,6 +250,10 @@ def main() -> None:
         "instead of the fixture and the stub",
     )
     parser.add_argument("--hang-in-scorer", action="store_true")
+    parser.add_argument("--conclude-calls", default=None, metavar="FILE")
+    parser.add_argument("--conclude-action", default="stop")
+    parser.add_argument("--outcome-window-s", type=float, default=2.0)
+    parser.add_argument("--hang-in-conclude", default=None, metavar="REACHED_FILE")
     parser.add_argument(
         "--lifetime",
         type=float,
@@ -224,6 +264,8 @@ def main() -> None:
     args = parser.parse_args()
     if not args.real_cohort:
         _fixture_dataset()
+    if args.conclude_calls:
+        _conclude_stand_in(args)
     asyncio.run(serve(args))
 
 
