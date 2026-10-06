@@ -23,13 +23,16 @@ from agentstack.runtime.temporal.contracts import (
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
+    EVALUATION,
     NOT_ANSWERED,
     OUTCOME_WINDOW,
     PARK_TRIGGER_WAIT,
+    PROMOTE,
     REASK_EVERY,
     ROLLOUT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
+    STOP,
     UNRESOLVED,
     WITHDRAW_APPROVAL,
     AskIntent,
@@ -180,22 +183,45 @@ class ExperimentWorkflow:
         drafted = await self._settled_turn(DRAFT, cycle)
         if drafted.refusal is not None or drafted.receipts == 0:
             return
-        proposed = await self._settled_turn(ROLLOUT, cycle)
+        if await self._rollout(cycle):
+            self._rolled_out = cycle.experiment_version
+
+    async def _rollout(self, cycle: CycleResult, phase: str = "") -> bool:
+        """Propose a rollout, ask a person, and act on the answer. True if it committed.
+        The first rollout and a promotion are this, and differ only in `phase`."""
+        proposed = await self._settled_turn(ROLLOUT, cycle, phase)
+        committed = False
+        commits_before = len(self._commits)
         if proposed.wait_id is not None and cycle.experiment_version is not None:
             wait_id = proposed.wait_id
-            await self._await_approval(wait_id, cycle)
-            while wait_id not in self._withdrawn and not await self._act(wait_id, cycle):
+            await self._await_approval(wait_id, cycle, phase=phase)
+            while wait_id not in self._withdrawn and not await self._act(wait_id, cycle, phase):
                 # Woken, and the wait says nobody answered: a stray or forged signal. The
                 # wake is spent, and the run goes back to the question it was on. The
                 # answer that does come later wakes it again, and still counts.
                 self._answered.remove(wait_id)
-                await self._await_approval(wait_id, cycle, asked=True)
-            if self._commits and self._commits[-1].status in ("committed", "deduplicated"):
-                self._rolled_out = cycle.experiment_version
+                await self._await_approval(wait_id, cycle, asked=True, phase=phase)
+            committed = len(self._commits) > commits_before and self._commits[-1].status in (
+                "committed",
+                "deduplicated",
+            )
             if wait_id in self._withdrawn:
                 # The question's world moved before anyone answered it again. It was
                 # closed unasked; tell the channel it was put in, and end the proposal.
                 await self._withdraw(wait_id, "superseded")
+        return committed
+
+    async def _act_on(self, cycle: CycleResult, outcome: ConcludeOutcome) -> None:
+        """Do what the readout decided, and no more than the policy's word for it.
+
+        Promote is the rollout turn again, at the promotion's percentage, and stops at the
+        same approval. Stop is a halt, which the policy lets through without one. Extend
+        has already been acted on by `_measure`; an unreadable measurement decided nothing.
+        """
+        if outcome.action == PROMOTE:
+            await self._rollout(cycle, PROMOTE)
+        elif outcome.action == STOP:
+            await self._settled_turn(EVALUATION, cycle, STOP)
 
     async def _measure(self, cycle: CycleResult, version: str) -> None:
         """Let the outcome window pass on a durable timer, then measure, and measure again
@@ -221,6 +247,8 @@ class ExperimentWorkflow:
             )
             self._conclusions.append(outcome)
             if outcome.action != "extend":
+                if workflow.patched("act-on-conclusion"):
+                    await self._act_on(cycle, outcome)
                 return
             endpoint += 1
 
@@ -244,7 +272,7 @@ class ExperimentWorkflow:
                 refusal=refusal or type(cause).__name__,
             )
 
-    async def _settled_turn(self, stage: str, cycle: CycleResult) -> TurnOutcome:
+    async def _settled_turn(self, stage: str, cycle: CycleResult, phase: str = "") -> TurnOutcome:
         """Take the turn; if it met an effect of unknown outcome, wait for the claim to be
         settled and take the same turn again (M1).
 
@@ -253,7 +281,7 @@ class ExperimentWorkflow:
         again, and the ledger answers for the one that was unknown.
         """
         while True:
-            outcome = await self._take_turn(stage, cycle)
+            outcome = await self._take_turn(stage, cycle, phase)
             self._turns.append(outcome)
             if outcome.status != UNRESOLVED or outcome.wait_id is None:
                 return outcome
@@ -273,7 +301,7 @@ class ExperimentWorkflow:
         self._spent[wait_id] = spent + 1
         self._reconciling = None
 
-    async def _act(self, wait_id: str, cycle: CycleResult) -> bool:
+    async def _act(self, wait_id: str, cycle: CycleResult, phase: str = "") -> bool:
         """The answer is in: commit what it was about. Whether it may happen is the
         gateway's to decide at the act, against the world as it is then. False if the
         wait turned out to be unanswered: the run acted on nothing, and must wait again.
@@ -288,6 +316,7 @@ class ExperimentWorkflow:
             experiment_id=cycle.experiment_id,
             data_as_of=cycle.data_as_of,
             kind=cycle.kind,
+            phase=phase,
         )
         while True:
             outcome = await self._commit(intent)
@@ -333,7 +362,7 @@ class ExperimentWorkflow:
             return CommitOutcome(status="refused", refusal=refusal or type(cause).__name__)
 
     async def _await_approval(
-        self, wait_id: str, cycle: CycleResult, *, asked: bool = False
+        self, wait_id: str, cycle: CycleResult, *, asked: bool = False, phase: str = ""
     ) -> None:
         """Ask, then wait. Every REASK_EVERY without an answer, ask again. Never expire.
 
@@ -349,7 +378,7 @@ class ExperimentWorkflow:
             self._asks = 0
         while True:
             if not asked:
-                await self._ask(wait_id, cycle.experiment_id, cycle.experiment_version)
+                await self._ask(wait_id, cycle.experiment_id, cycle.experiment_version, phase)
             asked = False
             if wait_id in self._withdrawn:
                 break  # the ask closed it: nothing to wait for
@@ -362,13 +391,16 @@ class ExperimentWorkflow:
                 continue  # unanswered: the question is put again, never dropped
         self._awaiting = None
 
-    async def _ask(self, wait_id: str, experiment_id: str, experiment_version: str) -> None:
+    async def _ask(
+        self, wait_id: str, experiment_id: str, experiment_version: str, phase: str = ""
+    ) -> None:
         intent = AskIntent(
             run_id=self._run_id,
             wait_id=wait_id,
             experiment_id=experiment_id,
             experiment_version=experiment_version,
             asked=self._asks,
+            phase=phase,
         )
         try:
             result: AskResult = await workflow.execute_activity(
@@ -403,13 +435,14 @@ class ExperimentWorkflow:
         """
         self._answered.append(wait_id)
 
-    async def _take_turn(self, stage: str, cycle: CycleResult) -> TurnOutcome:
+    async def _take_turn(self, stage: str, cycle: CycleResult, phase: str = "") -> TurnOutcome:
         intent = TurnIntent(
             run_id=self._run_id,
             stage=stage,
             experiment_id=cycle.experiment_id,
             data_as_of=cycle.data_as_of,
             kind=cycle.kind,
+            phase=phase,
         )
         try:
             outcome: TurnOutcome = await workflow.execute_activity(

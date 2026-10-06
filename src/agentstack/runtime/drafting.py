@@ -23,10 +23,13 @@ from agentstack.observability.audit import AuditSink
 from agentstack.runtime.cycles import Cycle
 from agentstack.runtime.run import Run
 from agentstack.tools.action import ActionRequest
-from agentstack.tools.experiments import DRAFT, prepare_rollout
+from agentstack.tools.experiments import DRAFT, HALT, prepare_halt, prepare_rollout
 
 # SPEC.md: "On approval, roll the winning variant out to ~10% of the targeted cohort."
 ROLLOUT_PERCENTAGE = 10
+# What a promotion asks the approver for: the step after the first rollout. A promotion is
+# the same tool as the first rollout and stops at the same approval; only the number differs.
+PROMOTE_PERCENTAGE = 50
 
 # What the audit trail names when a proposal is refused for not being the rollout the
 # record says. Refused before anyone is asked, and again at the ask and at the act.
@@ -46,7 +49,9 @@ def estimated_customers(cohort: FrozenCohort, percentage: int = ROLLOUT_PERCENTA
     return round(cohort.size * percentage / 100)
 
 
-def intended_rollout(cohort: FrozenCohort, *, prior_rollout_event: int) -> dict[str, Any]:
+def intended_rollout(
+    cohort: FrozenCohort, *, prior_rollout_event: int, percentage: int = ROLLOUT_PERCENTAGE
+) -> dict[str, Any]:
     """The rollout the record says this cohort gets, as the tool's arguments.
 
     Every value is the record's: the frozen cohort's own identity and predicate, the
@@ -60,7 +65,7 @@ def intended_rollout(cohort: FrozenCohort, *, prior_rollout_event: int) -> dict[
         "tenant": cohort.tenant,
         "experiment_id": cohort.experiment_id,
         "experiment_version": cohort.experiment_version,
-        "percentage": ROLLOUT_PERCENTAGE,
+        "percentage": percentage,
         "targeting_model_version": cohort.targeting_model_version,
         "risk_threshold": cohort.risk_threshold,
         "prior_rollout_event": prior_rollout_event,
@@ -68,7 +73,11 @@ def intended_rollout(cohort: FrozenCohort, *, prior_rollout_event: int) -> dict[
 
 
 def rollout_deviation(
-    request: ActionRequest, cohort: FrozenCohort, *, prior_rollout_event: int
+    request: ActionRequest,
+    cohort: FrozenCohort,
+    *,
+    prior_rollout_event: int,
+    percentage: int = ROLLOUT_PERCENTAGE,
 ) -> str | None:
     """Why `request` is not the rollout the frozen cohort gets, or None if it is.
 
@@ -79,7 +88,9 @@ def rollout_deviation(
     cohort's version - is refused here, before a person is asked about it, rather than
     headlined as the rollout they would expect.
     """
-    intended = prepare_rollout(intended_rollout(cohort, prior_rollout_event=prior_rollout_event))
+    intended = prepare_rollout(
+        intended_rollout(cohort, prior_rollout_event=prior_rollout_event, percentage=percentage)
+    )
     if request.fingerprint() == intended.fingerprint():
         return None
     differs = sorted(
@@ -164,12 +175,20 @@ def draft_admission(
 
 
 def rollout_admission(
-    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str, prior_rollout_event: int
+    *,
+    cohort: FrozenCohort,
+    audit: AuditSink,
+    run: Run,
+    principal: str,
+    prior_rollout_event: int,
+    percentage: int = ROLLOUT_PERCENTAGE,
 ) -> Admission:
     """An `Admission` for a rollout turn: the frozen cohort's rollout, or a refusal that is
     written to the audit trail."""
     return _admitting(
-        lambda request: rollout_deviation(request, cohort, prior_rollout_event=prior_rollout_event),
+        lambda request: rollout_deviation(
+            request, cohort, prior_rollout_event=prior_rollout_event, percentage=percentage
+        ),
         audit=audit,
         run=run,
         principal=principal,
@@ -177,16 +196,25 @@ def rollout_admission(
 
 
 def rollout_instruction(
-    *, experiment_id: str, cohort: FrozenCohort, prior_rollout_event: int
+    *,
+    experiment_id: str,
+    cohort: FrozenCohort,
+    prior_rollout_event: int,
+    percentage: int = ROLLOUT_PERCENTAGE,
 ) -> str:
     """The rollout turn is told the action exactly. Every argument comes from the record:
     the frozen cohort's predicate travels in the payload, because a rollout is to *this*
     cohort. The model proposes it; layer 8 decides it, with a person in the loop."""
-    told = intended_rollout(cohort, prior_rollout_event=prior_rollout_event) | {
-        "experiment_id": experiment_id
-    }
+    told = intended_rollout(
+        cohort, prior_rollout_event=prior_rollout_event, percentage=percentage
+    ) | {"experiment_id": experiment_id}
+    lead = (
+        "The experiment is drafted."
+        if percentage == ROLLOUT_PERCENTAGE
+        else "The experiment was measured and the readout says to promote it."
+    )
     return (
-        "The experiment is drafted. Propose its rollout by calling "
+        f"{lead} Propose its rollout by calling "
         f"roll_out_variant_to_percentage with tenant={told['tenant']} "
         f"experiment_id={told['experiment_id']} "
         f"experiment_version={told['experiment_version']} "
@@ -231,4 +259,39 @@ def draft_instruction(*, tenant: str, cycle: Cycle, cohort: FrozenCohort) -> str
         "and choose the variant from the offers the tool lists: which offer to test, and why "
         "it should retain these customers, grounded in the risk profile below. "
         f"The cohort was scored on the batch {cycle.data_as_of}. {cohort_profile(cohort)}"
+    )
+
+
+def halt_deviation(request: ActionRequest, cohort: FrozenCohort) -> str | None:
+    """Why `request` is not the halt of the frozen cohort's experiment, or None if it is.
+    The reason is the model's to write; which experiment, and which version, is not."""
+    intended = prepare_halt(
+        {
+            "tenant": cohort.tenant,
+            "experiment_id": cohort.experiment_id,
+            "experiment_version": cohort.experiment_version,
+            "reason": request.payload.get("reason", ""),
+        }
+    )
+    if request.tool != HALT.name or request.fingerprint() != intended.fingerprint():
+        return (
+            f"{request.tool} on {request.resource} is not the halt of frozen cohort "
+            f"{cohort.experiment_version}. A proposal is held to the record"
+        )
+    return None
+
+
+def halt_admission(
+    *, cohort: FrozenCohort, audit: AuditSink, run: Run, principal: str
+) -> Admission:
+    return _admitting(
+        lambda request: halt_deviation(request, cohort), audit=audit, run=run, principal=principal
+    )
+
+
+def halt_instruction(*, experiment_id: str, cohort: FrozenCohort) -> str:
+    return (
+        "The experiment was measured and the readout says to stop it. Halt it by calling "
+        f"halt_rollout with tenant={cohort.tenant} experiment_id={experiment_id} "
+        f"experiment_version={cohort.experiment_version} exactly as given, and a reason."
     )
