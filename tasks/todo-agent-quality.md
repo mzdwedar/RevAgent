@@ -181,7 +181,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
 
 ### Phase E2: compare models, grade drafts
 
-- [ ] **E4: token usage on the contract; model matrix** · layer 4 · *S*
+- [x] **E4: token usage on the contract; model matrix** · layer 4 · *S*
   - Acceptance:
     - `ModelResponse.usage` is optional (prompt and output tokens) and filled in by
       `OllamaEngine` from `prompt_eval_count` / `eval_count`. `EchoEngine` leaves it None.
@@ -190,6 +190,9 @@ refuses anything outside them, and the approval binds the exact values chosen.
   - Verify: `tests/fitness/test_model_contract.py` (or existing contract test) extended: usage is
     optional, and no layer above 4 reads Ollama-specific fields. `.importlinter` unchanged.
   - Depends: E2, D5. Files: `model/contract.py`, `model/ollama_engine.py`, `evals/behaviour.py`, test.
+  - Done: matrix of qwen3:8b, gemma4:12b, llama3.1:8b, 10 cases x k=5 at temperature 0.7, in
+    `docs/evidence/behaviour_matrix_e4.jsonl`. D5 is not built (D was reverted), so the matrix covers
+    the current 10 cases only.
 
 - [ ] **E5: draft rubric and labelling set** · layer 9 · *S* (+ ~1h of your labelling)
   - Acceptance:
