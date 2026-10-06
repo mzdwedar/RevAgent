@@ -17,6 +17,7 @@ from pathlib import Path
 
 from agentstack.context.conclusion_store import ConclusionStore
 from agentstack.context.frozen_cohorts import FrozenCohortStore
+from agentstack.context.learnings import Learnings
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces import preflight_cli
 from agentstack.interfaces.slack import SlackNotifier
@@ -148,6 +149,8 @@ async def _serve(
                 conclusions=ConclusionStore(db=db),
                 outcomes_root=OUTCOMES_ROOT,
                 announcer=ChannelAnnouncer(stack.notifier),
+                # What a final conclusion leaves in memory for the next draft (L6).
+                learnings=Learnings(db=db),
             )
             worker = build_worker(
                 client, activities=activities, executor=executor, task_queue=task_queue

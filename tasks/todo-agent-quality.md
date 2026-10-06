@@ -368,7 +368,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     `concluded_promoted`); the five older ones are untouched and still replay. Rule recorded in `CONSTRAINTS.md`.
     Not covered: the real readout through the workflow end to end.
 
-- [ ] **L6: conclusion written to memory, split by trust** · layer 5 · *S*
+- [x] **L6: conclusion written to memory, split by trust** · layer 5 · *S*
   - Acceptance:
     - On conclusion, `memory.write()` is called once with first-party fields:
       - cohort description, offer kind, amount and months, cost per customer, chosen percentage;
@@ -384,6 +384,12 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - There is no write path from model output (extend the existing "no implicit memory
       writes" fitness test if there is one).
   - Depends: L5. Files: `context/learnings.py`, `runtime/temporal/activities.py`, test.
+  - Done: the `conclude` activity calls `Learnings.learn` after the conclusion is stored, so
+    no workflow change and no patch marker. Only promote and stop are remembered; extend is not.
+    Idempotent by key (`MemoryStore.holds`). Provenance is the conclusion's identity
+    (`readout:<tenant>/<experiment>/<version>/<endpoint>`); the readout has no id of its own.
+    Offer is the readout's variant name: no structured kind/amount/months exists to record.
+    Hypothesis comes from the latest `draft_revisions` row. TTL 180 days.
 
 - [ ] **L7: prior learnings in the drafting context** · layer 5 · *M*
   - Acceptance:

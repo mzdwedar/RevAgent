@@ -23,6 +23,7 @@ from temporalio.worker import Replayer
 
 from agentstack.context.conclusion_store import ConclusionStore
 from agentstack.context.frozen_cohorts import FrozenCohortStore
+from agentstack.context.learnings import Learnings
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces.triggers import parse_trigger
 from agentstack.interfaces.wiring import (
@@ -164,6 +165,7 @@ def activities_for(
     conclusions: ConclusionStore | None = None,
     outcomes_root: Path | None = None,
     announcer: Announcer | None = None,
+    learnings: Learnings | None = None,
 ) -> RunActivities:
     return RunActivities(
         audit=AuditSink(db=db),
@@ -181,6 +183,7 @@ def activities_for(
         conclusions=conclusions,
         outcomes_root=outcomes_root,
         announcer=announcer,
+        learnings=learnings,
     )
 
 

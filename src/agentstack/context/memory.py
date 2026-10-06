@@ -65,6 +65,16 @@ class MemoryStore:
             if scope.covers(r.scope) and r.is_fresh(now)
         ]
 
+    def holds(self, tenant: str, key: str) -> bool:
+        """Whether this tenant already has a record under `key`, fresh or not."""
+        return (
+            self.db.fetch_one(
+                "SELECT 1 FROM memory_records WHERE tenant = %s AND key = %s LIMIT 1",
+                (tenant, key),
+            )
+            is not None
+        )
+
     def all_records(self) -> tuple[MemoryRecord, ...]:
         return tuple(self._rows("", ()))
 
