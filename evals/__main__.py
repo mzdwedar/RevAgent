@@ -55,6 +55,8 @@ def main() -> int:
     parser.add_argument(
         "--out", default="docs/evidence/grader_calibration.json", help="calibrate: the report"
     )
+    parser.add_argument("--labels", default=None, help="calibrate: a labels file (default: yours)")
+    parser.add_argument("--labeller", default="owner", help="calibrate: who made those labels")
     args = parser.parse_args()
 
     if args.command == "calibrate":
@@ -183,7 +185,9 @@ def _calibrate(args: argparse.Namespace) -> int:
     """Grade the labelled drafts and write how far the grader can be trusted, per criterion."""
     try:
         report = grader.run_calibration(
-            engine_for(args.grader, seed=0, temperature=0.0), labels=labelling.DRAFTS
+            engine_for(args.grader, seed=0, temperature=0.0),
+            labels=Path(args.labels) if args.labels else labelling.DRAFTS,
+            labeller=args.labeller,
         )
     except (ValueError, ModelUnavailable) as exc:
         raise SystemExit(str(exc)) from exc

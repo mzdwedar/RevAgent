@@ -194,6 +194,7 @@ def run_calibration(
     *,
     labels: Path,
     key: Path = KEY,
+    labeller: str = "owner",
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Grade every fully labelled item with `engine` and report. Items still blank are
@@ -206,6 +207,9 @@ def run_calibration(
     report = calibrate(items, grades, injections)
     return {
         "grader": engine.asset.name,
+        # Who produced the labels the grader is measured against. Kappa against a model's
+        # labels says how closely two models agree, not whether either is right.
+        "labeller": labeller,
         "rubric_sha": hashlib.sha256(rubric_text().encode()).hexdigest()[:16],
         "threshold": THRESHOLD,
         "items_graded": len(items),
