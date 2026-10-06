@@ -16,7 +16,7 @@ from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import drop_database, rebuild_database, run_scoped
-from evals import grader, labelling
+from evals import checks, grader, labelling
 from evals.behaviour import (
     OUTCOMES,
     cost_per_engine,
@@ -33,7 +33,8 @@ from evals.runner import load_cases, run_case
 def main() -> int:
     parser = argparse.ArgumentParser(prog="evals")
     parser.add_argument(
-        "command", choices=["run", "list", "behave", "sample-drafts", "label", "calibrate"]
+        "command",
+        choices=["run", "list", "behave", "sample-drafts", "label", "calibrate", "check-drafts"],
     )
     parser.add_argument("--gates", action="store_true", help="only the release gates")
     parser.add_argument(
@@ -59,6 +60,8 @@ def main() -> int:
     parser.add_argument("--labeller", default="owner", help="calibrate: who made those labels")
     args = parser.parse_args()
 
+    if args.command == "check-drafts":
+        return _check_drafts(args)
     if args.command == "calibrate":
         return _calibrate(args)
     if args.command == "sample-drafts":
@@ -178,6 +181,26 @@ def _sample_drafts(args: argparse.Namespace) -> int:
     labelling.write_jsonl(labelling.DRAFTS, items)
     labelling.write_jsonl(labelling.KEY, key)
     print(f"{len(items)} items in {labelling.DRAFTS}; key (engine hidden) in {labelling.KEY}")
+    return 0
+
+
+def _check_drafts(args: argparse.Namespace) -> int:
+    """Run the deterministic C3/C4 checks over the labelled drafts and compare with the labels."""
+    labels = Path(args.labels) if args.labels else labelling.DRAFTS
+    try:
+        report = checks.run_checks(labels=labels, labeller=args.labeller)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2) + "\n")
+    for name in ("C3", "C4"):
+        result, veto = report["criteria"][name], report["veto"][name]
+        kappa = "n/a" if result["kappa"] is None else f"{result['kappa']:.2f}"
+        precision = "n/a" if veto["precision"] is None else f"{veto['precision']:.2f}"
+        recall = "n/a" if veto["recall"] is None else f"{veto['recall']:.2f}"
+        print(f"{name}  kappa {kappa}  precision {precision}  recall {recall}  {result['status']}")
+    print(f"report: {out}")
     return 0
 
 

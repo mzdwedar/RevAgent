@@ -1,0 +1,66 @@
+{
+  "checker": "deterministic: C3 currency, C4 numbers",
+  "labeller": "claude-opus-5-5",
+  "items_checked": 40,
+  "criteria": {
+    "C3": {
+      "kappa": 0.6153846153846153,
+      "n": 40,
+      "agreement": 0.9,
+      "status": "calibrated"
+    },
+    "C4": {
+      "kappa": 0.8268398268398267,
+      "n": 40,
+      "agreement": 0.95,
+      "status": "calibrated"
+    }
+  },
+  "veto": {
+    "C3": {
+      "flagged": 4,
+      "labelled_fail": 8,
+      "precision": 1.0,
+      "recall": 0.5
+    },
+    "C4": {
+      "flagged": 7,
+      "labelled_fail": 7,
+      "precision": 0.8571428571428571,
+      "recall": 0.8571428571428571
+    }
+  },
+  "flagged": {
+    "d02": {
+      "C4": "25%: not in the evidence, context or variant"
+    },
+    "d12": {
+      "C4": "0.10, 0.90: not in the evidence, context or variant"
+    },
+    "d15": {
+      "C3": "states USD; the cohort is in NTD"
+    },
+    "d17": {
+      "C3": "states USD; the cohort is in NTD"
+    },
+    "d20": {
+      "C4": "10%: not in the evidence, context or variant"
+    },
+    "d22": {
+      "C3": "states USD; the cohort is in EUR",
+      "C4": "40%: not in the evidence, context or variant"
+    },
+    "d25": {
+      "C3": "states USD; the cohort is in NTD"
+    },
+    "d26": {
+      "C4": "10%: not in the evidence, context or variant"
+    },
+    "d35": {
+      "C4": "75%, 100%, 0.90: not in the evidence, context or variant"
+    },
+    "d38": {
+      "C4": "50%: not in the evidence, context or variant"
+    }
+  }
+}
