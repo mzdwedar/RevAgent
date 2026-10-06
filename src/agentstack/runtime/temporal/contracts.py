@@ -34,6 +34,13 @@ CONCLUDE = "conclude"
 # tests hold these equal to `tools.experiments.DRAFT_STAGE` and `ROLLOUT_STAGE`.
 DRAFT = "draft"
 ROLLOUT = "rollout"
+EVALUATION = "evaluation"
+
+# What a turn after a conclusion is about, beside its stage. "" is the first rollout and
+# every turn before this existed. A phase is part of a turn's identity, so a promotion is
+# not answered with the first rollout's finished turn. Held equal to the policy's actions.
+PROMOTE = "promote"
+STOP = "stop"
 
 # How long a question waits unanswered before it is put again. Named here because
 # workflow code may not import `runtime.waits`; a test holds it equal to
@@ -174,6 +181,7 @@ class TurnIntent:
     experiment_id: str
     data_as_of: str
     kind: str
+    phase: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +209,7 @@ class AskIntent:
     experiment_id: str
     experiment_version: str
     asked: int
+    phase: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +256,7 @@ class CommitIntent:
     experiment_id: str
     data_as_of: str
     kind: str
+    phase: str = ""
 
 
 @dataclass(frozen=True, slots=True)

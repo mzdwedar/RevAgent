@@ -101,6 +101,14 @@ class DraftingEngine:
         told = dict(
             token.split("=", 1) for token in request.rendered_context.split() if "=" in token
         )
+        if "halt_rollout" in request.tool_names:
+            halt = {key: told[key] for key in ("tenant", "experiment_id", "experiment_version")} | {
+                "reason": "the readout said to stop"
+            }
+            return ModelResponse(
+                text="halted the rollout",
+                proposals=(ToolCallProposal(tool="halt_rollout", arguments=halt),),
+            )
         if "roll_out_variant_to_percentage" in request.tool_names:
             rollout: dict[str, Any] = {
                 key: told[key]

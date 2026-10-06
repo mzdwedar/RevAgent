@@ -42,9 +42,13 @@ from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
 from agentstack.runtime.conclude import ConclusionRefused, conclude_experiment
 from agentstack.runtime.drafting import (
+    PROMOTE_PERCENTAGE,
     PROPOSAL_DEVIATES,
+    ROLLOUT_PERCENTAGE,
     draft_admission,
     draft_instruction,
+    halt_admission,
+    halt_instruction,
     rollout_admission,
     rollout_deviation,
     rollout_instruction,
@@ -63,8 +67,10 @@ from agentstack.runtime.temporal.contracts import (
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
+    EVALUATION,
     NOT_ANSWERED,
     PARK_TRIGGER_WAIT,
+    PROMOTE,
     ROLLOUT,
     RUN_TURN,
     SATISFY_TRIGGER_WAIT,
@@ -354,7 +360,10 @@ class RunActivities:
         assert recorded is not None  # ensure_run ran first in this workflow
         # The stage decides which tools the turn is shown. It is the workflow's choice of
         # what the run does next (position); what any tool may commit is still layer 8's.
-        run = dataclasses.replace(recorded, stage=intent.stage)
+        # A stop turn is an evaluation, which holds `experiments:halt` and so is bound to the
+        # one experiment the trigger named: the cycle's, never anything the model said.
+        subject = intent.experiment_id if intent.stage == EVALUATION else recorded.subject
+        run = dataclasses.replace(recorded, stage=intent.stage, subject=subject)
         cycle = self._cycles.get(
             TriggerEvent(
                 kind=TriggerKind(intent.kind),
@@ -364,7 +373,9 @@ class RunActivities:
             )
         )
         assert cycle is not None  # the turn follows the cycle that settled
-        turn_id = _turn_id(intent.stage, intent.experiment_id, intent.data_as_of, intent.kind)
+        turn_id = _turn_id(
+            intent.stage, intent.experiment_id, intent.data_as_of, intent.kind, intent.phase
+        )
 
         done = finished_turn(turns.deps.graph, turn_thread(run.run_id, turn_id))
         if done is not None:
@@ -391,6 +402,14 @@ class RunActivities:
                 run=run,
                 principal=envelope.principal,
                 prior_rollout_event=prior_rollout_event,
+                percentage=_percentage(intent.phase),
+            )
+        elif intent.stage == EVALUATION:
+            admit = halt_admission(
+                cohort=self._frozen(run.tenant, cycle),
+                audit=self._audit,
+                run=run,
+                principal=envelope.principal,
             )
         elif intent.stage == DRAFT:
             admit = draft_admission(
@@ -449,11 +468,17 @@ class RunActivities:
             return draft_instruction(
                 tenant=run.tenant, cycle=cycle, cohort=self._frozen(run.tenant, cycle)
             )
-        assert prior_rollout_event is not None  # every non-draft stage here is a rollout turn
+        if intent.stage == EVALUATION:
+            # After a conclusion that said stop: the one thing this turn may propose.
+            return halt_instruction(
+                experiment_id=intent.experiment_id, cohort=self._frozen(run.tenant, cycle)
+            )
+        assert prior_rollout_event is not None  # the other stage is a rollout turn
         return rollout_instruction(
             experiment_id=intent.experiment_id,
             cohort=self._frozen(run.tenant, cycle),
             prior_rollout_event=prior_rollout_event,
+            percentage=_percentage(intent.phase),
         )
 
     def _prior_rollout_event(self, tenant: str, experiment_id: str) -> int:
@@ -525,6 +550,7 @@ class RunActivities:
                 request,
                 cohort,
                 prior_rollout_event=self._prior_rollout_event(run.tenant, intent.experiment_id),
+                percentage=_percentage(intent.phase),
             )
             if deviates is not None:
                 self._refuse(
@@ -804,6 +830,7 @@ class RunActivities:
             request,
             self._frozen(run.tenant, cycle),
             prior_rollout_event=int(request.payload["prior_rollout_event"]),
+            percentage=_percentage(intent.phase),
         )
         if deviates is not None:
             self._refuse(
@@ -879,9 +906,15 @@ class RunActivities:
         raise ApplicationError(reason, type=kind, non_retryable=True)
 
 
-def _turn_id(stage: str, experiment_id: str, data_as_of: str, kind: str) -> str:
-    """A turn's identity comes from the cycle, not from Temporal (E1)."""
-    return f"{stage}:{experiment_id}:{data_as_of}:{kind}"
+def _turn_id(stage: str, experiment_id: str, data_as_of: str, kind: str, phase: str = "") -> str:
+    """A turn's identity comes from the cycle, not from Temporal (E1). A turn after a
+    conclusion adds its phase, so it is not the first rollout's finished turn."""
+    return f"{stage}:{experiment_id}:{data_as_of}:{kind}" + (f":{phase}" if phase else "")
+
+
+def _percentage(phase: str) -> int:
+    """The exposure a rollout turn proposes: the first rollout's, or a promotion's."""
+    return PROMOTE_PERCENTAGE if phase == PROMOTE else ROLLOUT_PERCENTAGE
 
 
 def _outcome(state: dict[str, object]) -> TurnOutcome:

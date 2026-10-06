@@ -9,6 +9,7 @@ timer and the refusal path. Killing a worker across the window is not covered he
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 from datetime import timedelta
 from pathlib import Path
@@ -21,7 +22,7 @@ from agentstack.interfaces.wiring import Stack, build_stack, deliver
 from agentstack.policy.approvers import ApprovalReply
 from agentstack.runtime.temporal.contracts import OUTCOME_WINDOW, RunProgress, workflow_id
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
-from agentstack.storage.database import Database
+from agentstack.storage.database import Database, IntegrityViolation
 from tests.durability.test_approval_wait import PAYLOAD
 from tests.fitness.test_trigger_to_candidate import RULE, StubScorer
 from tests.temporal_support import (
@@ -71,9 +72,10 @@ def options(stack: Stack, db: Database, tmp_path: Path) -> dict[str, Any]:
 
 
 def approve(stack: Stack, parked: RunProgress) -> None:
-    stack.approver_directory.add(
-        tenant="acme", slack_user_id="UANA", principal="ana@acme", added_by="l5b2"
-    )
+    with contextlib.suppress(IntegrityViolation):  # the second approval of the same run
+        stack.approver_directory.add(
+            tenant="acme", slack_user_id="UANA", principal="ana@acme", added_by="l5b2"
+        )
     cycle = parked.cycles[0]
     stack.coordinator.apply(
         ApprovalReply(
