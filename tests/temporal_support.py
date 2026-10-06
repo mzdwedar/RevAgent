@@ -21,6 +21,7 @@ from temporalio.client import Client, WorkflowHandle, WorkflowHistory
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer
 
+from agentstack.context.conclusion_store import ConclusionStore
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces.triggers import parse_trigger
@@ -152,6 +153,8 @@ def activities_for(
     turns: TurnHost | None = None,
     asker: Asker | None = None,
     traces: SpanSink | None = None,
+    conclusions: ConclusionStore | None = None,
+    outcomes_root: Path | None = None,
 ) -> RunActivities:
     return RunActivities(
         audit=AuditSink(db=db),
@@ -166,6 +169,8 @@ def activities_for(
         rule=rule,
         turns=turns,
         asker=asker,
+        conclusions=conclusions,
+        outcomes_root=outcomes_root,
     )
 
 

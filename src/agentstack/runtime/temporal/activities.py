@@ -16,13 +16,16 @@ import dataclasses
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import NoReturn, Protocol
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from agentstack.context.conclusion_store import ConclusionStore
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
+from agentstack.context.outcomes import OutcomesRefused
 from agentstack.context.targeting import TargetingRule
 from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.observability.audit import AuditSink
@@ -37,6 +40,7 @@ from agentstack.policy.triggers import (
 )
 from agentstack.prediction.churn import ChurnScorer
 from agentstack.runtime import cycles
+from agentstack.runtime.conclude import ConclusionRefused, conclude_experiment
 from agentstack.runtime.drafting import (
     PROPOSAL_DEVIATES,
     draft_admission,
@@ -55,6 +59,7 @@ from agentstack.runtime.steps import execute_step_name
 from agentstack.runtime.temporal.contracts import (
     ASK_APPROVAL,
     COMMIT,
+    CONCLUDE,
     DRAFT,
     ENSURE_RUN,
     EVALUATE_CYCLE,
@@ -69,6 +74,8 @@ from agentstack.runtime.temporal.contracts import (
     AskResult,
     CommitIntent,
     CommitOutcome,
+    ConcludeIntent,
+    ConcludeOutcome,
     CycleResult,
     ParkedWait,
     RunStart,
@@ -173,6 +180,8 @@ class RunActivities:
         rule: TargetingRule | None = None,
         turns: TurnHost | None = None,
         asker: Asker | None = None,
+        conclusions: ConclusionStore | None = None,
+        outcomes_root: Path | None = None,
     ) -> None:
         # Required: an activity's caller is the workflow, which never holds spans (they
         # would be history). Without a sink, every span a turn or a commit emits is lost.
@@ -192,6 +201,10 @@ class RunActivities:
         self._trigger_deadline = trigger_deadline
         self._rule = rule
         self._turns = turns
+        # Measuring a rolled-out experiment needs both; a worker without them refuses the
+        # activity rather than guess where outcomes are.
+        self._conclusions = conclusions
+        self._outcomes_root = outcomes_root
 
     @activity.defn(name=ENSURE_RUN)
     def ensure_run(self, start: RunStart) -> str:
@@ -567,6 +580,47 @@ class RunActivities:
             state_snapshot=wait.state_snapshot,
         )
         return AskResult(answered=False, superseded=True)
+
+    @activity.defn(name=CONCLUDE)
+    def conclude(self, intent: ConcludeIntent) -> ConcludeOutcome:
+        """Measure the experiment and record its one conclusion for this endpoint.
+
+        A rerun after the conclusion was written returns it without reading anything
+        again, so a worker killed mid-readout and a retry cannot produce two. What is
+        refused (no frozen cohort, data that moved, outcomes that are missing or leak) is
+        this measurement's answer, not an error to retry: the run records it unread and
+        goes on.
+        """
+        recorded = self._runs.get(intent.run_id)
+        assert recorded is not None  # ensure_run ran first in this workflow
+        if self._conclusions is None or self._outcomes_root is None:
+            raise ApplicationError(
+                "this worker has no conclusion store or outcomes root",
+                type="ConclusionNotConfigured",
+                non_retryable=True,
+            )
+        try:
+            stored = conclude_experiment(
+                cohorts=self._cohorts,
+                store=self._conclusions,
+                scorer=self._scorer,
+                tenant=recorded.tenant,
+                experiment_id=intent.experiment_id,
+                experiment_version=intent.experiment_version,
+                rollout_on=date.fromisoformat(intent.rollout_on),
+                endpoint=intent.endpoint,
+                outcomes_root=self._outcomes_root,
+                targeting=self._rule,
+            )
+        except (ConclusionRefused, OutcomesRefused, FileNotFoundError) as exc:
+            raise ApplicationError(str(exc), type=type(exc).__name__, non_retryable=True) from exc
+        return ConcludeOutcome(
+            status="concluded",
+            endpoint=stored.endpoint,
+            action=stored.action,
+            reason=stored.reason,
+            simulated=stored.simulated,
+        )
 
     @activity.defn(name=WITHDRAW_APPROVAL)
     def withdraw_approval(self, intent: WithdrawIntent) -> None:

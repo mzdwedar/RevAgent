@@ -13,7 +13,9 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
+from agentstack.context.conclusion_store import ConclusionStore
 from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces import preflight_cli
@@ -38,6 +40,8 @@ from agentstack.runtime.waits import WaitStore
 from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import database_url, open_pool, redacted
+
+OUTCOMES_ROOT = Path(__file__).resolve().parents[3] / "data" / "outcomes"
 
 
 def main(
@@ -134,6 +138,10 @@ async def _serve(
                 audit=stack.audit,
                 turns=ExperimentTurns(stack),
                 asker=ChannelAsker(stack.notifier),
+                # Where a measured experiment's conclusion is written, and where its outcomes
+                # are read from (ADR-0014: a file, until a real source exists).
+                conclusions=ConclusionStore(db=db),
+                outcomes_root=OUTCOMES_ROOT,
             )
             worker = build_worker(
                 client, activities=activities, executor=executor, task_queue=task_queue

@@ -27,6 +27,7 @@ from temporalio.worker import (
 from agentstack.runtime.temporal.contracts import (
     ASK_APPROVAL,
     COMMIT,
+    CONCLUDE,
     ENSURE_RUN,
     EVALUATE_CYCLE,
     PARK_TRIGGER_WAIT,
@@ -50,6 +51,9 @@ DECLARED: Mapping[str, str] = {
     COMMIT: "gateway",
     # Tells an approver the act they answered did not happen. Grants and commits nothing.
     WITHDRAW_APPROVAL: "notify",
+    # Measures a rolled-out experiment and records one conclusion. Reads outcomes, acts on
+    # nothing: promote and stop are separate turns through the gateway.
+    CONCLUDE: "record",
 }
 
 

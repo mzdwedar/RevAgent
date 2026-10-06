@@ -27,6 +27,7 @@ RUN_TURN = "run_turn"
 ASK_APPROVAL = "ask_approval"
 COMMIT = "commit"
 WITHDRAW_APPROVAL = "withdraw_approval"
+CONCLUDE = "conclude"
 
 # The stage a turn runs at, which decides the tools it is shown (T22). Named here
 # because workflow code may not import `agentstack.tools`, where the stages are defined;
@@ -38,6 +39,11 @@ ROLLOUT = "rollout"
 # workflow code may not import `runtime.waits`; a test holds it equal to
 # `waits.APPROVAL_REASK_AFTER`, which is what the wait row's deadline is set from.
 REASK_EVERY = timedelta(hours=24)
+
+# How long after a rollout the experiment is measured: the 30 days after it that the outcomes
+# seam and the simulator both read. Named here because workflow code may not import them; a
+# test holds it equal to `scripts/simulate_outcomes.WINDOW_DAYS`.
+OUTCOME_WINDOW = timedelta(days=30)
 
 # A commit that found its wait unanswered: the run was woken by a signal nobody's answer
 # stands behind, acted on nothing, and goes back to waiting (A1, H2). Named here so the
@@ -260,6 +266,34 @@ class CommitOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class ConcludeIntent:
+    """Measure this rolled-out experiment at this endpoint. Ids and a date, nothing else:
+    the cohort, outcomes and rule are read inside the activity."""
+
+    run_id: str
+    experiment_id: str
+    experiment_version: str
+    # The day the rollout committed, from the workflow's own clock (an ISO date).
+    rollout_on: str
+    # 0 for the first look, 1 after the one allowed extension.
+    endpoint: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConcludeOutcome:
+    """What measuring came to. `concluded` carries the action the policy chose and whether
+    the numbers were planted. `unreadable` carries the refusal type: no decision was made
+    and nothing about the experiment changed."""
+
+    status: str
+    endpoint: int
+    action: str | None = None
+    reason: str | None = None
+    simulated: bool | None = None
+    refusal: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RunProgress:
     """Where the run is, for whoever asks. Read by query, so it's never history."""
 
@@ -284,3 +318,5 @@ class RunProgress:
     withdrawn: tuple[str, ...] = ()
     # Cycles evaluated before the run last continued as new; `cycles` holds the rest.
     cycles_before: int = 0
+    # Every measurement the run has taken, in order.
+    conclusions: tuple[ConcludeOutcome, ...] = ()
