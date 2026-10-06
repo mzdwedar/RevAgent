@@ -274,7 +274,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - A subscriber outside the cohort has no arm.
   - Depends: L0. Files: `context/assignment.py`, test.
 
-- [ ] **L2: outcomes seam and semi-synthetic simulator** · layer 5 + `scripts/` · *M*
+- [x] **L2: outcomes seam and semi-synthetic simulator** · layer 5 + `scripts/` · *M*
   - Acceptance:
     - `context/outcomes.py` loads post-rollout outcomes per subscriber (renewed, revenue in
       window, offer cost) with provenance, including `simulated`.
@@ -289,6 +289,10 @@ refuses anything outside them, and the approval binds the exact values chosen.
   - Verify: `tests/fitness/test_outcomes_seam.py` (leak refusal, provenance carried). The simulator test checks
     that with τ = 0 the arms' outcome distributions match.
   - Depends: L1. Files: `context/outcomes.py`, `scripts/simulate_outcomes.py`, tests.
+  - Done 2026-10-06. Control revenue is the real last monthly payment when the subscriber renewed
+    (a proxy: the frozen cohort has no March transactions). Outcome window is 30 days. The effect table in
+    `scripts/simulate_outcomes.py` is invented and goes to Checkpoint L-A. Output goes to
+    `data/outcomes/` (gitignored).
 
 - [ ] **L3: `eLTV_pre` covariate** · layer 4b · *M*
   - Acceptance:
