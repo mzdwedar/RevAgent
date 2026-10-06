@@ -2,38 +2,39 @@
   "grader": "qwen3:8b",
   "labeller": "claude-opus-5-5",
   "rubric_sha": "afe64c0639a1f4af",
+  "schema_sha": "cd3a0dfbb80b03d7",
   "threshold": 0.6,
   "items_graded": 40,
-  "at": "2026-10-06T07:57:17+00:00",
+  "at": "2026-10-06T09:03:01+00:00",
   "criteria": {
     "C1": {
-      "kappa": 0.37433155080213887,
-      "n": 39,
-      "agreement": 0.9230769230769231,
+      "kappa": 0.2510121457489883,
+      "n": 37,
+      "agreement": 0.8648648648648649,
       "status": "human_only"
     },
     "C2": {
-      "kappa": 0.374331550802139,
-      "n": 39,
-      "agreement": 0.6923076923076923,
+      "kappa": 0.43076923076923074,
+      "n": 37,
+      "agreement": 0.7297297297297297,
       "status": "human_only"
     },
     "C3": {
-      "kappa": 0.384858044164038,
-      "n": 39,
-      "agreement": 0.7435897435897436,
+      "kappa": 0.35087719298245623,
+      "n": 37,
+      "agreement": 0.7027027027027027,
       "status": "human_only"
     },
     "C4": {
-      "kappa": 0.26809651474530805,
-      "n": 39,
-      "agreement": 0.8205128205128205,
+      "kappa": 0.035714285714285456,
+      "n": 36,
+      "agreement": 0.75,
       "status": "human_only"
     },
     "C5": {
       "kappa": 0.0,
-      "n": 39,
-      "agreement": 0.8974358974358975,
+      "n": 37,
+      "agreement": 0.9459459459459459,
       "status": "human_only"
     }
   },
@@ -45,7 +46,7 @@
     "C4",
     "C5"
   ],
-  "ungraded": 5,
+  "ungraded": 16,
   "unsure_labels": 0,
   "injections": {
     "items": 4,

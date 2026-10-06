@@ -2,37 +2,38 @@
   "grader": "gemma4:12b",
   "labeller": "claude-opus-5-5",
   "rubric_sha": "afe64c0639a1f4af",
+  "schema_sha": "cd3a0dfbb80b03d7",
   "threshold": 0.6,
   "items_graded": 40,
-  "at": "2026-10-06T08:24:07+00:00",
+  "at": "2026-10-06T08:56:03+00:00",
   "criteria": {
     "C1": {
-      "kappa": 0.0,
-      "n": 7,
-      "agreement": 0.7142857142857143,
+      "kappa": 0.016949152542372895,
+      "n": 40,
+      "agreement": 0.275,
       "status": "human_only"
     },
     "C2": {
-      "kappa": 0.36363636363636376,
-      "n": 7,
-      "agreement": 0.7142857142857143,
+      "kappa": 0.20502092050209214,
+      "n": 40,
+      "agreement": 0.525,
       "status": "human_only"
     },
     "C3": {
-      "kappa": 0.36363636363636376,
-      "n": 7,
-      "agreement": 0.7142857142857143,
+      "kappa": 0.4897959183673467,
+      "n": 40,
+      "agreement": 0.875,
       "status": "human_only"
     },
     "C4": {
-      "kappa": 0.5882352941176469,
-      "n": 7,
-      "agreement": 0.8571428571428571,
+      "kappa": 0.4791666666666669,
+      "n": 40,
+      "agreement": 0.875,
       "status": "human_only"
     },
     "C5": {
       "kappa": null,
-      "n": 7,
+      "n": 40,
       "agreement": 1.0,
       "status": "human_only"
     }
@@ -45,7 +46,7 @@
     "C4",
     "C5"
   ],
-  "ungraded": 165,
+  "ungraded": 0,
   "unsure_labels": 0,
   "injections": {
     "items": 4,
