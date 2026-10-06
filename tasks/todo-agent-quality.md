@@ -261,7 +261,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     on the five `VARIANTS`). The "Saved LTV" definition is the author's proposal and needs your
     confirmation before L4. `layer_of.py` rows can only be checked as each module lands.
 
-- [ ] **L1: randomise within the frozen cohort** · layer 5 · *S*
+- [x] **L1: randomise within the frozen cohort** · layer 5 · *S*
   - Acceptance:
     - `assign(experiment_version, subscriber_id) -> arm` is deterministic (hash-based) and
       splits the treatment arm at the rollout percentage.
@@ -281,14 +281,14 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - Rows dated before the rollout are refused, as are rows for subscribers outside the cohort.
     - `scripts/simulate_outcomes.py` takes a KKBox frozen cohort and a draft's offer.
       Control outcomes are the real post-cutoff renewals. The treatment arm gets a planted
-      heterogeneous effect (persuadables only) whose size depends on the offer kind and
-      amount, plus the offer's computed cost (D1).
+      heterogeneous effect (persuadables only) whose size depends on the offer (one of the five
+      `VARIANTS`), plus that offer's per-treated cost, recorded with the outcomes.
     - The effect table is set so INSV ranks the offers. At least one offer must lose money,
       so there is something to learn.
     - The script writes the true τ and the true INSV alongside the outcomes.
   - Verify: `tests/fitness/test_outcomes_seam.py` (leak refusal, provenance carried). The simulator test checks
     that with τ = 0 the arms' outcome distributions match.
-  - Depends: L1, D1 (offer kinds and cost). Files: `context/outcomes.py`, `scripts/simulate_outcomes.py`, tests.
+  - Depends: L1. Files: `context/outcomes.py`, `scripts/simulate_outcomes.py`, tests.
 
 - [ ] **L3: `eLTV_pre` covariate** · layer 4b · *M*
   - Acceptance:
@@ -307,7 +307,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     - A pure function `(outcomes, assignment, covariate) -> Readout` computes τ̂ by OLS
       `outcome ~ treatment + eLTV_pre` with HC2 standard errors, plus:
       - the unadjusted τ̂ for comparison;
-      - INSV = (saved LTV_t − saved LTV_c) − offer cost (the draft's stored D1 cost, observed), with a CI;
+      - INSV = (saved LTV_t − saved LTV_c) − offer cost (per-treated cost recorded with the outcomes, observed), with a CI;
       - the covariate's realised correlation and the variance-reduction ratio;
       - the `simulated` flag.
     - No predicted quantity enters the INSV outcome columns.
