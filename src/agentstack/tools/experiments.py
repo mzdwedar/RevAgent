@@ -140,6 +140,18 @@ HISTORY = _read(
     "history",
 )
 
+# The offers a draft may test. The model chooses among these and cannot invent a percentage
+# or an offer: a fixed menu is what lets an eval score the choice against a known effect
+# (docs/evidence/design_simulator_evals.md), and it keeps the approver's decision to a
+# finite set of things someone has already costed.
+VARIANTS = (
+    "10-percent-off",
+    "20-percent-off",
+    "free-month",
+    "annual-plan-switch",
+    "pause-subscription",
+)
+
 DRAFT = ToolSpec(
     name="create_experiment_draft",
     description=(
@@ -153,7 +165,7 @@ DRAFT = ToolSpec(
             "experiment_id": _ID,
             "experiment_version": _ID,
             "hypothesis": {"type": "string"},
-            "variant": {"type": "string"},
+            "variant": {"type": "string", "enum": list(VARIANTS)},
         },
         "required": [
             "tenant",

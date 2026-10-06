@@ -16,7 +16,7 @@ from agentstack.interfaces.inbound import InboundEvent
 from agentstack.interfaces.wiring import Stack, handle
 from agentstack.runtime.run import Run
 from agentstack.tools.catalog import build_registry
-from agentstack.tools.experiments import ROLLOUT_STAGE
+from agentstack.tools.experiments import DRAFT, DRAFT_STAGE, ROLLOUT_STAGE, VARIANTS
 from agentstack.tools.validation import InvalidToolArguments, validate_arguments
 
 from .conftest import ROLLOUT_ARGS, ROLLOUT_MESSAGE, SCOPES, TENANT, USER
@@ -101,3 +101,29 @@ def test_a_malformed_proposal_fails_closed_and_traceably(stack: Stack, run: Run)
     assert "tool.reject" in result.tracer.names()
     assert stack.registry_client.rollouts == []
     assert stack.transcripts.for_session(run.session_id), "the user still gets a reply"
+
+
+DRAFT_ARGS = {
+    "tenant": "acme",
+    "experiment_id": "exp-7",
+    "experiment_version": "exp:v1",
+    "hypothesis": "an offer retains",
+}
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_every_offer_on_the_menu_can_be_drafted(variant: str) -> None:
+    exposed = REGISTRY.expose_for(tenant=TENANT, stage=DRAFT_STAGE)
+    request = REGISTRY.prepare(DRAFT.name, {**DRAFT_ARGS, "variant": variant}, exposed=exposed)
+    assert request.payload["variant"] == variant
+
+
+@pytest.mark.parametrize("variant", ["30-percent-off", "20 percent off", "", "free-year"])
+def test_an_offer_off_the_menu_is_a_typed_refusal(variant: str) -> None:
+    exposed = REGISTRY.expose_for(tenant=TENANT, stage=DRAFT_STAGE)
+    with pytest.raises(InvalidToolArguments, match="variant"):
+        REGISTRY.prepare(DRAFT.name, {**DRAFT_ARGS, "variant": variant}, exposed=exposed)
+
+
+def test_the_menu_is_declared_in_the_schema_the_model_is_shown() -> None:
+    assert DRAFT.input_schema["properties"]["variant"]["enum"] == list(VARIANTS)

@@ -38,7 +38,7 @@ from agentstack.runtime.drafting import (
 from agentstack.runtime.loop import run_turn
 from agentstack.runtime.run import new_run
 from agentstack.storage.database import Database
-from agentstack.tools.experiments import DRAFT_STAGE, ROLLOUT_STAGE
+from agentstack.tools.experiments import DRAFT, DRAFT_STAGE, ROLLOUT_STAGE
 from agentstack.tools.spec import Surface
 from evals.runner import TENANT, USER, freeze, stack_with
 from evals.stats import pass_at_1, pass_hat_k, wilson
@@ -283,8 +283,10 @@ def prompt_hash(case: BehaviourCase) -> str:
         drafting.cohort_profile,
         drafting.intended_rollout,
     ]
-    material = json.dumps(asdict(case), sort_keys=True) + "".join(
-        inspect.getsource(f) for f in shown
+    material = (
+        json.dumps(asdict(case), sort_keys=True)
+        + "".join(inspect.getsource(f) for f in shown)
+        + json.dumps(DRAFT.input_schema, sort_keys=True)
     )
     return hashlib.sha256(material.encode()).hexdigest()[:16]
 

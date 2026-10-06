@@ -62,6 +62,8 @@ def _arguments(spec: ToolSpec) -> dict[str, Any]:
             # A fresh draft's own revision list holds one entry (the draft's own
             # hypothesis), so the first revision past it names 1.
             made[name] = 1
+        elif "enum" in schema:
+            made[name] = schema["enum"][0]
         elif kind == "integer":
             made[name] = 10
         elif kind == "number":
