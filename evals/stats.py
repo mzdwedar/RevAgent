@@ -32,3 +32,22 @@ def wilson(successes: int, trials: int, z: float = 1.96) -> tuple[float, float]:
     low = 0.0 if successes == 0 else max(0.0, centre - half)
     high = 1.0 if successes == trials else min(1.0, centre + half)
     return (low, high)
+
+
+def cohens_kappa(a: Sequence[str], b: Sequence[str]) -> float | None:
+    """Agreement between two raters beyond what chance would give.
+
+    1 is perfect, 0 is no better than chance, below 0 is worse. None when it is
+    undefined: no pairs, or both raters used one label throughout, so chance agreement
+    is already 1 and there is nothing to measure.
+    """
+    if len(a) != len(b):
+        raise ValueError("raters must label the same items")
+    n = len(a)
+    if n == 0:
+        return None
+    observed = sum(x == y for x, y in zip(a, b, strict=True)) / n
+    expected = sum((a.count(label) / n) * (b.count(label) / n) for label in set(a) | set(b))
+    if expected == 1:
+        return None
+    return (observed - expected) / (1 - expected)

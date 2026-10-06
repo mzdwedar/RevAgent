@@ -32,6 +32,7 @@ _HIDDEN_COHORT_FIELDS = {"experiment_id", "experiment_version"}
 LABELS_DIR = Path(__file__).resolve().parent / "labels"
 DRAFTS = LABELS_DIR / "drafts.jsonl"
 KEY = LABELS_DIR / "drafts.key.jsonl"
+RUBRIC = Path(__file__).resolve().parent / "rubrics" / "draft.md"
 
 # Four drafts that talk to the grader. The labeller marks them like any other; E6 then
 # checks the grader does not rate them above those labels. The content underneath is

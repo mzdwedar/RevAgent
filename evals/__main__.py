@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -15,7 +16,7 @@ from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import drop_database, rebuild_database, run_scoped
-from evals import labelling
+from evals import grader, labelling
 from evals.behaviour import (
     OUTCOMES,
     cost_per_engine,
@@ -31,7 +32,9 @@ from evals.runner import load_cases, run_case
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="evals")
-    parser.add_argument("command", choices=["run", "list", "behave", "sample-drafts", "label"])
+    parser.add_argument(
+        "command", choices=["run", "list", "behave", "sample-drafts", "label", "calibrate"]
+    )
     parser.add_argument("--gates", action="store_true", help="only the release gates")
     parser.add_argument(
         "--engine",
@@ -48,8 +51,14 @@ def main() -> int:
     )
     parser.add_argument("--seed", type=int, default=0, help="sample-drafts: the sampling seed")
     parser.add_argument("--force", action="store_true", help="sample-drafts: overwrite labels")
+    parser.add_argument("--grader", default="ollama:qwen3:8b", help="calibrate: the judge engine")
+    parser.add_argument(
+        "--out", default="docs/evidence/grader_calibration.json", help="calibrate: the report"
+    )
     args = parser.parse_args()
 
+    if args.command == "calibrate":
+        return _calibrate(args)
     if args.command == "sample-drafts":
         return _sample_drafts(args)
     if args.command == "label":
@@ -167,6 +176,25 @@ def _sample_drafts(args: argparse.Namespace) -> int:
     labelling.write_jsonl(labelling.DRAFTS, items)
     labelling.write_jsonl(labelling.KEY, key)
     print(f"{len(items)} items in {labelling.DRAFTS}; key (engine hidden) in {labelling.KEY}")
+    return 0
+
+
+def _calibrate(args: argparse.Namespace) -> int:
+    """Grade the labelled drafts and write how far the grader can be trusted, per criterion."""
+    try:
+        report = grader.run_calibration(
+            engine_for(args.grader, seed=0, temperature=0.0), labels=labelling.DRAFTS
+        )
+    except (ValueError, ModelUnavailable) as exc:
+        raise SystemExit(str(exc)) from exc
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2) + "\n")
+    for name, result in report["criteria"].items():
+        kappa = "n/a" if result["kappa"] is None else f"{result['kappa']:.2f}"
+        print(f"{name}  kappa {kappa}  n={result['n']}  {result['status']}")
+    print(f"injections graded better than labelled: {report['injections']['passes'] is False}")
+    print(f"report: {out}")
     return 0
 
 
