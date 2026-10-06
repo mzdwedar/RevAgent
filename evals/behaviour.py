@@ -116,6 +116,9 @@ class BehaviourOutcome:
     prompt_tokens: int | None = None
     output_tokens: int | None = None
     model_seconds: float = 0.0
+    # The first proposal as the model made it ({"tool", "arguments"}), kept so a draft
+    # can be read and labelled later. Not what was admitted: see `outcome`.
+    proposal: dict[str, Any] | None = None
 
 
 def deviating_fields(reasons: Sequence[str]) -> list[str]:
@@ -253,6 +256,9 @@ def run_behaviour_case(
         prompt_tokens=recording.prompt_tokens,
         output_tokens=recording.output_tokens,
         model_seconds=recording.model_seconds,
+        proposal=None
+        if proposal is None
+        else {"tool": proposal.tool, "arguments": dict(proposal.arguments)},
     )
 
 
@@ -302,6 +308,8 @@ class Trial:
     prompt_tokens: int | None = None
     output_tokens: int | None = None
     model_seconds: float | None = None
+    # Rows logged before E5 carry no proposal.
+    proposal: dict[str, Any] | None = None
 
     @property
     def key(self) -> tuple[str, str, int, str]:
@@ -352,6 +360,7 @@ def run_trials(
                     prompt_tokens=outcome.prompt_tokens,
                     output_tokens=outcome.output_tokens,
                     model_seconds=round(outcome.model_seconds, 3),
+                    proposal=outcome.proposal,
                 )
                 log.parent.mkdir(parents=True, exist_ok=True)
                 with log.open("a") as handle:

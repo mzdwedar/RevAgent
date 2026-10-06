@@ -15,12 +15,14 @@ from agentstack.storage.checkpoints import open_checkpointer
 from agentstack.storage.database import Database
 from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import drop_database, rebuild_database, run_scoped
+from evals import labelling
 from evals.behaviour import (
     OUTCOMES,
     cost_per_engine,
     distribution,
     engine_for,
     load_behaviour_cases,
+    read_trials,
     run_trials,
     summarise,
 )
@@ -29,7 +31,7 @@ from evals.runner import load_cases, run_case
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="evals")
-    parser.add_argument("command", choices=["run", "list", "behave"])
+    parser.add_argument("command", choices=["run", "list", "behave", "sample-drafts", "label"])
     parser.add_argument("--gates", action="store_true", help="only the release gates")
     parser.add_argument(
         "--engine",
@@ -41,8 +43,19 @@ def main() -> int:
     parser.add_argument(
         "--temperature", type=float, default=None, help="behave: override the engine's"
     )
+    parser.add_argument(
+        "--n", type=int, default=36, help="sample-drafts: drafts drawn from the log"
+    )
+    parser.add_argument("--seed", type=int, default=0, help="sample-drafts: the sampling seed")
+    parser.add_argument("--force", action="store_true", help="sample-drafts: overwrite labels")
     args = parser.parse_args()
 
+    if args.command == "sample-drafts":
+        return _sample_drafts(args)
+    if args.command == "label":
+        blank = labelling.label()
+        print(f"{blank} criteria still blank")
+        return 0
     if args.command == "behave":
         return _behave(args)
 
@@ -141,6 +154,20 @@ def _behave(args: argparse.Namespace) -> int:
         return 0
 
     return _on_a_substrate(work)
+
+
+def _sample_drafts(args: argparse.Namespace) -> int:
+    """Draw the labelling set from a trial log. Refuses to overwrite labels already given."""
+    if labelling.DRAFTS.exists() and not args.force:
+        print(f"{labelling.DRAFTS} exists and may hold your labels; pass --force to replace it")
+        return 1
+    items, key = labelling.sample_drafts(
+        read_trials(Path(args.log)), load_behaviour_cases(), n=args.n, seed=args.seed
+    )
+    labelling.write_jsonl(labelling.DRAFTS, items)
+    labelling.write_jsonl(labelling.KEY, key)
+    print(f"{len(items)} items in {labelling.DRAFTS}; key (engine hidden) in {labelling.KEY}")
+    return 0
 
 
 def _fmt(value: float | None, digits: int = 0) -> str:

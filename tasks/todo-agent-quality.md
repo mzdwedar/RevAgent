@@ -196,19 +196,18 @@ refuses anything outside them, and the approval binds the exact values chosen.
 
 - [ ] **E5: draft rubric and labelling set** · layer 9 · *S* (+ ~1h of your labelling)
   - Acceptance:
-    - `evals/rubrics/draft.md` defines 6 yes/no criteria, each with a pass and a fail example:
+    - `evals/rubrics/draft.md` defines 5 yes/no criteria (C6 is deferred until D is rebuilt, since
+      the model does not choose the offer or percentage today), each with a pass and a fail example:
       - **C1 falsifiable**: the hypothesis names a measurable outcome and a direction.
       - **C2 concrete variant**: the variant is a specific, deployable offer.
       - **C3 fits the cohort**: the draft is consistent with the evidence given (risk band,
         plan, currency).
       - **C4 no invented facts**: every number or claim traces to the context.
       - **C5 cost-aware**: the draft acknowledges what the offer gives away.
-      - **C6 choice justified**: the offer and percentage are argued from the cohort's
-        evidence, not picked arbitrarily.
     - `python -m evals sample-drafts --n 36` draws drafts across engines from the E2/E4 JSONL
       into `evals/labels/drafts.jsonl`, plus 4 drafts that try to inject a grader (40 in all).
     - The order is shuffled and the engine name is hidden from the labeller.
-    - The owner labels every criterion (40 × 6 = 240 yes/no). An optional note is allowed
+    - The owner labels every criterion (40 × 5 = 200 yes/no). An optional note is allowed
       when a call is borderline. "Can't tell" is allowed and excluded from κ.
   - Verify: test that the sampler is stratified by engine and deterministic for a seed.
     Labels file validates against the rubric's criteria.
