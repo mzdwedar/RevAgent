@@ -61,6 +61,18 @@ class ModelRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class Usage:
+    """Tokens a call cost, as the serving system counted them. Engine-neutral: an
+    adapter maps its provider's fields onto these two and nothing above reads more."""
+
+    prompt_tokens: int
+    output_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
 class ModelResponse:
     text: str
     proposals: tuple[ToolCallProposal, ...] = field(default=())
+    # None when the engine cannot say (EchoEngine, or a server that omits the counts).
+    # Unknown is not zero: a missing count must not average into a median as free.
+    usage: Usage | None = None

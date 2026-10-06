@@ -17,6 +17,7 @@ from agentstack.storage.pool import DEV_DATABASE_URL, open_pool
 from agentstack.storage.provision import drop_database, rebuild_database, run_scoped
 from evals.behaviour import (
     OUTCOMES,
+    cost_per_engine,
     distribution,
     engine_for,
     load_behaviour_cases,
@@ -30,7 +31,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="evals")
     parser.add_argument("command", choices=["run", "list", "behave"])
     parser.add_argument("--gates", action="store_true", help="only the release gates")
-    parser.add_argument("--engine", default="echo", help="behave: echo or ollama:<model>")
+    parser.add_argument(
+        "--engine",
+        default="echo",
+        help="behave: echo or ollama:<model>; comma-separate to run a matrix",
+    )
     parser.add_argument("--k", type=int, default=1, help="behave: trials per case, seeds 0..k-1")
     parser.add_argument("--log", default=".tmp/behaviour.jsonl", help="behave: the JSONL trial log")
     parser.add_argument(
@@ -86,44 +91,60 @@ def _behave(args: argparse.Namespace) -> int:
     """Run the behaviour cases k times on one engine and report. Never a gate: a model's
     proposals are a rate, so a miss here does not fail the command."""
     cases = load_behaviour_cases()
+    engines = [name.strip() for name in args.engine.split(",") if name.strip()]
     try:
-        engine_for(args.engine, seed=0)
+        for name in engines:
+            engine_for(name, seed=0)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     log = Path(args.log)
 
     def work(db: Database, saver: Any) -> int:
-        try:
-            trials = run_trials(
-                cases,
-                lambda seed: engine_for(args.engine, seed=seed, temperature=args.temperature),
-                engine=args.engine,
-                k=args.k,
-                db=db,
-                checkpointer=saver,
-                log=log,
+        every = []
+        for name in engines:
+            try:
+                trials = run_trials(
+                    cases,
+                    lambda seed, name=name: engine_for(
+                        name, seed=seed, temperature=args.temperature
+                    ),
+                    engine=name,
+                    k=args.k,
+                    db=db,
+                    checkpointer=saver,
+                    log=log,
+                )
+            except ModelUnavailable as exc:
+                raise SystemExit(f"{exc}\nStart it: brew services start ollama") from exc
+            every.extend(trials)
+            summary = summarise(trials)
+            for case_id, case in summary.per_case.items():
+                mark = "pass" if case.pass_hat_k else "MISS"
+                print(f"{mark}  pass@1 {case.pass_at_1:.2f}  {case_id}")
+            low, high = summary.interval
+            print(
+                f"\n{name}, k={args.k}, {summary.trials} trials ({log})\n"
+                f"pass@1 {summary.pass_at_1:.2f} (95% Wilson {low:.2f}-{high:.2f})   "
+                f"pass^{args.k} {summary.pass_hat_k:.2f} of cases passed every trial\n"
             )
-        except ModelUnavailable as exc:
-            raise SystemExit(f"{exc}\nStart it: brew services start ollama") from exc
-        summary = summarise(trials)
-        for case_id, case in summary.per_case.items():
-            mark = "pass" if case.pass_hat_k else "MISS"
-            print(f"{mark}  pass@1 {case.pass_at_1:.2f}  {case_id}")
-        low, high = summary.interval
-        print(
-            f"\n{args.engine}, k={args.k}, {summary.trials} trials ({log})\n"
-            f"pass@1 {summary.pass_at_1:.2f} (95% Wilson {low:.2f}-{high:.2f})   "
-            f"pass^{args.k} {summary.pass_hat_k:.2f} of cases passed every trial"
-        )
-        for name, counts in distribution(trials).items():
+        for name, counts in distribution(every).items():
             total = sum(counts.values())
             shares = "  ".join(
                 f"{kind} {counts[kind]}/{total}" for kind in OUTCOMES if kind in counts
             )
             print(f"outcomes, {name}: {shares}")
+        for name, cost in cost_per_engine(every).items():
+            print(
+                f"cost, {name}: median prompt {_fmt(cost.prompt_tokens)} tok, "
+                f"output {_fmt(cost.output_tokens)} tok, model {_fmt(cost.model_seconds, 2)}s"
+            )
         return 0
 
     return _on_a_substrate(work)
+
+
+def _fmt(value: float | None, digits: int = 0) -> str:
+    return "n/a" if value is None else f"{value:.{digits}f}"
 
 
 def _run(cases: list, db: Database, checkpointer: Any) -> int:

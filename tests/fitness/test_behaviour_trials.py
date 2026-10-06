@@ -8,6 +8,7 @@ reaches the serving system without changing what the adapter reports.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ import pytest
 from evals.behaviour import (
     BehaviourCase,
     Trial,
+    cost_per_engine,
     engine_for,
     prompt_hash,
     read_trials,
@@ -23,6 +25,7 @@ from evals.behaviour import (
 )
 from evals.stats import pass_at_1, pass_hat_k, wilson
 
+from agentstack.model.contract import Usage
 from agentstack.model.engine import EchoEngine
 from agentstack.model.ollama_engine import OllamaEngine
 from agentstack.storage.database import Database
@@ -123,8 +126,9 @@ def test_trials_are_appended_and_a_second_run_skips_what_is_already_there(
     assert len(rows) == 3
     assert set(rows[0]) == {
         "case", "engine", "model", "seed", "prompt_hash", "passed", "failures", "seconds",
-        "outcome", "fields",
+        "outcome", "fields", "prompt_tokens", "output_tokens", "model_seconds",
     }  # fmt: skip
+    assert rows[0]["prompt_tokens"] is None  # the stub reports no usage: unknown, not 0
     assert rows[0]["outcome"] == "admitted"
     assert rows[0]["model"] == "drafting-stub" and rows[0]["prompt_hash"] == prompt_hash(case)
 
@@ -146,3 +150,55 @@ def test_a_changed_prompt_is_not_served_from_the_cache(
     got = run_trials([new], lambda _: DraftingEngine(), engine="stub", k=1, db=app_database,
                      checkpointer=checkpointer, log=log)  # fmt: skip
     assert len(got) == 1 and len(read_trials(log)) == 2
+
+
+class _Metered:
+    """Wraps an engine and reports a fixed usage on every call."""
+
+    def __init__(self, inner: DraftingEngine) -> None:
+        self._inner = inner
+        self.asset = inner.asset
+
+    def generate(self, request: Any) -> Any:
+        return replace(self._inner.generate(request), usage=Usage(100, 7))
+
+
+def test_a_trial_records_the_tokens_and_model_latency_the_engine_reported(
+    app_database: Database, checkpointer: Any, tmp_path: Path
+) -> None:
+    case = BehaviourCase.of(raw_case())
+    trials = run_trials(
+        [case],
+        lambda _seed: _Metered(DraftingEngine()),
+        engine="m",
+        k=1,
+        db=app_database,
+        checkpointer=checkpointer,
+        log=tmp_path / "t.jsonl",
+    )
+    (trial,) = trials
+    # Summed over the turn's model calls, so a multiple of the per-call figure.
+    assert trial.prompt_tokens and trial.prompt_tokens % 100 == 0
+    assert trial.output_tokens and trial.output_tokens % 7 == 0
+    assert trial.model_seconds is not None and 0 <= trial.model_seconds <= trial.seconds
+
+
+def test_rows_from_before_e4_still_load_and_cost_ignores_what_was_not_reported() -> None:
+    old = {"case": "c", "engine": "e", "model": "m", "seed": 0, "prompt_hash": "h",
+           "passed": True, "failures": [], "seconds": 0.1}  # fmt: skip
+    legacy = Trial(**old)
+    assert legacy.prompt_tokens is None
+    metered = Trial(
+        **old | {"seed": 1, "prompt_tokens": 100, "output_tokens": 10, "model_seconds": 2.0}
+    )
+    cost = cost_per_engine(
+        [
+            legacy,
+            metered,
+            Trial(
+                **old | {"seed": 2, "prompt_tokens": 300, "output_tokens": 30, "model_seconds": 4.0}
+            ),
+        ]
+    )["e"]
+    assert (cost.prompt_tokens, cost.output_tokens, cost.model_seconds) == (200, 20, 3.0)
+    assert cost_per_engine([legacy])["e"].prompt_tokens is None  # unknown, never a median of 0

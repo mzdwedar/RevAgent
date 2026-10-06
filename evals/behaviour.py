@@ -18,6 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from agentstack.interfaces.wiring import ExperimentTurns
@@ -111,6 +112,10 @@ class BehaviourOutcome:
     outcome: str = ""
     # For a deviation, the fields of the proposal that differed from the record.
     fields: list[str] = field(default_factory=list)
+    # Summed over the turn's model calls. None when the engine reported no usage.
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    model_seconds: float = 0.0
 
 
 def deviating_fields(reasons: Sequence[str]) -> list[str]:
@@ -138,14 +143,22 @@ class _Recording:
     def __init__(self, engine: ModelEngine) -> None:
         self._engine = engine
         self.proposals: list[ToolCallProposal] = []
+        self.prompt_tokens: int | None = None
+        self.output_tokens: int | None = None
+        self.model_seconds = 0.0
 
     @property
     def asset(self) -> ModelAsset:
         return self._engine.asset
 
     def generate(self, request: ModelRequest) -> ModelResponse:
+        started = time.perf_counter()
         response = self._engine.generate(request)
+        self.model_seconds += time.perf_counter() - started
         self.proposals.extend(response.proposals)
+        if response.usage is not None:
+            self.prompt_tokens = (self.prompt_tokens or 0) + response.usage.prompt_tokens
+            self.output_tokens = (self.output_tokens or 0) + response.usage.output_tokens
         return response
 
 
@@ -237,6 +250,9 @@ def run_behaviour_case(
         tool=None if proposal is None else proposal.tool,
         outcome=outcome,
         fields=fields,
+        prompt_tokens=recording.prompt_tokens,
+        output_tokens=recording.output_tokens,
+        model_seconds=recording.model_seconds,
     )
 
 
@@ -282,6 +298,10 @@ class Trial:
     # Rows logged before E3 carry neither.
     outcome: str = ""
     fields: list[str] = field(default_factory=list)
+    # Rows logged before E4 carry none of these.
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    model_seconds: float | None = None
 
     @property
     def key(self) -> tuple[str, str, int, str]:
@@ -329,6 +349,9 @@ def run_trials(
                     seconds=round(outcome.seconds, 3),
                     outcome=outcome.outcome,
                     fields=outcome.fields,
+                    prompt_tokens=outcome.prompt_tokens,
+                    output_tokens=outcome.output_tokens,
+                    model_seconds=round(outcome.model_seconds, 3),
                 )
                 log.parent.mkdir(parents=True, exist_ok=True)
                 with log.open("a") as handle:
@@ -383,3 +406,34 @@ def distribution(trials: Sequence[Trial]) -> dict[str, dict[str, int]]:
             per = counts.setdefault(trial.engine, {})
             per[trial.outcome] = per.get(trial.outcome, 0) + 1
     return counts
+
+
+@dataclass(frozen=True)
+class Cost:
+    """Median tokens and model latency over the trials that reported them."""
+
+    trials: int
+    prompt_tokens: float | None
+    output_tokens: float | None
+    model_seconds: float | None
+
+
+def _median(values: list[float]) -> float | None:
+    return median(values) if values else None
+
+
+def cost_per_engine(trials: Sequence[Trial]) -> dict[str, Cost]:
+    """Rows without a count are skipped, never read as zero, so an engine that reports
+    nothing shows None and not a flattering median."""
+    grouped: dict[str, list[Trial]] = {}
+    for trial in trials:
+        grouped.setdefault(trial.engine, []).append(trial)
+    return {
+        name: Cost(
+            trials=len(rows),
+            prompt_tokens=_median([t.prompt_tokens for t in rows if t.prompt_tokens is not None]),
+            output_tokens=_median([t.output_tokens for t in rows if t.output_tokens is not None]),
+            model_seconds=_median([t.model_seconds for t in rows if t.model_seconds is not None]),
+        )
+        for name, rows in sorted(grouped.items())
+    }

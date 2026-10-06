@@ -373,3 +373,39 @@ def test_a_client_that_cannot_be_built_is_not_reported_as_a_bad_answer() -> None
 
     with pytest.raises(ModelUnavailable, match="no client for"):
         OllamaEngine(build_client=build).generate(request())
+
+
+# --- token usage (E4) ---
+
+
+def test_usage_is_read_from_ollama_s_counts() -> None:
+    model, _ = engine({"message": {"content": "ok"}, "prompt_eval_count": 412, "eval_count": 37})
+    usage = model.generate(request()).usage
+    assert usage is not None and (usage.prompt_tokens, usage.output_tokens) == (412, 37)
+
+
+def test_usage_is_unknown_not_zero_when_the_server_reports_nothing() -> None:
+    model, _ = engine({"message": {"content": "ok"}})
+    assert model.generate(request()).usage is None
+
+
+def test_the_echo_engine_reports_no_usage() -> None:
+    from agentstack.model.engine import EchoEngine
+
+    assert EchoEngine().generate(request()).usage is None
+
+
+def test_no_layer_above_the_model_package_reads_ollama_fields() -> None:
+    """`prompt_eval_count` / `eval_count` are Ollama's names. Above layer 4 there is
+    only `ModelResponse.usage`."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    allowed = root / "src/agentstack/model/ollama_engine.py"
+    offenders = [
+        str(path.relative_to(root))
+        for path in [*(root / "src").rglob("*.py"), *(root / "evals").rglob("*.py")]
+        if path != allowed
+        and any(name in path.read_text() for name in ("prompt_eval_count", "eval_count"))
+    ]
+    assert offenders == []

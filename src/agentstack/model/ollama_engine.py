@@ -30,6 +30,7 @@ from agentstack.model.contract import (
     ModelRequest,
     ModelResponse,
     ToolCallProposal,
+    Usage,
 )
 
 DEFAULT_MODEL = "qwen3:8b"
@@ -124,7 +125,18 @@ class OllamaEngine:
         return ModelResponse(
             text=str(_field(message, "content") or ""),
             proposals=tuple(_proposals(_field(message, "tool_calls") or ())),
+            usage=_usage(answer),
         )
+
+
+def _usage(answer: Any) -> Usage | None:
+    """Ollama's `prompt_eval_count` / `eval_count`. Both absent is unknown, not zero;
+    a cached prompt can legitimately omit the first, so one present is enough."""
+    prompt = _field(answer, "prompt_eval_count")
+    output = _field(answer, "eval_count")
+    if prompt is None and output is None:
+        return None
+    return Usage(prompt_tokens=int(prompt or 0), output_tokens=int(output or 0))
 
 
 def _as_tool(tool: Any) -> dict[str, Any]:
