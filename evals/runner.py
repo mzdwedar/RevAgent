@@ -14,8 +14,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from agentstack.context.conclusion_store import StoredConclusion
 from agentstack.context.frozen_cohorts import FrozenCohort, FrozenCohortStore
 from agentstack.context.items import Scope, Trust
+from agentstack.context.learnings import Learnings, render_learnings
 from agentstack.context.retrieval import Candidate, StaticRetriever
 from agentstack.context.targeting import Cohort, TargetingRule
 from agentstack.execution.surfaces import PostgresRegistryClient, RegistryClient
@@ -89,6 +91,10 @@ class Case:
     # The experiment the run is about, as the trigger that woke it would have said.
     # Required on the evaluation stage, where it is what bounds the run's writes.
     subject: str | None = None
+    # Concluded experiments already in memory, as the conclude step leaves them (L6), and
+    # the cohort the drafting turn recalls them for; the recalled block joins `message`.
+    learned: list[dict[str, Any]] = field(default_factory=list)
+    recall_cohort: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def load(path: Path) -> Case:
@@ -366,6 +372,33 @@ def _take_the_turn(stack: Stack, run: Run, case: Case) -> Any:
     )
 
 
+def _with_learnings(case: Case, db: Database) -> str:
+    """Seed the case's concluded experiments through `Learnings.learn`, then add what the
+    drafting turn would recall for `recall_cohort`, exactly as `draft_instruction` does."""
+    if not case.learned:
+        return case.message
+    learnings = Learnings(db=db)
+    for spec in case.learned:
+        learnings.learn(
+            StoredConclusion(
+                tenant=spec.get("tenant", TENANT),
+                experiment_id=spec["experiment_id"],
+                experiment_version=spec["experiment_version"],
+                endpoint=int(spec.get("endpoint", 1)),
+                action=spec.get("action", "promote"),
+                reason="eval",
+                simulated=bool(spec.get("simulated", True)),
+                readout=spec["readout"],
+                rule={},
+            ),
+            cohort=spec.get("cohort", {}),
+            percentage=int(spec.get("percentage", 10)),
+            hypothesis=spec.get("hypothesis"),
+        )
+    block = render_learnings(learnings.recall(TENANT, case.recall_cohort))
+    return f"{case.message}\n\n{block}" if block else case.message
+
+
 def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
     started = time.perf_counter()
     if case.trigger is not None:
@@ -391,12 +424,13 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
         channel="eval",
         subject=case.subject,
     )
+    message = _with_learnings(case, db)
     event = InboundEvent(
         channel="eval",
         tenant=TENANT,
         user_id=USER,
         session_id=session.session_id,
-        text=case.message,
+        text=message,
     )
     scopes = frozenset(case.scopes)
 
@@ -467,6 +501,9 @@ def run_case(case: Case, db: Database, checkpointer: Any) -> Outcome:
             for needle in expect["context_mentions"]:
                 if needle.lower() not in rendered.lower():
                     failures.append(f"context is missing {needle!r}")
+        for needle in expect.get("context_excludes", []):
+            if needle.lower() in result.bundle.render().lower():
+                failures.append(f"context mentions {needle!r}")
         if "untrusted_items_min" in expect:
             count = len(result.bundle.untrusted())
             if count < expect["untrusted_items_min"]:

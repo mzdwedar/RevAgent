@@ -17,6 +17,7 @@ from langgraph.runtime import Runtime
 from agentstack.context.assemble import ContextBundle
 from agentstack.context.assemble import assemble as assemble_context
 from agentstack.context.items import ContextItem, Scope, Trust
+from agentstack.context.learnings import is_learning
 from agentstack.execution.gateway import UnresolvedEffect
 from agentstack.execution.surfaces import SurfaceRefused
 from agentstack.model.contract import ExposedTool, ModelRequest
@@ -125,7 +126,8 @@ def _assembled(state: TurnState, ctx: TurnContext) -> ContextBundle:
         trust=Trust.UNTRUSTED,
     )
     retrieved = ctx.deps.retriever.search(state["message"])
-    memories = ctx.deps.memory.recall(scope)
+    # Learnings are shown once, ranked and quoted, by the drafting turn's own instruction.
+    memories = [m for m in ctx.deps.memory.recall(scope) if not is_learning(m)]
     bundle = assemble_context(
         instructions=ctx.instructions,
         latest_message=latest,

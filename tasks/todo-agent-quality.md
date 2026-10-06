@@ -391,7 +391,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     Offer is the readout's variant name: no structured kind/amount/months exists to record.
     Hypothesis comes from the latest `draft_revisions` row. TTL 180 days.
 
-- [ ] **L7: prior learnings in the drafting context** · layer 5 · *M*
+- [x] **L7: prior learnings in the drafting context** · layer 5 · *M*
   - Acceptance:
     - Next to the existing `cohort_profile()`, the drafting turn's context includes up to 3
       prior learnings for the same tenant. They are ranked deterministically by cohort
@@ -403,6 +403,11 @@ refuses anything outside them, and the approval binds the exact values chosen.
     `an-injected-hypothesis-in-memory-does-not-widen-the-menu`. `draft_deviation` behaviour
     unchanged. Prompts stay out of Temporal history (existing boundary test).
   - Depends: L6. Files: `context/assemble.py`, `context/learnings.py`, `runtime/drafting.py`, 3 eval cases.
+  - Done: `Learnings.recall` reads tenant-scope memory, ranks by risk-quantile similarity (ties by
+    key), returns up to 3; `render_learnings` appends them after `cohort_profile` in
+    `draft_instruction`. Hypotheses render JSON-quoted and labelled untrusted. Learnings are
+    filtered out of the generic memory recall so they appear once. Three gate cases added;
+    the eval harness gained `learned`, `recall_cohort` and `context_excludes`.
 
 #### Checkpoint L-B
 - [ ] Gates 23+/23+ green. Durability suite green on the isolated DB

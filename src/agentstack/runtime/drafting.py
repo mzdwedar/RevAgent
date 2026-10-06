@@ -246,7 +246,9 @@ def cohort_profile(cohort: FrozenCohort) -> str:
     )
 
 
-def draft_instruction(*, tenant: str, cycle: Cycle, cohort: FrozenCohort) -> str:
+def draft_instruction(
+    *, tenant: str, cycle: Cycle, cohort: FrozenCohort, prior_learnings: str = ""
+) -> str:
     if cycle.outcome is None or cycle.outcome.value != "propose" or cycle.run_id is None:
         raise NothingToDraft(
             f"{cycle.experiment_id} @ {cycle.data_as_of} concluded {cycle.outcome}; only a "
@@ -259,6 +261,7 @@ def draft_instruction(*, tenant: str, cycle: Cycle, cohort: FrozenCohort) -> str
         "and choose the variant from the offers the tool lists: which offer to test, and why "
         "it should retain these customers, grounded in the risk profile below. "
         f"The cohort was scored on the batch {cycle.data_as_of}. {cohort_profile(cohort)}"
+        + (f"\n\n{prior_learnings}" if prior_learnings else "")
     )
 
 
