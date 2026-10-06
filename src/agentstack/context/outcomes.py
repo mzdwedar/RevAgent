@@ -20,6 +20,13 @@ from pathlib import Path
 from agentstack.context.targeting import Cohort
 
 
+def outcomes_path(root: Path, experiment_id: str, experiment_version: str) -> Path:
+    """Where the outcomes for one experiment version are read from. The version names a
+    cohort and a rule, so another version's file is never picked up by mistake."""
+    safe = experiment_version.replace(":", "_").replace("/", "_")
+    return root / f"{experiment_id}__{safe}.json"
+
+
 class OutcomesRefused(ValueError):
     """The outcomes file cannot be trusted as a measurement of this rollout."""
 

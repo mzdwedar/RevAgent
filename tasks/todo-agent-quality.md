@@ -355,6 +355,11 @@ refuses anything outside them, and the approval binds the exact values chosen.
   - **L5b not started:** the conclude step in `ExperimentWorkflow` (durable timer, readout activity,
     promote through the rollout approval, stop through `halt_rollout`, Slack explanation), its
     durability test, and the replay and checkpoint guards. L5 stays unticked until it lands.
+  - **L5b-1 done 2026-10-06:** `migrations/0022_conclusions` (insert-only, keyed on version and endpoint),
+    `context/conclusion_store.py`, `runtime/conclude.py` (re-freezes the cohort from recorded scores and
+    refuses if the version differs; reads outcomes; readout; policy; records once). Tested against Postgres in
+    `tests/durability/test_conclude_experiment.py`. Next: L5b-2 (contracts, activity, durable timer behind a
+    patch), L5b-3 (promote, stop, extend, Slack text), L5b-4 (kill-the-worker test, re-record histories).
 
 - [ ] **L6: conclusion written to memory, split by trust** · layer 5 · *S*
   - Acceptance:
