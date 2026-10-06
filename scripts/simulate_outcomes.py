@@ -38,14 +38,16 @@ ROOT = Path(__file__).resolve().parents[1]
 DATASET = "kkbox-churn"
 WINDOW_DAYS = 30
 
+# On the dev KKBox cohort about 73% of the mean payment is at stake per member, so an offer
+# pays when 0.73 * lift > cost share. The numbers are set to spread the offers around that line.
 # offer -> (chance a treated subscriber who would have churned renews instead,
 #           cost per treated subscriber as a share of the cohort's mean monthly payment)
 EFFECTS: dict[str, tuple[float, float]] = {
-    "10-percent-off": (0.30, 0.10),  # cheap: gains
-    "20-percent-off": (0.35, 0.20),  # twice the cost for a little more pull: gains less
-    "free-month": (0.60, 1.00),  # strongest pull, a whole month: loses
-    "annual-plan-switch": (0.25, 0.05),  # cheap, sticky: the best
-    "pause-subscription": (0.15, 0.02),  # small pull, near free: gains a little
+    "10-percent-off": (0.20, 0.10),  # a small win
+    "20-percent-off": (0.22, 0.20),  # twice the cost for barely more pull: loses a little
+    "free-month": (0.60, 1.00),  # strongest pull, a whole month: loses clearly
+    "annual-plan-switch": (0.30, 0.05),  # cheap and sticky: the best
+    "pause-subscription": (0.15, 0.02),  # small pull, near free: a modest win
 }
 assert set(EFFECTS) == set(VARIANTS), "the effect table must cover exactly the menu"
 

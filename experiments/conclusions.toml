@@ -1,0 +1,13 @@
+# When a measured experiment is promoted, stopped or extended (SPEC-learning-loop decision 5).
+# Change a number here, not in code. A different rule is a different decision procedure, so
+# the values are recorded on every conclusion.
+
+[rule]
+# Promote only if the INSV lower 95% bound is above this. Zero means "saved more than it cost
+# with 95% confidence". A higher floor is a business call and needs the owner (SPEC, Ask first).
+promote_if_lower_above_cents = 0
+# Stop if the INSV upper 95% bound is below this.
+stop_if_upper_below_cents = 0
+# An interval that straddles both gets more time this many times, then stops. It never
+# extends forever.
+max_extensions = 1
