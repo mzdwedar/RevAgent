@@ -23,6 +23,7 @@ from evals.behaviour import (
     distribution,
     engine_for,
     load_behaviour_cases,
+    load_memory_cases,
     read_trials,
     run_trials,
     summarise,
@@ -35,7 +36,13 @@ def main() -> int:
     parser.add_argument(
         "command",
         choices=[
-            "run", "list", "behave", "sample-drafts", "label", "calibrate", "check-drafts",
+            "run",
+            "list",
+            "behave",
+            "sample-drafts",
+            "label",
+            "calibrate",
+            "check-drafts",
             "report",
         ],  # fmt: skip
     )
@@ -46,6 +53,11 @@ def main() -> int:
         help="behave: echo or ollama:<model>; comma-separate to run a matrix",
     )
     parser.add_argument("--k", type=int, default=1, help="behave: trials per case, seeds 0..k-1")
+    parser.add_argument(
+        "--memory",
+        action="store_true",
+        help="behave: run the memory cases in two arms, learnings off and on (E8)",
+    )
     parser.add_argument("--log", default=".tmp/behaviour.jsonl", help="behave: the JSONL trial log")
     parser.add_argument(
         "--temperature", type=float, default=None, help="behave: override the engine's"
@@ -62,7 +74,8 @@ def main() -> int:
     parser.add_argument("--labels", default=None, help="calibrate: a labels file (default: yours)")
     parser.add_argument("--labeller", default="owner", help="calibrate: who made those labels")
     parser.add_argument(
-        "--calibration", default="docs/evidence/grader_calibration_opus_labels_qwen3.json",
+        "--calibration",
+        default="docs/evidence/grader_calibration_opus_labels_qwen3.json",
         help="report: the calibration whose calibrated criteria may carry a grader score",
     )
     parser.add_argument(
@@ -129,7 +142,8 @@ def _on_a_substrate(work: Callable[[Database, Any], int]) -> int:
 def _behave(args: argparse.Namespace) -> int:
     """Run the behaviour cases k times on one engine and report. Never a gate: a model's
     proposals are a rate, so a miss here does not fail the command."""
-    cases = load_behaviour_cases()
+    cases = load_memory_cases() if args.memory else load_behaviour_cases()
+    arms = ("no_memory", "memory") if args.memory else ("",)
     engines = [name.strip() for name in args.engine.split(",") if name.strip()]
     try:
         for name in engines:
@@ -141,31 +155,34 @@ def _behave(args: argparse.Namespace) -> int:
     def work(db: Database, saver: Any) -> int:
         every = []
         for name in engines:
-            try:
-                trials = run_trials(
-                    cases,
-                    lambda seed, name=name: engine_for(
-                        name, seed=seed, temperature=args.temperature
-                    ),
-                    engine=name,
-                    k=args.k,
-                    db=db,
-                    checkpointer=saver,
-                    log=log,
+            for arm in arms:
+                try:
+                    trials = run_trials(
+                        cases,
+                        lambda seed, name=name: engine_for(
+                            name, seed=seed, temperature=args.temperature
+                        ),
+                        engine=name,
+                        k=args.k,
+                        db=db,
+                        checkpointer=saver,
+                        log=log,
+                        arm=arm,
+                    )
+                except ModelUnavailable as exc:
+                    raise SystemExit(f"{exc}\nStart it: brew services start ollama") from exc
+                every.extend(trials)
+                summary = summarise(trials)
+                label = f"{name} {arm}".strip()
+                for case_id, case in summary.per_case.items():
+                    mark = "pass" if case.pass_hat_k else "MISS"
+                    print(f"{mark}  pass@1 {case.pass_at_1:.2f}  {case_id}")
+                low, high = summary.interval
+                print(
+                    f"\n{label}, k={args.k}, {summary.trials} trials ({log})\n"
+                    f"pass@1 {summary.pass_at_1:.2f} (95% Wilson {low:.2f}-{high:.2f})   "
+                    f"pass^{args.k} {summary.pass_hat_k:.2f} of cases passed every trial\n"
                 )
-            except ModelUnavailable as exc:
-                raise SystemExit(f"{exc}\nStart it: brew services start ollama") from exc
-            every.extend(trials)
-            summary = summarise(trials)
-            for case_id, case in summary.per_case.items():
-                mark = "pass" if case.pass_hat_k else "MISS"
-                print(f"{mark}  pass@1 {case.pass_at_1:.2f}  {case_id}")
-            low, high = summary.interval
-            print(
-                f"\n{name}, k={args.k}, {summary.trials} trials ({log})\n"
-                f"pass@1 {summary.pass_at_1:.2f} (95% Wilson {low:.2f}-{high:.2f})   "
-                f"pass^{args.k} {summary.pass_hat_k:.2f} of cases passed every trial\n"
-            )
         for name, counts in distribution(every).items():
             total = sum(counts.values())
             shares = "  ".join(
@@ -219,7 +236,18 @@ def _check_drafts(args: argparse.Namespace) -> int:
 def _report(args: argparse.Namespace) -> int:
     """Turn a trial log into the committed CSV and chart. Reads only; runs no model."""
     log = Path(args.log)
-    trials = read_trials(log)
+    every = read_trials(log)
+    trials = [t for t in every if not t.arm]
+    if args.memory:
+        table = report.memory_rows(every, load_memory_cases())
+        if not table:
+            raise SystemExit(f"no memory-arm trials in {log}")
+        out = Path(args.out_csv)
+        report.write_memory_csv(table, out)
+        for row in table:
+            print(" ".join(f"{k}={v}" for k, v in row.items()))
+        print(f"report: {out}")
+        return 0
     if not trials:
         raise SystemExit(f"no trials in {log}")
     calibration = Path(args.calibration)

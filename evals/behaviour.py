@@ -40,10 +40,12 @@ from agentstack.runtime.run import new_run
 from agentstack.storage.database import Database
 from agentstack.tools.experiments import DRAFT, DRAFT_STAGE, ROLLOUT_STAGE
 from agentstack.tools.spec import Surface
-from evals.runner import TENANT, USER, freeze, stack_with
+from evals.runner import TENANT, USER, freeze, recall_block, stack_with
 from evals.stats import pass_at_1, pass_hat_k, wilson
 
 BEHAVIOUR_DIR = Path(__file__).resolve().parent / "behaviour"
+# Cases whose point is a prior result; run in two arms by `behave --memory` (E8).
+MEMORY_DIR = BEHAVIOUR_DIR / "memory"
 
 STAGES = (DRAFT_STAGE, ROLLOUT_STAGE)
 
@@ -57,7 +59,7 @@ OUTCOMES = (ADMITTED, DEVIATES, MALFORMED, WRONG_TOOL, NO_PROPOSAL)
 EXPECTATIONS = {"tool", "admitted", "non_empty"}
 # The keys that would make a case a script. A proposal in the case is what a gate has.
 SCRIPTED = ("message", "proposal", "proposals")
-_FIELDS = {"id", "stage", "description", "cohort", "corpus", "expect"}
+_FIELDS = {"id", "stage", "description", "cohort", "corpus", "expect", "learned"}
 
 
 class BehaviourCaseInvalid(ValueError):
@@ -72,6 +74,9 @@ class BehaviourCase:
     cohort: dict[str, Any]
     expect: dict[str, Any]
     corpus: list[str] = field(default_factory=list)
+    # Concluded experiments the memory arm recalls, in the gate cases' `learned` format.
+    # Their cohort is the case's own unless a spec says otherwise.
+    learned: list[dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def of(raw: dict[str, Any], *, source: str = "case") -> BehaviourCase:
@@ -85,7 +90,7 @@ class BehaviourCase:
         unknown = sorted(set(raw) - _FIELDS)
         if unknown:
             raise BehaviourCaseInvalid(f"{source}: not a behaviour case, unknown {unknown}")
-        missing = sorted(_FIELDS - {"corpus"} - set(raw))
+        missing = sorted(_FIELDS - {"corpus", "learned"} - set(raw))
         if missing:
             raise BehaviourCaseInvalid(f"{source}: missing {missing}")
         if raw["stage"] not in STAGES:
@@ -140,6 +145,10 @@ def load_behaviour_cases() -> list[BehaviourCase]:
     return sorted((BehaviourCase.load(p) for p in BEHAVIOUR_DIR.glob("*.json")), key=lambda c: c.id)
 
 
+def load_memory_cases() -> list[BehaviourCase]:
+    return sorted((BehaviourCase.load(p) for p in MEMORY_DIR.glob("*.json")), key=lambda c: c.id)
+
+
 class _Recording:
     """Wraps an engine to keep what it proposed, which the turn's result does not."""
 
@@ -166,9 +175,15 @@ class _Recording:
 
 
 def run_behaviour_case(
-    case: BehaviourCase, db: Database, checkpointer: Any, engine: ModelEngine
+    case: BehaviourCase,
+    db: Database,
+    checkpointer: Any,
+    engine: ModelEngine,
+    *,
+    memory: bool = False,
 ) -> BehaviourOutcome:
-    """One trial: the turn the worker takes, on `engine`, graded against the case."""
+    """One trial: the turn the worker takes, on `engine`, graded against the case. With
+    `memory`, the case's prior learnings are recalled into the instruction as in production."""
     started = time.perf_counter()
     stack = stack_with(case.corpus, db, checkpointer)
     recording = _Recording(engine)
@@ -196,7 +211,18 @@ def run_behaviour_case(
             claimed_at=now,
             settled_at=now,
         )
-        message = draft_instruction(tenant=TENANT, cycle=cycle, cohort=cohort)
+        prior = (
+            recall_block(
+                [{"cohort": cohort.description, **spec} for spec in case.learned],
+                cohort.description,
+                db,
+            )
+            if memory
+            else ""
+        )
+        message = draft_instruction(
+            tenant=TENANT, cycle=cycle, cohort=cohort, prior_learnings=prior
+        )
         admit = draft_admission(
             cohort=cohort, audit=stack.audit, run=run, principal=envelope.principal
         )
@@ -312,10 +338,12 @@ class Trial:
     model_seconds: float | None = None
     # Rows logged before E5 carry no proposal.
     proposal: dict[str, Any] | None = None
+    # "" for an ordinary run; "memory" or "no_memory" for the two arms of E8.
+    arm: str = ""
 
     @property
-    def key(self) -> tuple[str, str, int, str]:
-        return (self.case, self.engine, self.seed, self.prompt_hash)
+    def key(self) -> tuple[str, str, int, str, str]:
+        return (self.case, self.engine, self.seed, self.prompt_hash, self.arm)
 
 
 def read_trials(log: Path) -> list[Trial]:
@@ -333,6 +361,7 @@ def run_trials(
     db: Database,
     checkpointer: Any,
     log: Path,
+    arm: str = "",
 ) -> list[Trial]:
     """Seeds 0..k-1 for every case, appending each trial to `log` as it finishes.
 
@@ -344,10 +373,10 @@ def run_trials(
     for case in cases:
         digest = prompt_hash(case)
         for seed in range(k):
-            key = (case.id, engine, seed, digest)
+            key = (case.id, engine, seed, digest, arm)
             if key not in done:
                 model = factory(seed)
-                outcome = run_behaviour_case(case, db, checkpointer, model)
+                outcome = run_behaviour_case(case, db, checkpointer, model, memory=arm == "memory")
                 done[key] = Trial(
                     case=case.id,
                     engine=engine,
@@ -363,6 +392,7 @@ def run_trials(
                     output_tokens=outcome.output_tokens,
                     model_seconds=round(outcome.model_seconds, 3),
                     proposal=outcome.proposal,
+                    arm=arm,
                 )
                 log.parent.mkdir(parents=True, exist_ok=True)
                 with log.open("a") as handle:

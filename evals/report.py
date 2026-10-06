@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from evals.behaviour import OUTCOMES, Trial, cost_per_engine, summarise
+from evals.behaviour import OUTCOMES, BehaviourCase, Trial, cost_per_engine, summarise
 
 COLUMNS = (
     "engine", "trials", "cases", "pass_at_1", "ci_low", "ci_high", "pass_hat_k",
@@ -93,3 +94,64 @@ def write_chart(report: Sequence[dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=150)
     plt.close(fig)
+
+
+# E8: the same cases, with and without their prior results recalled. Everything here is
+# read off the proposal and the case's known priors; no model judges anything.
+MEMORY_COLUMNS = (
+    "engine", "arm", "trials", "refused", "chose_an_offer", "cites_prior_evidence",
+    "repeats_a_loser", "picks_a_winner",
+)  # fmt: skip
+
+
+def cites(hypothesis: str, learned: Sequence[dict[str, Any]]) -> bool:
+    """The hypothesis names a prior experiment (its id or version) or a readout id."""
+    return any(
+        re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", hypothesis)
+        for spec in learned
+        for name in (spec["experiment_id"], spec["experiment_version"])
+    )
+
+
+def memory_rows(trials: Sequence[Trial], cases: Sequence[BehaviourCase]) -> list[dict[str, Any]]:
+    """Per engine and arm. A "loser" is an offer whose prior INSV was not positive, a
+    "winner" one whose was. Both are judged against the same priors in both arms, so the
+    no-memory arm shows what chance and the model's habits give."""
+    by_case = {c.id: c for c in cases}
+    out = []
+    for engine in sorted({t.engine for t in trials}):
+        for arm in ("no_memory", "memory"):
+            mine = [t for t in trials if t.engine == engine and t.arm == arm and t.case in by_case]
+            if not mine:
+                continue
+            chose = cited = lost = won = 0
+            for t in mine:
+                args = (t.proposal or {}).get("arguments", {})
+                offer = args.get("variant")
+                learned = by_case[t.case].learned
+                priors = {s["readout"]["offer"]: s["readout"]["insv_cents"] for s in learned}
+                if offer:
+                    chose += 1
+                    lost += offer in priors and priors[offer] <= 0
+                    won += offer in priors and priors[offer] > 0
+                cited += cites(str(args.get("hypothesis", "")), learned)
+            n = len(mine)
+            out.append(
+                {
+                    "engine": engine, "arm": arm, "trials": n,
+                    "refused": round(sum(t.outcome != "admitted" for t in mine) / n, 3),
+                    "chose_an_offer": round(chose / n, 3),
+                    "cites_prior_evidence": round(cited / n, 3),
+                    "repeats_a_loser": round(lost / chose, 3) if chose else "",
+                    "picks_a_winner": round(won / chose, 3) if chose else "",
+                }
+            )  # fmt: skip
+    return out
+
+
+def write_memory_csv(report: Sequence[dict[str, Any]], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=MEMORY_COLUMNS, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(report)

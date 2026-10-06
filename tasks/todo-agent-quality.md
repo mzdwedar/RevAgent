@@ -436,7 +436,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
     context carries A's readout id and drafts 10-percent-off, which is promoted. Transcript in
     `docs/evidence/learning_loop.txt`; live test `tests/live/test_learning_loop.py` passes.
 
-- [ ] **E8: draft quality with vs without memory, per model** · layer 9 · *S*
+- [x] **E8: draft quality with vs without memory, per model** · layer 9 · *S*
   - Acceptance:
     - Behaviour drafting cases are run in two arms, learnings off and on.
     - The report adds, per engine:
@@ -449,6 +449,10 @@ refuses anything outside them, and the approval binds the exact values chosen.
       n cases, k trials).
   - Verify: report golden test extended. Results in `docs/evidence/model_evals.csv`.
   - Depends: E7, L8.
+  - Done: built on the deterministic measures only; the grader-score column is not reported (no
+    criterion calibrated, see E7). `python -m evals behave --memory` runs 4 memory cases
+    (`evals/behaviour/memory/`) in two arms; results in `docs/evidence/memory_evals.csv` (a
+    second CSV, not extra rows in `model_evals.csv`) from `behaviour_memory_arms.jsonl`.
 
 #### Checkpoint: complete
 - [ ] Every acceptance box above is ticked with evidence committed

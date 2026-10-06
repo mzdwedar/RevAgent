@@ -126,7 +126,7 @@ def test_trials_are_appended_and_a_second_run_skips_what_is_already_there(
     assert len(rows) == 3
     assert set(rows[0]) == {
         "case", "engine", "model", "seed", "prompt_hash", "passed", "failures", "seconds",
-        "outcome", "fields", "prompt_tokens", "output_tokens", "model_seconds", "proposal",
+        "outcome", "fields", "prompt_tokens", "output_tokens", "model_seconds", "proposal", "arm",
     }  # fmt: skip
     assert rows[0]["prompt_tokens"] is None  # the stub reports no usage: unknown, not 0
     assert rows[0]["outcome"] == "admitted"

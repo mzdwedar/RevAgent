@@ -372,13 +372,11 @@ def _take_the_turn(stack: Stack, run: Run, case: Case) -> Any:
     )
 
 
-def _with_learnings(case: Case, db: Database) -> str:
-    """Seed the case's concluded experiments through `Learnings.learn`, then add what the
-    drafting turn would recall for `recall_cohort`, exactly as `draft_instruction` does."""
-    if not case.learned:
-        return case.message
+def recall_block(learned: list[dict], recall_cohort: dict, db: Database) -> str:
+    """Seed concluded experiments through `Learnings.learn`, then render what the drafting
+    turn would recall for `recall_cohort`, exactly as `draft_instruction` receives it."""
     learnings = Learnings(db=db)
-    for spec in case.learned:
+    for spec in learned:
         learnings.learn(
             StoredConclusion(
                 tenant=spec.get("tenant", TENANT),
@@ -395,7 +393,13 @@ def _with_learnings(case: Case, db: Database) -> str:
             percentage=int(spec.get("percentage", 10)),
             hypothesis=spec.get("hypothesis"),
         )
-    block = render_learnings(learnings.recall(TENANT, case.recall_cohort))
+    return render_learnings(learnings.recall(TENANT, recall_cohort))
+
+
+def _with_learnings(case: Case, db: Database) -> str:
+    if not case.learned:
+        return case.message
+    block = recall_block(case.learned, case.recall_cohort, db)
     return f"{case.message}\n\n{block}" if block else case.message
 
 

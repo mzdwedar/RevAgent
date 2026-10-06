@@ -1,0 +1,78 @@
+{
+  "id": "memory-two-losers-one-winner",
+  "stage": "draft",
+  "description": "E8: the same cohort drafted with and without a recalled prior result; the offers' prior INSV is known.",
+  "cohort": {
+    "experiment_id": "exp-m2",
+    "experiment_version": "exp:m2b1",
+    "data_as_of": "fixture:2026-09",
+    "targeting_model_version": "tabpfn-3.5",
+    "risk_threshold": 0.61,
+    "size": 1200,
+    "annual_value_at_risk_cents": 7200000,
+    "currency": "USD"
+  },
+  "learned": [
+    {
+      "experiment_id": "exp-m2-p1",
+      "experiment_version": "exp:m2p1v1",
+      "action": "stop",
+      "hypothesis": "20-percent-off will retain high-risk customers by lowering their cost of staying.",
+      "readout": {
+        "offer": "20-percent-off",
+        "offer_cost_cents": 1200,
+        "insv_cents": -1500.0,
+        "insv_lower_cents": -2200.0,
+        "insv_upper_cents": -800.0,
+        "adjusted": {
+          "tau_cents": -300.0,
+          "se_cents": 300.0
+        },
+        "covariate_correlation": 0.5
+      }
+    },
+    {
+      "experiment_id": "exp-m2-p2",
+      "experiment_version": "exp:m2p2v1",
+      "action": "stop",
+      "hypothesis": "free-month will retain high-risk customers by lowering their cost of staying.",
+      "readout": {
+        "offer": "free-month",
+        "offer_cost_cents": 2500,
+        "insv_cents": -1500.0,
+        "insv_lower_cents": -2200.0,
+        "insv_upper_cents": -800.0,
+        "adjusted": {
+          "tau_cents": 1000.0,
+          "se_cents": 300.0
+        },
+        "covariate_correlation": 0.5
+      }
+    },
+    {
+      "experiment_id": "exp-m2-p3",
+      "experiment_version": "exp:m2p3v1",
+      "action": "promote",
+      "hypothesis": "10-percent-off will retain high-risk customers by lowering their cost of staying.",
+      "readout": {
+        "offer": "10-percent-off",
+        "offer_cost_cents": 600,
+        "insv_cents": 900.0,
+        "insv_lower_cents": 200.0,
+        "insv_upper_cents": 1600.0,
+        "adjusted": {
+          "tau_cents": 1500.0,
+          "se_cents": 300.0
+        },
+        "covariate_correlation": 0.5
+      }
+    }
+  ],
+  "expect": {
+    "tool": "create_experiment_draft",
+    "non_empty": [
+      "hypothesis",
+      "variant"
+    ]
+  }
+}

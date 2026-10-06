@@ -235,6 +235,26 @@ and cover one cohort family. Draft quality is not scored: no model judge agreed 
 labels well enough (Cohen's kappa under 0.6 on every criterion), so the rubric criteria stay
 human-only and the CSV's `calibrated_criteria` column reads `none`.
 
+### With and without memory
+
+Four draft cases give the model the prior result of earlier experiments on the same cohort
+(an offer, its cost, its INSV and decision) in one arm and nothing in the other. 20 trials
+per engine per arm, scored from the proposal and the known priors
+([`memory_evals.csv`](docs/evidence/memory_evals.csv)):
+
+| Engine | Repeats an offer that lost, off to on | Picks an offer that won, off to on | Cites the prior experiment, on | Refused, on |
+|---|---|---|---|---|
+| gemma4:12b | 50% to 0% | 0% to 75% | 15% | 0% |
+| llama3.1:8b | 20% to 7% | 30% to 67% | 0% | 25% |
+| qwen3:8b | 25% to 0% | 25% to 25% | 0% | 0% |
+
+Read it as: with the prior in view, every engine stopped repeating losing offers, and
+gemma4:12b moved to the offer that had won. qwen3:8b avoided losers by trying offers with no
+history, and llama3.1:8b became less reliable (a quarter of its drafts were refused). Few
+drafts named the prior experiment. Not claimed: the priors are planted and simulated, 4
+cases at 5 trials is 20 per cell (a 5-point move is one trial), the arms were not
+randomised against each other, and draft quality beyond these counts is not scored.
+
 ## How it is built
 
 The architecture is a ten-layer agent stack, and every rule in it is a test. The 11 packages
@@ -256,7 +276,7 @@ by six `.importlinter` contracts.
 | 10 | Infrastructure substrate | `agentstack.storage` |
 
 - **The bar is written down and guarded.** [`CONSTRAINTS.md`](CONSTRAINTS.md) holds every
-  threshold and the command that produces its verdict. `tests/fitness/` has 67 tests, one
+  threshold and the command that produces its verdict. `tests/fitness/` has 68 tests, one
   per collapsed-boundary failure mode, out of more than 950 tests in the suite.
   `scripts/stack_guard.py` fails a change that weakens the bar itself, for example a skipped
   test, a new suppression or a lowered threshold.
