@@ -19,6 +19,10 @@ production worker by `tests/durability/test_recorded_histories.py`:
   deduplicated.
 - `draft_unresolved_reconciled`: the draft's answer lost inside its turn, a reconcile
   wait, settled by `operator reconcile`, the same turn taken again, the rollout asked.
+- `concluded_stop`: a committed rollout, the outcome window on a timer, the conclusion
+  said to the channel, a halt;
+- `concluded_promoted`: the same, concluding promote: a second approval, asked and answered,
+  the promotion committed.
 
 A change that must reach live runs goes behind `workflow.patched("<id>")`, which
 replays the old history down the old branch. The guard then passes.

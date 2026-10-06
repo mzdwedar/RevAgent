@@ -28,6 +28,7 @@ ASK_APPROVAL = "ask_approval"
 COMMIT = "commit"
 WITHDRAW_APPROVAL = "withdraw_approval"
 CONCLUDE = "conclude"
+EXPLAIN = "explain_conclusion"
 
 # The stage a turn runs at, which decides the tools it is shown (T22). Named here
 # because workflow code may not import `agentstack.tools`, where the stages are defined;
@@ -301,6 +302,17 @@ class ConcludeOutcome:
     reason: str | None = None
     simulated: bool | None = None
     refusal: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExplainIntent:
+    """Tell the channel about this conclusion. Ids only: the numbers are read from the
+    stored conclusion, so what is said is what was recorded."""
+
+    run_id: str
+    experiment_id: str
+    experiment_version: str
+    endpoint: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -24,6 +24,7 @@ from agentstack.runtime.temporal.contracts import (
     ENSURE_RUN,
     EVALUATE_CYCLE,
     EVALUATION,
+    EXPLAIN,
     NOT_ANSWERED,
     OUTCOME_WINDOW,
     PARK_TRIGGER_WAIT,
@@ -43,6 +44,7 @@ from agentstack.runtime.temporal.contracts import (
     ConcludeIntent,
     ConcludeOutcome,
     CycleResult,
+    ExplainIntent,
     ParkedWait,
     RunEnd,
     RunProgress,
@@ -246,11 +248,29 @@ class ExperimentWorkflow:
                 )
             )
             self._conclusions.append(outcome)
+            if outcome.status == "concluded" and workflow.patched("explain-conclusion"):
+                await self._explain(cycle, version, outcome.endpoint)
             if outcome.action != "extend":
                 if workflow.patched("act-on-conclusion"):
                     await self._act_on(cycle, outcome)
                 return
             endpoint += 1
+
+    async def _explain(self, cycle: CycleResult, version: str, endpoint: int) -> None:
+        """Say what was concluded. Nothing the run does next depends on it, so a worker
+        that cannot say it (no channel, the model down) does not stop the run acting."""
+        with contextlib.suppress(ActivityError):
+            await workflow.execute_activity(
+                EXPLAIN,
+                ExplainIntent(
+                    run_id=self._run_id,
+                    experiment_id=cycle.experiment_id,
+                    experiment_version=version,
+                    endpoint=endpoint,
+                ),
+                start_to_close_timeout=RECORD_TIMEOUT,
+                retry_policy=RETRY,
+            )
 
     async def _conclude(self, intent: ConcludeIntent) -> ConcludeOutcome:
         try:

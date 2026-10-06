@@ -20,7 +20,12 @@ from agentstack.context.frozen_cohorts import FrozenCohortStore
 from agentstack.context.targeting import TargetingRule
 from agentstack.interfaces import preflight_cli
 from agentstack.interfaces.slack import SlackNotifier
-from agentstack.interfaces.wiring import ChannelAsker, ExperimentTurns, build_stack
+from agentstack.interfaces.wiring import (
+    ChannelAnnouncer,
+    ChannelAsker,
+    ExperimentTurns,
+    build_stack,
+)
 from agentstack.model.ollama_engine import OllamaEngine
 from agentstack.observability.spans import LoggingSink
 from agentstack.prediction.churn import ChurnScorer, RecordedScorers
@@ -142,6 +147,7 @@ async def _serve(
                 # are read from (ADR-0014: a file, until a real source exists).
                 conclusions=ConclusionStore(db=db),
                 outcomes_root=OUTCOMES_ROOT,
+                announcer=ChannelAnnouncer(stack.notifier),
             )
             worker = build_worker(
                 client, activities=activities, executor=executor, task_queue=task_queue

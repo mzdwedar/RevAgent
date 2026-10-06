@@ -38,7 +38,7 @@ from agentstack.observability.spans import CollectingSink, SpanSink
 from agentstack.prediction.churn import ChurnScores
 from agentstack.runtime.cycles import CycleStore
 from agentstack.runtime.run import RunStore
-from agentstack.runtime.temporal.activities import Asker, RunActivities, TurnHost
+from agentstack.runtime.temporal.activities import Announcer, Asker, RunActivities, TurnHost
 from agentstack.runtime.temporal.contracts import RunProgress
 from agentstack.runtime.temporal.worker import activity_threads, build_worker
 from agentstack.runtime.temporal.workflows import ExperimentWorkflow
@@ -163,6 +163,7 @@ def activities_for(
     traces: SpanSink | None = None,
     conclusions: ConclusionStore | None = None,
     outcomes_root: Path | None = None,
+    announcer: Announcer | None = None,
 ) -> RunActivities:
     return RunActivities(
         audit=AuditSink(db=db),
@@ -179,6 +180,7 @@ def activities_for(
         asker=asker,
         conclusions=conclusions,
         outcomes_root=outcomes_root,
+        announcer=announcer,
     )
 
 

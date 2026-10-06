@@ -36,6 +36,11 @@ from tests.temporal_support import progress_until, time_skipping, worker_on
 
 pytestmark = pytest.mark.usefixtures("fixture_dataset")
 
+READOUT = {
+    "insv_cents": 123400.0, "insv_lower_cents": 10000.0, "insv_upper_cents": 250000.0,
+    "offer": "free-month", "treated": 40, "control": 360,
+}  # fmt: skip
+
 
 @pytest.fixture
 def stack(app_database: Database, checkpointer: Any) -> Stack:
@@ -177,3 +182,32 @@ def test_stop_halts_without_asking_anyone(
     notifier = stack.notifier
     assert isinstance(notifier, RecordingNotifier)
     assert len(notifier.posted) == 1, "only the first rollout was ever put to a person"
+
+
+def test_the_channel_is_told_what_was_concluded_and_that_it_was_simulated(
+    stack: Stack, app_database: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    concluding(monkeypatch, "stop")
+
+    async def nothing_more(_: Any, where: RunProgress) -> RunProgress:
+        return where
+
+    run_until_concluded(
+        stack,
+        app_database,
+        tmp_path,
+        then=nothing_more,
+        ready=lambda p: bool(p.conclusions) and len(p.turns) == 3,
+    )
+
+    notifier = stack.notifier
+    assert isinstance(notifier, RecordingNotifier)
+    ((_, notice),) = notifier.conclusions
+    first_line = notice.text.splitlines()[0]
+    assert "SIMULATED" in first_line and "STOP" in first_line
+    assert "model-written; it decided nothing" in notice.text
+    assert kinds_of(app_database).count("halt") == 1, "what the model said changed nothing"
+
+
+def kinds_of(db: Database) -> list[str]:
+    return [kind for kind, _ in events(db)]

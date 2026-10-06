@@ -30,6 +30,8 @@ RECORDED = {
     "refused_at_the_act",
     "unresolved_reconciled",
     "draft_unresolved_reconciled",
+    "concluded_stop",
+    "concluded_promoted",
 }
 
 

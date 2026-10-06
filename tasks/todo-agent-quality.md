@@ -337,7 +337,7 @@ refuses anything outside them, and the approval binds the exact values chosen.
 
 ### Phase L2: close the loop
 
-- [ ] **L5: decision policy and a durable conclude step** · layers 8 + 3 · *M*
+- [x] **L5: decision policy and a durable conclude step** · layers 8 + 3 · *M*
   - Acceptance:
     - Policy maps a Readout to promote / stop / extend using thresholds from config (Open question 5).
     - The workflow gains a conclude step at the pre-declared endpoint (a durable timer).
@@ -352,14 +352,21 @@ refuses anything outside them, and the approval binds the exact values chosen.
   - Depends: L4. Files: `policy/conclusions.py`, `runtime/temporal/workflows.py`, `runtime/temporal/activities.py`, 2 eval cases, test.
   - **L5a done 2026-10-06** (`86b1105`): `policy/conclusions.py`, `experiments/conclusions.toml`,
     `tests/fitness/test_conclusions.py` (both named gates as fitness tests, plus the rule's edges).
-  - **L5b not started:** the conclude step in `ExperimentWorkflow` (durable timer, readout activity,
-    promote through the rollout approval, stop through `halt_rollout`, Slack explanation), its
-    durability test, and the replay and checkpoint guards. L5 stays unticked until it lands.
   - **L5b-1 done 2026-10-06:** `migrations/0022_conclusions` (insert-only, keyed on version and endpoint),
     `context/conclusion_store.py`, `runtime/conclude.py` (re-freezes the cohort from recorded scores and
     refuses if the version differs; reads outcomes; readout; policy; records once). Tested against Postgres in
     `tests/durability/test_conclude_experiment.py`. Next: L5b-2 (contracts, activity, durable timer behind a
     patch), L5b-3 (promote, stop, extend, Slack text), L5b-4 (kill-the-worker test, re-record histories).
+  - **L5b-2/3 done 2026-10-06** (`b341aaf`, `aad5871`, `79c58d3`): the outcome window as a durable timer behind
+    `conclude-after-rollout`; promote is the rollout turn again at `PROMOTE_PERCENTAGE` (50) behind the same approval,
+    stop is a halt turn bound to the cycle's experiment (`act-on-conclusion`); kill-the-worker test in
+    `tests/durability/test_conclude_worker_death.py` (~2 min).
+  - **L5c done 2026-10-06:** the Slack message (`runtime/announce.py`, `explain_conclusion` behind
+    `explain-conclusion`): facts from the record, first line names `simulated`, the model sees numbers only and its
+    explanation is labelled and optional. Gates `a-promotion-still-requires-approval` and
+    `a-stop-halts-without-asking-anyone` in `evals/cases/`. Two new recorded histories (`concluded_stop`,
+    `concluded_promoted`); the five older ones are untouched and still replay. Rule recorded in `CONSTRAINTS.md`.
+    Not covered: the real readout through the workflow end to end.
 
 - [ ] **L6: conclusion written to memory, split by trust** · layer 5 · *S*
   - Acceptance:
