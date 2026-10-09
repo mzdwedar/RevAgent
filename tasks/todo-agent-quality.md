@@ -410,7 +410,9 @@ refuses anything outside them, and the approval binds the exact values chosen.
     the eval harness gained `learned`, `recall_cohort` and `context_excludes`.
 
 #### Checkpoint L-B
-- [ ] Gates 23+/23+ green. Durability suite green on the isolated DB
+- [x] Gates 23+/23+ green. Durability suite green on the isolated DB
+  - Done 2026-10-09. Gates 25/25. `tests/durability`: 143 passed, 0 failed, on Postgres 5434 with only
+    the compose Temporal service up.
 - [ ] `/stack-audit` clean
 
 ---
