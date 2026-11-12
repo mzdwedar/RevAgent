@@ -30,6 +30,9 @@ person approves that exact rollout.
   tabular foundation model that predicts in context with no per-app training, does the ranking.
 - **The result.** On the same 200 labelled subscribers, the LLM ranks churn at **0.535 AUC**
   (a coin flip is 0.5) and TabPFN at **0.842**.
+- **Built with.** Python 3.12, LangGraph (Postgres checkpointer), Temporal, PostgreSQL 16,
+  Ollama (qwen3:8b, function calling), TabPFN-3.5, Slack Bolt, uv, Docker Compose, and
+  GitHub Actions CI running ruff, mypy, import-linter, pytest and the eval gates.
 
 ```mermaid
 flowchart TD
@@ -243,7 +246,7 @@ by six `.importlinter` contracts.
 - **Decisions are recorded.** 13 ADRs in [`docs/adr/`](docs/adr/) cover the durable backend,
   model contract, egress, migrations, idempotency, hosting and secrets. Several are spike
   findings with measured results in `docs/evidence/`.
-- **AI-assisted, with gates that fail closed.** The repo was built with coding agents in a
+- **AI-assisted, with gates that fail closed.** The repo was built with **Claude Code** in a
   `/spec → /plan → /build → /review → /stack-audit → /ship` loop. Hooks run `check_fast.sh`
   after every edit and `check_task.sh` at the end of every turn, and block on failure, so
   the bar holds whether or not anyone remembers to run it. The rules an agent must read are
