@@ -117,9 +117,12 @@ whether a memory should exist at all.
 - **No recorded TabPFN scores yet** (`data/scores/`). Producing them needs the licence
   above. Everything around them — the gate, the fold assignment, the cross-fitting, the
   replay guards — is built and tested without it.
-- **LangGraph is not wired in.** The `Wait` / `ResumeEvent` / `StepLedger` semantics are
-  the contract and are already durable; `docs/adr/0002` records the backend decision and
-  the fitness tests assert the invariants rather than a vendor, so whichever runtime runs
-  them has to satisfy them rather than replace them.
+- **The runtime is not on Temporal yet.** The turn runs as a LangGraph graph with a
+  synchronous Postgres checkpointer ([ADR-0006](docs/adr/0006-langgraph-turn-execution.md));
+  Temporal is the chosen orchestrator ([ADR-0007](docs/adr/0007-temporal-spike-findings.md),
+  `SPEC-durable-runtime.md`) and the migration is T32–T51 in `tasks/todo.md`. The
+  `Wait` / `ResumeEvent` / `StepLedger` semantics are the contract and the fitness tests
+  assert the invariants rather than a vendor, so Temporal has to satisfy them rather
+  than replace them.
 - **Credential storage and PII retention** are named debts, not oversights.
   `DATABASE_URL` and `TABPFN_TOKEN` are environment variables today.
